@@ -10,7 +10,12 @@ from abc_sim.task_specs import SimTaskSpec
 
 
 class BallTrayBalancingEvaluator:
-    """Score whether the ball has remained on the open tray."""
+    """Score whether the tray is held up with the ball still on it.
+
+    A world succeeds while the ball has never left the tray *and* the tray centre sits at least
+    ``min_lift_m`` above the height it had at the first evaluation after reset. Without the lift
+    requirement a policy that never touches the resting tray scores a perfect balance.
+    """
 
     def __init__(
         self,
@@ -22,6 +27,7 @@ class BallTrayBalancingEvaluator:
         usable_half_extents_m: tuple[float, float] = (0.126, 0.1215),
         ball_radius_m: float = 0.022,
         dropped_local_z_threshold_m: float = 0.008,
+        min_lift_m: float = 0.05,
     ) -> None:
         self.spec = spec
         self._ball_joint_name = ball_joint_name
@@ -29,6 +35,7 @@ class BallTrayBalancingEvaluator:
         self._usable_half_extents = np.asarray(usable_half_extents_m, dtype=np.float32)
         self._ball_radius_m = float(ball_radius_m)
         self._dropped_local_z_threshold_m = float(dropped_local_z_threshold_m)
+        self._min_lift_m = float(min_lift_m)
         self._bind_model(model)
         self.reset(nworld=1)
 
@@ -50,6 +57,8 @@ class BallTrayBalancingEvaluator:
         self._nworld = int(nworld)
         self._alive = np.ones((self._nworld,), dtype=bool)
         self._ever_failed = np.zeros((self._nworld,), dtype=bool)
+        self._ever_held = np.zeros((self._nworld,), dtype=bool)
+        self._rest_tray_z: np.ndarray | None = None
 
     def configure_from_randomization(
         self,
@@ -164,25 +173,36 @@ class BallTrayBalancingEvaluator:
         if current_balanced.shape[0] != self._nworld:
             self.reset(nworld=current_balanced.shape[0])
 
+        tray_z = np.asarray(metrics["tray_center"], dtype=np.float32)[:, 2]
+        if self._rest_tray_z is None:
+            self._rest_tray_z = tray_z.copy()
+        tray_lift = (tray_z - self._rest_tray_z).astype(np.float32)
+        lifted = tray_lift >= self._min_lift_m
+
         self._alive &= current_balanced
         self._ever_failed |= np.logical_not(current_balanced)
+        held = np.logical_and(self._alive, lifted)
+        self._ever_held |= held
         center_error = np.asarray(metrics["center_error_m"], dtype=np.float32)
         tray_radius = max(float(np.linalg.norm(self._usable_half_extents)), 1e-6)
         reward = np.clip(1.0 - center_error / tray_radius, 0.0, 1.0).astype(np.float32)
-        reward = np.where(self._alive, reward, 0.0).astype(np.float32)
+        reward = np.where(held, reward, 0.0).astype(np.float32)
 
         return TaskEvalResult(
             reward=reward,
-            success=self._alive.copy(),
+            success=held.copy(),
             metrics={
                 **metrics,
                 "current_balanced": current_balanced.copy(),
+                "tray_lift_m": tray_lift,
+                "lifted": lifted.copy(),
                 "alive": self._alive.copy(),
                 "ever_failed": self._ever_failed.copy(),
-                # Balancing is a maintenance task, so the episode counts as a
-                # success for as long as it has not yet dropped the ball. The
-                # rollout loops read ever_success by key on every action.
-                "ever_success": np.logical_not(self._ever_failed),
+                # Balancing is a maintenance task: a world that has lifted the tray keeps
+                # ever_success until it drops the ball, and the rollout loops stop on
+                # ever_failed rather than ever_success. A trial that ends with the tray back
+                # down fails on final success.
+                "ever_success": np.logical_and(self._ever_held, np.logical_not(self._ever_failed)),
                 "usable_half_extents_m": np.broadcast_to(
                     self._usable_half_extents,
                     (self._nworld, 2),

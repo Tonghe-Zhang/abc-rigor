@@ -1,0 +1,31 @@
+# Simulator-only distribution: `pip install -e abc_sim` gets abc_sim without the training stack in the root
+# pyproject. Assets resolve next to the package (abc_sim/models), so install editable from a checkout and
+# fetch them with `prepare.py --sim` or `--sim-task`.
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abc-sim"
+version = "0.1.0"
+description = "abc_sim: the MuJoCo YAM bimanual task simulator from the abc release."
+requires-python = ">=3.10"
+dependencies = ["mujoco>=3.8", "numpy"]
+
+[project.optional-dependencies]
+warp = ["mujoco-warp", "warp-lang"]
+gym = ["gymnasium>=1.1"]
+
+[tool.setuptools]
+package-dir = { "abc_sim" = "." }
+packages = [
+    "abc_sim",
+    "abc_sim.randomization",
+    "abc_sim.randomization.assets",
+    "abc_sim.randomization.tasks",
+    "abc_sim.rendering",
+    "abc_sim.rendering.blender",
+    "abc_sim.rendering.replay",
+    "abc_sim.task_eval",
+    "abc_sim.task_runtime",
+]

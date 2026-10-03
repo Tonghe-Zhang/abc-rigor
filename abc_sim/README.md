@@ -21,6 +21,7 @@ task randomization, and new sim environments all work from this package alone.
   - [The multi-task sim policy](#the-multi-task-sim-policy)
   - [Finetuned per-task checkpoints](#finetuned-per-task-checkpoints)
   - [Matching the production eval numbers](#matching-the-production-eval-numbers)
+- [Sim-only install](#sim-only-install)
 - [Assets](#assets)
 - [Rendering](#rendering)
 - [Adding a New Env or Task](#adding-a-new-env-or-task)
@@ -275,10 +276,14 @@ score themselves: they warn at startup and report reward 0 and success 0
 throughout. Watch the videos to judge those.
 
 One task is scored differently: `ball_tray_balancing` is a maintenance task
-(success means the ball has not been dropped yet), so its rollouts run the full
-chunk budget and its `success_rate` is only comparable between runs with equal
-`--num-chunks` — a 10-chunk run asks the policy to hold the ball for 5 seconds,
-a 30-chunk run for 15.
+(success means the tray is held up with the ball still on it), so its rollouts
+run the full chunk budget and its `success_rate` is only comparable between runs
+with equal `--num-chunks` — a 10-chunk run asks the policy to hold the ball for
+5 seconds, a 30-chunk run for 15. The tray counts as held once its centre is at
+least `min_lift_m` (5 cm) above its height at reset; a trial whose tray is never
+lifted, or is set back down before the end, fails. Earlier releases scored the
+ball resting on an untouched tray as a success, so ball_tray rows measured
+before this rule are not comparable.
 
 Task names, aliases, and prompts are listed in `abc_sim/task_specs.py`, and an
 unrecognized `--task` fails immediately with the full catalogue in the error.
@@ -474,6 +479,17 @@ Two reading notes when comparing against those numbers:
   scene's sim data trained as `--prompt "sim throw plastic bottles in bin"`,
   and hang-mug as `--prompt "sim hang the mug on the mug rack"`. Mug flip,
   dishrack, and sweep defaults already match training.
+
+## Sim-only install
+
+`abc_sim/pyproject.toml` packages the simulator alone (MuJoCo + NumPy), without
+the training stack the root project pulls in. Install it editable from a
+checkout, because scenes resolve assets next to the package:
+
+```bash
+pip install -e abc_sim            # or: uv pip install -e abc_sim
+python prepare.py --sim-task ball_tray_balancing   # needs only tyro
+```
 
 ## Assets
 

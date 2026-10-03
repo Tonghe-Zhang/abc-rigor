@@ -228,9 +228,9 @@ def rollout_over(task_eval: dict[str, Any]) -> bool:
     For most tasks that is the first success: once the bottles are in the bin,
     stepping on only burns wall clock. A maintenance task is the other way round
     -- ball_tray_balancing reports ``ever_failed`` and defines ``ever_success``
-    as "has not dropped the ball yet", so it is already succeeding at reset and
-    is over only once it fails. Stopping such a task on ``ever_success`` ends it
-    on step one and scores a 15-second balance on a single simulator step, so
+    as "has lifted the tray and not dropped the ball yet", so it succeeds as soon
+    as the tray is up and is over only once it fails. Stopping such a task on
+    ``ever_success`` scores a 15-second balance on the first lifted step, so
     ``ever_failed`` is the signal when the evaluator reports one.
     """
     if "ever_failed" in task_eval:
