@@ -175,7 +175,8 @@ class BatchedWarpYAMEnv:
 
     def _snapshot(self) -> dict[str, Any]:
         model, data = self.base_env.model, self.base_env.data
-        qpos = np.asarray(data.qpos, dtype=np.float32)
+        # Each world owns its arrays while the base model/data are reset again.
+        qpos = np.array(data.qpos, dtype=np.float32, copy=True)
         # Randomizers park inactive objects a metre below the floor, in deep
         # penetration with the infinite floor and table planes; the float32
         # solver does not survive that, so rest them on the table plane instead.
@@ -186,15 +187,15 @@ class BatchedWarpYAMEnv:
         snapshot = {
             "signature": model_signature(model),
             "qpos": qpos,
-            "qvel": np.asarray(data.qvel, dtype=np.float32),
-            "ctrl": np.asarray(data.ctrl, dtype=np.float32),
-            "act": np.asarray(data.act, dtype=np.float32),
-            "mocap_pos": np.asarray(data.mocap_pos, dtype=np.float32),
-            "mocap_quat": np.asarray(data.mocap_quat, dtype=np.float32),
+            "qvel": np.array(data.qvel, dtype=np.float32, copy=True),
+            "ctrl": np.array(data.ctrl, dtype=np.float32, copy=True),
+            "act": np.array(data.act, dtype=np.float32, copy=True),
+            "mocap_pos": np.array(data.mocap_pos, dtype=np.float32, copy=True),
+            "mocap_quat": np.array(data.mocap_quat, dtype=np.float32, copy=True),
             "time": np.float32(data.time),
         }
         for name in PER_EPISODE_MODEL_FIELDS:
-            snapshot[name] = np.asarray(getattr(model, name), dtype=np.float32)
+            snapshot[name] = np.array(getattr(model, name), dtype=np.float32, copy=True)
         return snapshot
 
     def _bind_model(self) -> None:
