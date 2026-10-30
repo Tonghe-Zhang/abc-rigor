@@ -225,8 +225,8 @@ def make_env(
         xml = _inhand_apply_scene_transforms(xml, scene_xml_transform_options)
 
         physics_kwargs = {
-            **kwargs,
             **get_task_physics_defaults(env_task),
+            **kwargs,
             "max_episode_steps": max_episode_steps,
             "terminate_on_success": terminate_on_success,
         }
@@ -277,8 +277,8 @@ def make_env(
 
     config = get_i2rt_sim_config()
     physics_kwargs = {
-        **kwargs,
         **get_task_physics_defaults(env_task),
+        **kwargs,
         "max_episode_steps": max_episode_steps,
         "terminate_on_success": terminate_on_success,
     }
@@ -297,6 +297,9 @@ def make_env(
         if tmp_scene_xml_path is not None:
             tmp_scene_xml_path.unlink(missing_ok=True)
     env.set_task(task)
+    env._task_reset_request = (
+        resolved_task.task_spec.reset_request_options() if resolved_task.task_spec is not None else None
+    )
     env._scene_xml_transform_options = scene_xml_transform_options
     if scene_xml_string is not None:
         env._scene_xml_string = scene_xml_string

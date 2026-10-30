@@ -24,11 +24,17 @@ class SimTaskSpec:
     aliases: tuple[str, ...] = ()
     evaluator_name: str | None = None
     evaluator_options: tuple[tuple[str, object], ...] = ()
+    reset_request: tuple[tuple[str, object], ...] = ()
 
     def evaluator_kwargs(self) -> dict[str, object]:
         """Return evaluator options as a plain kwargs dict."""
 
         return dict(self.evaluator_options)
+
+    def reset_request_options(self) -> dict[str, object] | None:
+        """Return the randomization request every reset of this task applies, if any."""
+
+        return dict(self.reset_request) or None
 
 
 def _normalize_key(value: str) -> str:
@@ -91,6 +97,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="count_one_into_opaque_box",
         env_task="count_into_opaque_box",
         evaluator_name="count_into_opaque_box",
+        reset_request=(("target_count", 1),),
         prompt="put exactly one object in the opaque box",
         description="Put exactly one countable object into the opaque box.",
         aliases=(
@@ -104,6 +111,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="count_two_into_opaque_box",
         env_task="count_into_opaque_box",
         evaluator_name="count_into_opaque_box",
+        reset_request=(("target_count", 2),),
         prompt="put exactly two objects in the opaque box",
         description="Put exactly two countable objects into the opaque box.",
         aliases=(
@@ -117,6 +125,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="count_three_into_opaque_box",
         env_task="count_into_opaque_box",
         evaluator_name="count_into_opaque_box",
+        reset_request=(("target_count", 3),),
         prompt="put exactly three objects in the opaque box",
         description="Put exactly three countable objects into the opaque box.",
         aliases=(
@@ -130,6 +139,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="count_four_into_opaque_box",
         env_task="count_into_opaque_box",
         evaluator_name="count_into_opaque_box",
+        reset_request=(("target_count", 4),),
         prompt="put exactly four objects in the opaque box",
         description="Put exactly four countable objects into the opaque box.",
         aliases=(
