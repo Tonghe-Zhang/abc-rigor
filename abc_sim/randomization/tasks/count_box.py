@@ -270,16 +270,7 @@ def _count_box_sample_prompt(
                 )
 
     for count in (2, 3, 4):
-        candidates.append(
-            {
-                "prompt": f"put exactly {count} objects in the box",
-                "prompt_type": "exact_count",
-                "target_count": count,
-                "target_objects": [],
-                "eligible_objects": [obj["name"] for obj in objects],
-                "attributes": {},
-            }
-        )
+        candidates.append(_count_box_exact_count_prompt(objects, count))
 
     for color in _COUNT_BOX_OBJECT_COLORS:
         matching = [obj for obj in objects if obj["color"] == color]
@@ -301,6 +292,40 @@ def _count_box_sample_prompt(
     return candidates[int(rng.integers(0, len(candidates)))]
 
 
+# Fixed-count task variants request one of these exact counts.
+_COUNT_BOX_REQUESTED_COUNTS = (1, 2, 3, 4)
+
+
+def _count_box_requested_count(request: Any | None) -> int | None:
+    if request is None:
+        return None
+    if not isinstance(request, dict):
+        raise TypeError(f"count_into_opaque_box reset request must be a dict, got {type(request).__name__}")
+    unknown = set(request) - {"target_count"}
+    if unknown:
+        raise ValueError(f"count_into_opaque_box reset request has unknown keys: {sorted(unknown)}")
+    target_count = request.get("target_count")
+    if target_count is None:
+        return None
+    if int(target_count) not in _COUNT_BOX_REQUESTED_COUNTS:
+        raise ValueError(f"count_into_opaque_box target_count must be in {_COUNT_BOX_REQUESTED_COUNTS}, got {target_count}")
+    return int(target_count)
+
+
+def _count_box_exact_count_prompt(objects: list[dict[str, Any]], count: int) -> dict[str, Any]:
+    """Exact-count directive over every object, as sampled for unconstrained resets."""
+    if len(objects) < count:
+        raise RuntimeError(f"count_into_opaque_box scene has {len(objects)} objects, fewer than the requested {count}")
+    return {
+        "prompt": f"put exactly {count} {_count_box_object_noun(count)} in the box",
+        "prompt_type": "exact_count",
+        "target_count": count,
+        "target_objects": [],
+        "eligible_objects": [obj["name"] for obj in objects],
+        "attributes": {},
+    }
+
+
 class CountIntoOpaqueBoxRandomizer(SceneRandomizer):
     """Reload count_into_opaque_box with sampled primitive objects and prompt."""
 
@@ -311,7 +336,11 @@ class CountIntoOpaqueBoxRandomizer(SceneRandomizer):
 
     def prepare_env(self) -> None:
         if self._env_ref is not None:
-            self.randomize(self._env_ref.model, self._env_ref.data)
+            self.randomize(
+                self._env_ref.model,
+                self._env_ref.data,
+                request=getattr(self._env_ref, "_task_reset_request", None),
+            )
 
     def _sample_selections(self, rng: np.random.Generator) -> list[dict[str, Any]]:
         colors = rng.choice(_COUNT_BOX_OBJECT_COLORS, size=_COUNT_BOX_OBJECT_COUNT, replace=True).tolist()
@@ -359,9 +388,14 @@ class CountIntoOpaqueBoxRandomizer(SceneRandomizer):
         seed: int | None = None,
         request: Any | None = None,
     ) -> RandomizationState:
+        requested_count = _count_box_requested_count(request)
         rng = np.random.default_rng(seed)
         selections = self._sample_selections(rng)
-        prompt_info = _count_box_sample_prompt(selections, rng)
+        prompt_info = (
+            _count_box_sample_prompt(selections, rng)
+            if requested_count is None
+            else _count_box_exact_count_prompt(selections, requested_count)
+        )
         xml = _count_box_build_xml(selections)
         xml = _count_box_apply_scene_transforms(
             xml,

@@ -321,6 +321,9 @@ class MuJoCoYAMEnv(gym.Env):
             randomization_request = None
             if options is not None:
                 randomization_request = options.get("randomization")
+            if randomization_request is None:
+                # Task variants such as fixed-count aliases pin part of every reset.
+                randomization_request = getattr(self, "_task_reset_request", None)
             randomizer = getattr(self, "_task_randomizer", None)
             if randomizer is None and self._task:
                 randomizer = get_task_randomizer(self._task)
