@@ -6,11 +6,17 @@
   tray-local region, and no gripper touches the ball. Air time runs from the
   start of the hold until the tray is back below 5 cm (it resumes if the tray
   goes back up). While up, reward is 0.9 × air time / 10 s, 0.9 through 15 s,
-  then falls linearly to 0.5 by 20 s. Touchdown (tray–table contact below 5 cm)
+  then falls linearly to 0.5 by 23 s. Touchdown (tray–table contact below 5 cm)
   ends the attempt. With both handles gripped (0.1 s grace) and the ball then
-  on the tray and untouched for 1 s, it succeeds (1.0) if the air time is
-  10–15 s and touchdown came within 2 s of it; otherwise it keeps the reward
-  reached at touchdown, without success. Touchdown without both handles keeps
+  on the tray and untouched for 1 s, it succeeds if the air time is 10–18 s
+  (`max_hold_s`) and touchdown came within 5 s of it (`max_lowering_s`).
+  Success scores 1.0 for 10–15 s, then falls linearly to 0.8 at 18 s, so the
+  asked 10–15 s is best. Otherwise there is no success: a placement before
+  10 s keeps half the reward reached, and a later one keeps all of it (at most
+  0.75, below any success). The limits come from the 2,039 demonstrations that
+  lift the tray: air time is 13.7 s at the median and 17.6 s at p95, and
+  touchdown follows the final drop within 5.3 s at p95, so each limit passes
+  about 95% of them. Touchdown without both handles keeps
   at most 0.5. Touching or losing the ball before 10 s restarts the hold;
   after 10 s, or in the 1 s after touchdown, it scores 0.
 - **Ball tray (`hold_window_s=None`):** sample uniformly from `[5, 15.5)` seconds, then round down to

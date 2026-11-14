@@ -28,9 +28,14 @@ TRAY_HANDLE_GEOMS = (
     "ball_tray_right_handle_collision",
 )
 _HANDLE_GRACE_S = 0.1
-_MAX_LOWERING_S = 2.0  # from below the lift height to touchdown
 _HELD_REWARD = 0.9
 _OVER_HOLD_FLOOR = 0.5
+_EARLY_PLACEMENT_SHARE = (
+    0.5  # of the hold credit kept by a placement before the minimum
+)
+_LATE_SUCCESS_REWARD = (
+    0.8  # success reward at max_hold_s; 1.0 up to the prompt's upper bound
+)
 _IDLE, _HOLDING, _SETTLING, _DONE = 0, 1, 2, 3
 
 
@@ -53,17 +58,24 @@ class BallTrayBalancingEvaluator:
     (``forbid_gripper_ball_contact``). With both off, the ball no longer affects
     success once the sampled duration is met.
 
-    By default the hold has a window (``hold_window_s``, 10-15 s): keep the
-    tray up with the ball on it for 10-15 s, then place it gently. Air time runs
-    from the start of the hold until the tray is back below the lift height, and
-    touchdown must follow within 2 s. A gentle placement touches down with both
-    handles gripped (``require_handles_at_touchdown``), and the ball then stays
-    on the tray, untouched, for ``settle_s``. While up, the reward is 0.9 x air
-    time / 10 s, 0.9 through 15 s, then falls to 0.5 over ``over_hold_decay_s``.
-    Placing ends the attempt: inside the window it succeeds (1.0); outside it,
-    the reward reached at touchdown is kept, without success. A placement
-    without both handles keeps at most 0.5. Touching or losing the ball before
-    10 s restarts the hold; after 10 s, or while settling, it scores 0.
+    By default the prompt asks for a 10-15 s hold (``hold_window_s``), then a
+    gentle placement. Air time runs from the start of the hold until the tray is
+    back below the lift height, dips included; touchdown must follow within
+    ``max_lowering_s``. A gentle placement touches down with both handles
+    gripped (``require_handles_at_touchdown``), and the ball then stays on the
+    tray, untouched, for ``settle_s``.
+
+    While up, the reward is 0.9 x air time / 10 s, 0.9 through 15 s, then falls
+    to 0.5 over ``over_hold_decay_s``. Placing ends the attempt. Success needs
+    10 s to ``max_hold_s`` of air time and scores 1.0 up to 15 s, then down to
+    0.8 at ``max_hold_s``: the demonstrations hold 13.7 s at the median and
+    17.6 s at p95, and touch down within 5.3 s of the final drop at p95, so the
+    defaults (18 s, 5 s) pass about 95% of them at each end while favouring the
+    asked 10-15 s. A gentle placement before 10 s keeps half the reward reached,
+    and a later one (or a slow touchdown) keeps all of it; neither succeeds. A
+    placement without both handles keeps at most 0.5. Touching or losing the
+    ball before 10 s restarts the hold; after 10 s, or while settling, it
+    scores 0.
     ``hold_window_s=None`` restores the sampled "at least X seconds" hold.
     """
 
@@ -84,9 +96,11 @@ class BallTrayBalancingEvaluator:
         require_ball_on_tray_when_lowered: bool = True,
         forbid_gripper_ball_contact: bool = True,
         hold_window_s: tuple[float, float] | None = HOLD_WINDOW_S,
+        max_hold_s: float = 18.0,
+        max_lowering_s: float = 5.0,
         require_handles_at_touchdown: bool = True,
         settle_s: float = 1.0,
-        over_hold_decay_s: float = 5.0,
+        over_hold_decay_s: float = 8.0,
     ) -> None:
         self.spec = spec
         self._ball_joint_name = ball_joint_name
@@ -105,6 +119,10 @@ class BallTrayBalancingEvaluator:
             and not 0.0 < self.hold_window_s[0] <= self.hold_window_s[1]
         ):
             raise ValueError("hold_window_s must be (low, high) with 0 < low <= high")
+        self.max_hold_s = float(max_hold_s)
+        self.max_lowering_s = float(max_lowering_s)
+        if self.hold_window_s is not None and self.max_hold_s < self.hold_window_s[0]:
+            raise ValueError("max_hold_s must be at least the low end of hold_window_s")
         self.require_handles_at_touchdown = bool(require_handles_at_touchdown)
         self.settle_s = float(settle_s)
         self.over_hold_decay_s = float(over_hold_decay_s)
@@ -424,7 +442,11 @@ class BallTrayBalancingEvaluator:
         now: np.ndarray,
     ) -> TaskEvalResult:
         """Score a hold that ends with a gentle placement, best inside the window."""
-        low, high = self.hold_window_s
+        low, target, high = (
+            self.hold_window_s[0],
+            self.hold_window_s[1],
+            self.max_hold_s,
+        )
         ball_ok = current_balanced.copy()
         if self.forbid_gripper_ball_contact:
             ball_ok &= ~np.asarray(metrics["ball_gripper_contact"], dtype=bool)
@@ -457,8 +479,10 @@ class BallTrayBalancingEvaluator:
         phase[lost] = _DONE
         holding = phase == _HOLDING
 
+        # Past the prompt's upper bound, staying up always pays less.
         over = np.minimum(
-            np.maximum(since_start - high, 0.0) / max(self.over_hold_decay_s, 1e-9), 1.0
+            np.maximum(since_start - target, 0.0) / max(self.over_hold_decay_s, 1e-9),
+            1.0,
         )
         hold_value = np.where(
             air_s < low,
@@ -479,17 +503,21 @@ class BallTrayBalancingEvaluator:
         )
         # Hovering just above the table is still holding: touchdown must follow the air time promptly.
         in_window = (
-            (air_s >= low) & (air_s <= high) & (since_start - air_s <= _MAX_LOWERING_S)
+            (air_s >= low)
+            & (air_s <= high)
+            & (since_start - air_s <= self.max_lowering_s)
         )
+        # Placing before the minimum keeps only part of the credit, so it is clearly worse than finishing.
+        kept = np.where(air_s < low, _EARLY_PLACEMENT_SHARE * hold_value, hold_value)
         settle = touchdown & gentle
         phase[settle] = _SETTLING
         self._settle_until[settle] = now[settle] + self.settle_s
-        self._touch_value[settle] = hold_value[settle]
+        self._touch_value[settle] = kept[settle]
         self._touch_in_window[settle] = in_window[settle]
         self._touch_air_s[settle] = air_s[settle]
         rough = touchdown & ~gentle
         self._rough_placement |= rough
-        self._final_reward[rough] = np.minimum(hold_value[rough], _OVER_HOLD_FLOOR)
+        self._final_reward[rough] = np.minimum(kept[rough], _OVER_HOLD_FLOOR)
         phase[rough] = _DONE
 
         settling = phase == _SETTLING
@@ -499,8 +527,15 @@ class BallTrayBalancingEvaluator:
             phase[spilled] = _DONE
             settling &= ~spilled
         settled = settling & (now >= self._settle_until)
-        self._completed |= settled & self._touch_in_window
-        self._final_reward[settled & self._touch_in_window] = 1.0
+        succeeded = settled & self._touch_in_window
+        self._completed |= succeeded
+        # Full reward inside the prompt's window, then down to 0.8 at max_hold_s.
+        late_share = np.clip(
+            (self._touch_air_s - target) / max(high - target, 1e-9), 0.0, 1.0
+        )
+        self._final_reward[succeeded] = (
+            1.0 - (1.0 - _LATE_SUCCESS_REWARD) * late_share[succeeded]
+        )
         outside = settled & ~self._touch_in_window
         self._early_placement |= outside & (self._touch_air_s < low)
         self._late_placement |= outside & (self._touch_air_s >= low)
@@ -509,7 +544,7 @@ class BallTrayBalancingEvaluator:
         # Scored once per control step, a fast placement can go from lifted to touchdown in one sample.
         self._needs_handles = bool(np.any(phase == _HOLDING))
 
-        # A lost ball leaves the final reward at 0; success sets it to 1.
+        # A lost ball leaves the final reward at 0; success sets it to 0.8-1.0.
         reward = np.where(
             phase == _DONE,
             self._final_reward,

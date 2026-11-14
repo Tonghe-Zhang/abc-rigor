@@ -110,26 +110,58 @@ class BallTrayWindowTest(unittest.TestCase):
         self.assertTrue(touchdown.metrics["handles_held"][0])
         self.assertTrue(touchdown.metrics["settling"][0])
 
-    def test_placing_before_10_s_keeps_the_credit_reached_without_success(self):
-        self.hold(1, 8)
-        early = self.place(8.6)  # 7.5 s up
-        self.assertEqual(self.score(early), (False, 0.675))
+    def test_placing_before_10_s_keeps_half_the_credit_reached_without_success(self):
+        self.assertAlmostEqual(
+            float(self.hold(1, 8).reward[0]), 0.63, places=4
+        )  # 7 s up
+        early = self.place(8.6)  # 7.5 s up: 0.675 while up, half of it kept
+        self.assertEqual(self.score(early), (False, 0.3375))
         done = self.sample(9.6, REST_Z)
         self.assertTrue(done.metrics["early_placement"][0])
-        self.assertEqual(self.score(done), (False, 0.675))
+        self.assertEqual(self.score(done), (False, 0.3375))
         self.hold(10, 25)  # the attempt is over: lifting again changes nothing
-        self.assertEqual(self.score(self.place(25.6)), (False, 0.675))
+        self.assertEqual(self.score(self.place(25.6)), (False, 0.3375))
 
     def test_reward_falls_after_15_s_and_a_late_placement_keeps_it(self):
-        self.hold(1, 16)
-        late = self.hold(16.5, 18.5)  # 17.5 s since the hold began
-        self.assertAlmostEqual(float(late.reward[0]), 0.9 - 0.4 * 2.5 / 5, places=4)
-        reward = float(self.place(19.1).reward[0])
-        self.assertAlmostEqual(reward, 0.9 - 0.4 * 3.1 / 5, places=4)
-        done = self.sample(20.1, REST_Z)
+        self.assertAlmostEqual(
+            float(self.hold(1, 16).reward[0]), 0.9, places=4
+        )  # 15 s up
+        late = self.hold(16.5, 21.5)  # 20.5 s since the hold began
+        self.assertAlmostEqual(float(late.reward[0]), 0.9 - 0.4 * 5.5 / 8, places=4)
+        reward = float(self.place(22.1).reward[0])  # 21 s up: past the 18 s limit
+        self.assertAlmostEqual(reward, 0.9 - 0.4 * 6.1 / 8, places=4)
+        done = self.sample(23.1, REST_Z)
         self.assertTrue(done.metrics["late_placement"][0])
         self.assertEqual(self.score(done), (False, round(reward, 4)))
         self.assertEqual(self.score(self.sample(30, REST_Z)), (False, round(reward, 4)))
+
+    def test_success_reward_favours_the_asked_10_to_15_s(self):
+        rewards = []
+        for up_until in (12, 16, 17.5, 19):  # 11.5, 15.5, 17.0, 18.5 s of air time
+            self.use_evaluator()
+            self.hold(1, up_until)
+            self.place(up_until + 0.6)
+            rewards.append(self.score(self.sample(up_until + 1.6, REST_Z)))
+        expected = [
+            (True, round(1.0 - 0.2 * max(a - 15, 0) / 3, 4)) for a in (11.5, 15.5, 17.0)
+        ]
+        self.assertEqual(rewards[:3], expected)
+        self.assertFalse(rewards[3][0])  # 18.5 s is past the limit
+        self.assertLess(rewards[3][1], 0.8)  # and scores below the worst success
+
+    def test_demonstration_like_holds_succeed(self):
+        # The demonstrations hold up to about 17.6 s (p95) and touch down up to about 5 s after the final drop.
+        for up_until, low_until in ((18, 18.5), (12, 16.5)):
+            with self.subTest(up_until=up_until, low_until=low_until):
+                self.use_evaluator()
+                self.hold(1, up_until)
+                for t in np.arange(up_until + 0.5, low_until + 1e-9, 0.5):
+                    self.sample(float(t), LOW_Z)
+                touchdown = self.sample(low_until + 0.1, REST_Z)
+                self.assertTrue(touchdown.metrics["settling"][0])
+                done = self.sample(low_until + 1.1, REST_Z)
+                self.assertTrue(done.scalar_success())
+                self.assertGreaterEqual(float(done.reward[0]), 0.8)
 
     def test_hovering_just_above_the_table_is_a_late_placement(self):
         self.hold(1, 12)
@@ -146,7 +178,7 @@ class BallTrayWindowTest(unittest.TestCase):
         self.assertEqual(self.score(self.hold(1, 30, step=1.0)), (False, 0.5))
 
     def test_releasing_the_handles_keeps_at_most_half(self):
-        for held_until, expected in ((12, 0.5), (3, 0.225)):
+        for held_until, expected in ((12, 0.5), (3, 0.1125)):
             with self.subTest(held_until=held_until):
                 self.use_evaluator()
                 self.hold(1, held_until)

@@ -281,9 +281,11 @@ throughout. Watch the videos to judge those.
 10 to 15 seconds, then gently place the tray on the table. The hold counts while
 the tray centre is at least 5 cm above its reset height, with the ball within
 the tray and no gripper touching it. Placing the tray with both handles gripped
-after 10–15 seconds up, then keeping the ball on it for 1 second, succeeds.
-Placing earlier or later keeps the partial reward reached (0.9 × seconds / 10
-up to 10 s, falling from 0.9 to 0.5 after 15 s) without success; touching or
+after 10–18 seconds up, then keeping the ball on it for 1 second, succeeds:
+1.0 for the asked 10–15 seconds, down to 0.8 at 18 seconds (18 s covers how long
+the demonstrations hold). Placing earlier keeps half the partial reward reached
+(0.9 × seconds / 10), and placing later keeps the reward reached (falling from
+0.9 after 15 s to 0.5 at 23 s), both without success; touching or
 losing the ball after 10 seconds scores 0. Success latches and ends the rollout
 early. `--num-chunks` sets the time budget for completing the task;
 it does not set the required hold duration.
