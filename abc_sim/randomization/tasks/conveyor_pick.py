@@ -9,6 +9,7 @@ import numpy as np
 from ..assets.inhand import _inhand_parse_model_xml
 from ..assets.paths import _MODELS_DIR
 from ..core import RandomizationState, SceneRandomizer, _parse_float_list
+from ..requests import ConveyorPickResetRequest
 
 _CONVEYOR_PICK_BASE_SCENE_XML = _MODELS_DIR / "yam_conveyor_pick_scene.xml"
 _CONVEYOR_PICK_OBJECT_ASSET_ROOT = _MODELS_DIR / "assets" / "task_conveyor_pick" / "objects"
@@ -60,22 +61,28 @@ _CONVEYOR_BELT_SPEED_LIMITS_M_S = (0.01, 0.50)
 
 
 def _conveyor_belt_speed_range(request: Any | None) -> tuple[float, float]:
-    """Belt speed range for this reset: the default, or ``belt_speed_range_m_s`` from the request."""
-    if request is None:
-        return _CONVEYOR_BELT_SPEED_RANGE_M_S
-    if not isinstance(request, dict):
-        raise TypeError(f"conveyor_pick reset request must be a dict, got {type(request).__name__}")
-    unknown = set(request) - {"belt_speed_range_m_s"}
-    if unknown:
-        raise ValueError(f"conveyor_pick reset request has unknown keys: {sorted(unknown)}")
-    requested = request.get("belt_speed_range_m_s")
-    if requested is None:
-        return _CONVEYOR_BELT_SPEED_RANGE_M_S
-    low, high = (float(value) for value in requested)
+    """Belt speed bounds for this reset: the defaults unless the request overrides either one."""
+    reset_request = ConveyorPickResetRequest.from_value(request)
+    default_low, default_high = _CONVEYOR_BELT_SPEED_RANGE_M_S
+    low = default_low if reset_request.belt_speed_min_m_s is None else reset_request.belt_speed_min_m_s
+    high = default_high if reset_request.belt_speed_max_m_s is None else reset_request.belt_speed_max_m_s
     lowest, highest = _CONVEYOR_BELT_SPEED_LIMITS_M_S
     if not lowest <= low <= high <= highest:
         raise ValueError(
-            f"conveyor_pick belt_speed_range_m_s must satisfy {lowest} <= low <= high <= {highest}, got {requested}"
+            f"conveyor_pick belt speed bounds must satisfy {lowest} <= min <= max <= {highest} m/s, got {low}, {high}"
+        )
+    return low, high
+    if not isinstance(request, dict):
+        raise TypeError(f"conveyor_pick reset request must be a dict, got {type(request).__name__}")
+    unknown = set(request) - {"belt_speed_min_m_s", "belt_speed_max_m_s"}
+    if unknown:
+        raise ValueError(f"conveyor_pick reset request has unknown keys: {sorted(unknown)}")
+    low = float(request.get("belt_speed_min_m_s", low))
+    high = float(request.get("belt_speed_max_m_s", high))
+    lowest, highest = _CONVEYOR_BELT_SPEED_LIMITS_M_S
+    if not lowest <= low <= high <= highest:
+        raise ValueError(
+            f"conveyor_pick belt speed bounds must satisfy {lowest} <= min <= max <= {highest} m/s, got {low}, {high}"
         )
     return low, high
 

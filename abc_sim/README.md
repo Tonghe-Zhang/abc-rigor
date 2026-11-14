@@ -226,6 +226,8 @@ see [Batched eval](#batched-eval).
 - `--randomization JSON` — reset request for the task randomizer, applied to
 every world, e.g. `'{"bottle_count": 6, "randomize_variants": false,
 "randomize_scales": false}'` (fields: `abc_sim/randomization/requests.py`).
+For `conveyor_pick`, `'{"belt_speed_min_m_s": 0.05, "belt_speed_max_m_s": 0.30}'`
+changes the belt speed bounds (default 0.10–0.20 m/s; either bound alone works).
 - `--diffusion-steps N` — flow-matching Euler steps per inference
 (default 10, matches production).
 - `--checkpoint` — path to the `.pt` checkpoint to evaluate.

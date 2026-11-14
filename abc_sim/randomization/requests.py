@@ -279,6 +279,38 @@ class SweepResetRequest:
         )
 
 
+@dataclass(frozen=True)
+class ConveyorPickResetRequest:
+    """Optional reset controls for the conveyor randomizer: belt speed bounds in m/s."""
+
+    belt_speed_min_m_s: float | None = None
+    belt_speed_max_m_s: float | None = None
+
+    @classmethod
+    def from_value(cls, value: Any | None) -> "ConveyorPickResetRequest":
+        if value is None:
+            return cls()
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, dict):
+            raise TypeError(
+                "Conveyor reset request must be a dict or ConveyorPickResetRequest, "
+                f"got {type(value).__name__}"
+            )
+        unknown = set(value) - {"belt_speed_min_m_s", "belt_speed_max_m_s"}
+        if unknown:
+            raise ValueError(f"Conveyor reset request has unknown keys: {sorted(unknown)}")
+
+        def _optional_float(key: str) -> float | None:
+            raw = value.get(key)
+            return None if raw is None else float(raw)
+
+        return cls(
+            belt_speed_min_m_s=_optional_float("belt_speed_min_m_s"),
+            belt_speed_max_m_s=_optional_float("belt_speed_max_m_s"),
+        )
+
+
 class _SweepPlacementFailure(RuntimeError):
     """Internal signal that one sweep placement attempt should be retried."""
 
