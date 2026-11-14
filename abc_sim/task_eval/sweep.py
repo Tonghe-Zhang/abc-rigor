@@ -32,10 +32,53 @@ def _quat_to_rotmat_batch(quat_batch: np.ndarray) -> np.ndarray:
     ).astype(np.float32)
 
 
+_GRIPPER_BODY_PARTS = ("link_left_finger", "link_right_finger", "_lf_rot", "_lf_down", "_rf_rot", "_rf_down")
+
+
+def _subtree_bodies(model: mujoco.MjModel, root: int) -> set[int]:
+    bodies = set()
+    for body in range(model.nbody):
+        current = body
+        while current > 0 and current != root:
+            current = int(model.body_parentid[current])
+        if current == root:
+            bodies.add(body)
+    return bodies
+
+
+def _body_geom_ids(model: mujoco.MjModel, body_name: str) -> set[int]:
+    body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body < 0:
+        return set()
+    bodies = _subtree_bodies(model, body)
+    return {geom for geom in range(model.ngeom) if int(model.geom_bodyid[geom]) in bodies}
+
+
+def _named_geom_ids(model: mujoco.MjModel, geom_name: str) -> set[int]:
+    geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+    return {int(geom)} if geom >= 0 else set()
+
+
+def _gripper_geom_ids(model: mujoco.MjModel) -> set[int]:
+    bodies: set[int] = set()
+    for body in range(model.nbody):
+        if any(part in (model.body(body).name or "") for part in _GRIPPER_BODY_PARTS):
+            bodies |= _subtree_bodies(model, body)
+    return {geom for geom in range(model.ngeom) if int(model.geom_bodyid[geom]) in bodies}
+
+
 class SweepAwayEvaluator:
     """Score sweep success from active paper scraps ending inside the bin.
 
     Reset metadata defines the active set; without it, z height is used.
+
+    The scraps must be swept, not carried: by default (``fail_on_gripper_carry``)
+    an active scrap that touches a gripper while it touches none of its supports
+    (the table, the dustpan, the bin) is carried, and the episode fails for good
+    (no success, reward 0, ``ever_failed``). Brushing past a scrap that rests on
+    a support does not count. Contacts come from ``evaluate_model_data``, which
+    the environment calls every control step; qpos-only scoring keeps the
+    latched state but cannot detect new carries.
     """
 
     def __init__(
@@ -47,6 +90,7 @@ class SweepAwayEvaluator:
         active_z_min: float = -0.25,
         bin_radial_margin_m: float = 0.005,
         bin_height_margin_m: float = 0.005,
+        fail_on_gripper_carry: bool = True,
     ) -> None:
         self.model = model
         self.spec = spec
@@ -54,6 +98,7 @@ class SweepAwayEvaluator:
         self.active_z_min = float(active_z_min)
         self.bin_radial_margin_m = float(bin_radial_margin_m)
         self.bin_height_margin_m = float(bin_height_margin_m)
+        self.fail_on_gripper_carry = bool(fail_on_gripper_carry)
 
         self.trash_names, self._trash_qpos_addrs = self._resolve_trash_qpos_addrs(model)
         self._bin_qpos_adr = self._resolve_joint_qpos_adr(model, "bin_joint")
@@ -63,6 +108,12 @@ class SweepAwayEvaluator:
         self._fixed_active_trash_mask = False
         self._max_scraps_in_bin = np.zeros((1,), dtype=np.int32)
         self._ever_success = np.zeros((1,), dtype=bool)
+        self._carried = np.zeros((1, len(self.trash_names)), dtype=bool)
+        self._trash_geom_ids = [_body_geom_ids(model, name) for name in self.trash_names]
+        self._gripper_geom_ids = _gripper_geom_ids(model)
+        self._support_geom_ids = (
+            _body_geom_ids(model, "bin_container") | _body_geom_ids(model, "dustpan") | _named_geom_ids(model, "table_plane")
+        )
 
     def reset(self, *, nworld: int = 1) -> None:
         self._nworld = int(nworld)
@@ -70,6 +121,23 @@ class SweepAwayEvaluator:
         self._fixed_active_trash_mask = False
         self._max_scraps_in_bin = np.zeros((self._nworld,), dtype=np.int32)
         self._ever_success = np.zeros((self._nworld,), dtype=bool)
+        self._carried = np.zeros((self._nworld, len(self.trash_names)), dtype=bool)
+
+    def evaluate_model_data(self, model: mujoco.MjModel, data: mujoco.MjData) -> TaskEvalResult:
+        """Score the current state, first latching any scrap a gripper is carrying."""
+        if self._nworld != 1:
+            self.reset(nworld=1)
+        touching: list[set[int]] = [set() for _ in self.trash_names]
+        owner = {geom: index for index, geoms in enumerate(self._trash_geom_ids) for geom in geoms}
+        for contact in data.contact[: data.ncon]:
+            for mine, other in ((int(contact.geom1), int(contact.geom2)), (int(contact.geom2), int(contact.geom1))):
+                if mine in owner:
+                    touching[owner[mine]].add(other)
+        carried = np.array(
+            [bool(t & self._gripper_geom_ids) and not (t & self._support_geom_ids) for t in touching], dtype=bool
+        )
+        self._carried[0] |= carried
+        return self.evaluate_qpos_batch(np.asarray(data.qpos, dtype=np.float32)[None, :])
 
     @staticmethod
     def _normalize_trash_joint_name(joint_name: str) -> str:
@@ -245,6 +313,10 @@ class SweepAwayEvaluator:
         denom = np.maximum(active_count, 1).astype(np.float32)
         reward = np.where(active_count > 0, num_scraps_in_bin.astype(np.float32) / denom, 0.0)
         success = (active_count > 0) & (num_scraps_in_bin == active_count)
+        carried_mask = self._carried & self._active_trash_mask
+        failed = carried_mask.any(axis=1) if self.fail_on_gripper_carry else np.zeros_like(success)
+        success &= ~failed
+        reward = np.where(failed, 0.0, reward).astype(np.float32)
         self._max_scraps_in_bin = np.maximum(self._max_scraps_in_bin, num_scraps_in_bin)
         self._ever_success |= success
 
@@ -266,6 +338,11 @@ class SweepAwayEvaluator:
             "num_scraps_outside_table_footprint": num_scraps_outside_table_footprint,
             "num_scraps_inside_table_footprint": num_scraps_inside_table_footprint,
             "num_active_scraps": active_count,
+            "num_scraps_carried_by_gripper": carried_mask.sum(axis=1).astype(np.int32),
+            "carried_scraps": [
+                [name for name, carried in zip(self.trash_names, world) if bool(carried)] for world in carried_mask
+            ],
+            "ever_failed": failed.copy(),
             "max_scraps_in_bin_so_far": self._max_scraps_in_bin.copy(),
             "ever_success": self._ever_success.copy(),
             "trash_in_bin_mask": in_bin_mask,

@@ -309,6 +309,9 @@ class MuJoCoYAMEnv(gym.Env):
         randomize: bool = True,
     ):
         super().reset(seed=seed)
+        # Each reset starts the arms at init_q; pass options={"keep_arm_state": True} to carry the current pose.
+        if not (options or {}).get("keep_arm_state", False):
+            self.forget_arm_state()
         reset_arm_state = self._get_reset_arm_state()
         mujoco.mj_resetData(self.model, self.data)
         self._set_qpos_from_state(reset_arm_state)
