@@ -57,13 +57,13 @@ class SweepCarryTest(unittest.TestCase):
         self.assertFalse(bool(later.success[0]))
         self.assertEqual(float(later.reward[0]), 0.0)
 
-    def test_a_scrap_in_the_bin_without_gripper_contact_counts(self):
+    def test_a_scrap_in_the_bin_without_gripper_contact_is_not_a_carry(self):
         result = self.place(self.bin_point())
         self.assertIn(self.ball, result.metrics["scraps_in_bin"][0])
         self.assertEqual(int(result.metrics["num_scraps_carried_by_gripper"][0]), 0)
-        self.assertAlmostEqual(
-            float(result.reward[0]), 1.0 / len(self.active), places=5
-        )
+        self.assertFalse(bool(result.metrics["ever_failed"][0]))
+        # The brush never swept it onto the dustpan, so it earns no staged credit (tests/test_sweep_staged_reward.py).
+        self.assertEqual(float(result.reward[0]), 0.0)
 
     def test_lenient_flag_keeps_position_only_scoring(self):
         lenient = SweepAwayEvaluator(
