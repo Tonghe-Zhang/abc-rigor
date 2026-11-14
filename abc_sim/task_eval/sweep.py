@@ -76,7 +76,9 @@ def _gripper_geom_ids(model: mujoco.MjModel) -> set[int]:
 class SweepAwayEvaluator:
     """Score sweep success from active paper scraps ending inside the bin.
 
-    Reset metadata defines the active set; without it, z height is used.
+    Reset metadata defines the active set; without it, a scrap is active once seen in front of
+    the robot (x >= 0, as the randomizer counts them) above ``active_z_min``. Unused scraps are
+    parked behind the robot (x < 0) at table height, so height alone would count them.
 
     The scraps must be swept, not carried: by default (``fail_on_gripper_carry``)
     an active scrap that touches a gripper while it touches none of its supports
@@ -345,7 +347,7 @@ class SweepAwayEvaluator:
             axis=1,
         )
         if not self._fixed_active_trash_mask:
-            self._active_trash_mask |= trash_positions[..., 2] > self.active_z_min
+            self._active_trash_mask |= (trash_positions[..., 0] >= 0.0) & (trash_positions[..., 2] > self.active_z_min)
 
         bin_pos = qpos_batch[:, self._bin_qpos_adr : self._bin_qpos_adr + 3]
         bin_quat = qpos_batch[:, self._bin_qpos_adr + 3 : self._bin_qpos_adr + 7]

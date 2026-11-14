@@ -77,6 +77,19 @@ class SweepCarryTest(unittest.TestCase):
         self.assertFalse(bool(result.metrics["ever_failed"][0]))
 
 
+class SweepFallbackActiveSetTest(unittest.TestCase):
+    def test_without_reset_metadata_parked_scraps_are_not_active(self):
+        env = make_env("sweep", render_cameras=False)
+        for seed in (1, 2, 3):
+            with self.subTest(seed=seed):
+                env.reset(seed=seed)
+                expected = env._task_evaluator._active_trash_mask[0]
+                self.assertLess(int(expected.sum()), len(expected))  # some scraps are parked
+                fallback = SweepAwayEvaluator(model=env.model, spec=env._task_spec)
+                result = fallback.evaluate_qpos_batch(env.data.qpos[None, :])
+                np.testing.assert_array_equal(result.metrics["trash_active_mask"][0], expected)
+
+
 class SweepCarryContactRuleTest(unittest.TestCase):
     """Synthetic scene: a table, the bin, one scrap and a finger box, so each contact case is exact."""
 
