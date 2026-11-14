@@ -28,6 +28,17 @@ class PutRelativeEvaluator:
     height -- an object set down on its side rests lower than it spawned,
     never higher).
 
+    By default (``require_past_reference_edge``) the zone instead starts at the
+    reference's edge in the asked direction (from its current pose and
+    collision geometry): the mover's centre must be past that edge, within
+    ``along_max_m``, and no more sideways than its distance from the reference
+    centre, capped at ``perp_max_m`` (a 45-degree cone). Short of that edge,
+    including the wrong side, the reward is 0; past it but outside the zone,
+    partial reward is at most ``partial_reward_max`` and fades to 0 over
+    ``partial_reward_range_m`` of violation. With the flag off, the zone starts
+    at ``along_min_m`` with a fixed ``perp_max_m`` and the reward decays with
+    the distance to it on any side.
+
     The tolerance forms a directional cone rather than requiring the mover to
     land on one exact generated goal point.
 
@@ -46,12 +57,18 @@ class PutRelativeEvaluator:
         along_max_m: float = 0.30,
         perp_max_m: float = 0.08,
         placed_z_tolerance_m: float = 0.03,
+        require_past_reference_edge: bool = True,
+        partial_reward_max: float = 0.5,
+        partial_reward_range_m: float = 0.15,
     ) -> None:
         self.spec = spec
         self.along_min_m = float(along_min_m)
         self.along_max_m = float(along_max_m)
         self.perp_max_m = float(perp_max_m)
         self.placed_z_tolerance_m = float(placed_z_tolerance_m)
+        self.require_past_reference_edge = bool(require_past_reference_edge)
+        self.partial_reward_max = float(partial_reward_max)
+        self.partial_reward_range_m = float(partial_reward_range_m)
         self._goal: dict[str, Any] | None = None
         self._bind_model(model)
         self.reset(nworld=1)
@@ -101,7 +118,9 @@ class PutRelativeEvaluator:
             if isinstance(state, Mapping) and "pos" in state:
                 spawn_z = float(state["pos"][2])
 
+        reference_joint = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, f"{reference}_joint")
         self._goal = {
+            "reference_extent": self._body_extent_points(self.model, int(self.model.jnt_bodyid[reference_joint])),
             "mover_adr": self._resolve_free_joint_qpos_adr(self.model, f"{mover}_joint"),
             "reference_adr": self._resolve_free_joint_qpos_adr(
                 self.model, f"{reference}_joint"
@@ -115,6 +134,34 @@ class PutRelativeEvaluator:
 
     def debug_spec(self) -> dict[str, object] | None:
         return None
+
+    @staticmethod
+    def _body_extent_points(model: mujoco.MjModel, body: int) -> np.ndarray:
+        """Corners of the body's collision-geom bounding boxes, in the body frame (N, 3)."""
+        geoms = [g for g in range(model.ngeom) if int(model.geom_bodyid[g]) == body]
+        colliding = [g for g in geoms if model.geom_contype[g] or model.geom_conaffinity[g]]
+        signs = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], dtype=np.float64)
+        points = []
+        for g in colliding or geoms:
+            center, half = model.geom_aabb[g, :3], model.geom_aabb[g, 3:]
+            rot = np.empty(9)
+            mujoco.mju_quat2Mat(rot, model.geom_quat[g])
+            points.append(model.geom_pos[g] + (center + signs * half) @ rot.reshape(3, 3).T)
+        return np.concatenate(points) if points else np.zeros((1, 3))
+
+    @staticmethod
+    def _rotate(quat: np.ndarray, points: np.ndarray) -> np.ndarray:
+        """Rotate body-frame points (N, 3) by a batch of wxyz quaternions (B, 4) -> (B, N, 3)."""
+        w, x, y, z = (quat[:, i, None, None] for i in range(4))
+        rot = np.concatenate(
+            [
+                np.concatenate([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], axis=2),
+                np.concatenate([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], axis=2),
+                np.concatenate([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], axis=2),
+            ],
+            axis=1,
+        )
+        return np.einsum("bij,nj->bni", rot, points)
 
     @staticmethod
     def _resolve_free_joint_qpos_adr(model: mujoco.MjModel, joint_name: str) -> int:
@@ -153,11 +200,15 @@ class PutRelativeEvaluator:
         axis = goal["axis"]
         along = rel @ axis
         perp = np.abs(rel @ np.asarray([-axis[1], axis[0]], dtype=np.float32))
-        in_cone = (
-            (along >= self.along_min_m)
-            & (along <= self.along_max_m)
-            & (perp <= self.perp_max_m)
-        )
+        if self.require_past_reference_edge:
+            reference_quat = qpos_batch[:, goal["reference_adr"] + 3 : goal["reference_adr"] + 7].astype(np.float64)
+            extent = self._rotate(reference_quat, goal["reference_extent"])[..., :2] @ axis
+            edge = extent.max(axis=1).astype(np.float32)
+            side_limit = np.minimum(self.perp_max_m, along)
+            in_cone = (along >= edge) & (along <= self.along_max_m) & (perp <= side_limit)
+        else:
+            edge = np.zeros_like(along)
+            in_cone = (along >= self.along_min_m) & (along <= self.along_max_m) & (perp <= self.perp_max_m)
 
         if goal["spawn_z"] is None:
             placed = np.ones((batch,), dtype=bool)
@@ -166,13 +217,19 @@ class PutRelativeEvaluator:
 
         success = in_cone & placed
         self._ever_success |= success
-        # Progress: how far the mover has come toward the cone's near edge,
-        # measured as the distance to the closest satisfying point.
-        target_along = np.clip(along, self.along_min_m, self.along_max_m)
-        target_perp = np.minimum(perp, self.perp_max_m)
-        gap = np.hypot(along - target_along, perp - target_perp)
-        reward = np.clip(1.0 - gap / 0.25, 0.0, 1.0).astype(np.float32)
-        reward = np.where(success, 1.0, np.minimum(reward, 0.99)).astype(np.float32)
+        if self.require_past_reference_edge:
+            # Nothing short of the reference's edge; past it, partial credit for the summed violations.
+            gap = np.maximum(0.0, along - self.along_max_m) + np.maximum(0.0, perp - side_limit)
+            partial = self.partial_reward_max * np.clip(1.0 - gap / self.partial_reward_range_m, 0.0, 1.0)
+            reward = np.where(along > edge, partial, 0.0)
+        else:
+            # Progress: how far the mover has come toward the cone's near edge,
+            # measured as the distance to the closest satisfying point.
+            target_along = np.clip(along, self.along_min_m, self.along_max_m)
+            target_perp = np.minimum(perp, self.perp_max_m)
+            gap = np.hypot(along - target_along, perp - target_perp)
+            reward = np.minimum(np.clip(1.0 - gap / 0.25, 0.0, 1.0), 0.99)
+        reward = np.where(success, 1.0, reward).astype(np.float32)
         self._max_reward = np.maximum(self._max_reward, reward)
 
         return TaskEvalResult(
@@ -185,6 +242,7 @@ class PutRelativeEvaluator:
                 "reference_object": goal["reference"],
                 "mover_along_m": along.astype(np.float32),
                 "mover_perp_m": perp.astype(np.float32),
+                "reference_edge_m": edge.astype(np.float32),
                 "mover_in_cone": in_cone,
                 "mover_placed": placed,
                 "max_reward_so_far": self._max_reward.copy(),
