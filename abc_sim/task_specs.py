@@ -86,6 +86,15 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         ),
     ),
     SimTaskSpec(
+        name="conveyor_pick_wide_belt_speed",
+        env_task="conveyor_pick",
+        prompt="pick objects from the conveyor belt and put them in the bin",
+        description="conveyor_pick with the belt speed sampled from 0.05-0.30 m/s instead of 0.10-0.20 m/s.",
+        evaluator_name="conveyor_pick_objects_in_bin",
+        reset_request=(("belt_speed_range_m_s", (0.05, 0.30)),),
+        aliases=("sim_conveyor_pick_wide_belt_speed",),
+    ),
+    SimTaskSpec(
         name="count_into_opaque_box",
         env_task="count_into_opaque_box",
         prompt="put the prompted number of objects in the opaque box",
