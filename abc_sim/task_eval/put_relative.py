@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import mujoco
 import numpy as np
@@ -28,11 +29,10 @@ class PutRelativeEvaluator:
     height -- an object set down on its side rests lower than it spawned,
     never higher).
 
-    By default (``require_past_reference_edge``) the zone instead starts at the
-    reference's edge in the asked direction (from its current pose and
-    collision geometry): the mover's centre must be past that edge, within
-    ``along_max_m``, and no more sideways than its distance from the reference
-    centre, capped at ``perp_max_m`` (a 45-degree cone). Short of that edge,
+    By default (``require_past_reference_edge``) the mover's centre must also be
+    past the reference's edge in the asked direction (from the reference's
+    current pose and collision geometry), and no more sideways than its
+    distance from the reference centre (a 45-degree cone). Short of that edge,
     including the wrong side, the reward is 0; past it but outside the zone,
     partial reward is at most ``partial_reward_max`` and fades to 0 over
     ``partial_reward_range_m`` of violation. With the flag off, the zone starts
@@ -53,7 +53,7 @@ class PutRelativeEvaluator:
         *,
         model: mujoco.MjModel,
         spec: SimTaskSpec,
-        along_min_m: float = 0.06,
+        along_min_m: float = 0.0,
         along_max_m: float = 0.30,
         perp_max_m: float = 0.08,
         placed_z_tolerance_m: float = 0.03,
@@ -120,8 +120,12 @@ class PutRelativeEvaluator:
 
         reference_joint = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, f"{reference}_joint")
         self._goal = {
-            "reference_extent": self._body_extent_points(self.model, int(self.model.jnt_bodyid[reference_joint])),
-            "mover_adr": self._resolve_free_joint_qpos_adr(self.model, f"{mover}_joint"),
+            "reference_extent": self._body_extent_points(
+                self.model, int(self.model.jnt_bodyid[reference_joint])
+            ),
+            "mover_adr": self._resolve_free_joint_qpos_adr(
+                self.model, f"{mover}_joint"
+            ),
             "reference_adr": self._resolve_free_joint_qpos_adr(
                 self.model, f"{reference}_joint"
             ),
@@ -205,10 +209,18 @@ class PutRelativeEvaluator:
             extent = self._rotate(reference_quat, goal["reference_extent"])[..., :2] @ axis
             edge = extent.max(axis=1).astype(np.float32)
             side_limit = np.minimum(self.perp_max_m, along)
-            in_cone = (along >= edge) & (along <= self.along_max_m) & (perp <= side_limit)
+            in_cone = (
+                (along >= np.maximum(edge, self.along_min_m))
+                & (along <= self.along_max_m)
+                & (perp <= side_limit)
+            )
         else:
             edge = np.zeros_like(along)
-            in_cone = (along >= self.along_min_m) & (along <= self.along_max_m) & (perp <= self.perp_max_m)
+            in_cone = (
+                (along >= self.along_min_m)
+                & (along <= self.along_max_m)
+                & (perp <= self.perp_max_m)
+            )
 
         if goal["spawn_z"] is None:
             placed = np.ones((batch,), dtype=bool)

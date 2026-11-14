@@ -2,20 +2,39 @@
 
 from __future__ import annotations
 
+import math
+
 import mujoco
 import numpy as np
 
 from abc_sim.task_eval.base import TaskEvalResult
+from abc_sim.task_eval.contacts import gripper_geom_ids, has_contact, subtree_geom_ids
 from abc_sim.task_specs import SimTaskSpec
 
 
-class BallTrayBalancingEvaluator:
-    """Score whether the tray is held up with the ball still on it.
+def sample_hold_duration_s(seed: int | np.random.Generator | None) -> float:
+    """Sample the 21 half-second requirements using a seed or existing RNG."""
+    sampled = float(np.random.default_rng(seed).uniform(5.0, 15.5))
+    return math.floor(sampled * 2.0) / 2.0
 
-    A world succeeds while the ball has never left the tray *and* the tray centre sits at least
-    ``min_lift_m`` above the height it had at the first evaluation after reset. Without the lift
-    requirement a policy that never touches the resting tray scores a perfect balance.
+
+def format_hold_prompt(duration_s: float) -> str:
+    return f"balance the ball in the tray for at least {duration_s:g} seconds"
+
+
+class BallTrayBalancingEvaluator:
+    """Hold the lifted tray continuously, then return it to table contact.
+
+    Invalid samples restart the hold timer. Completion latches after table contact.
+
+    By default the ball must come down with the tray: losing it after the hold
+    ends the attempt with reward 0 (``require_ball_on_tray_when_lowered``), and
+    a hold with a gripper touching the ball does not count
+    (``forbid_gripper_ball_contact``). With both off, the ball no longer affects
+    success once the sampled duration is met.
     """
+
+    requires_step_updates = True
 
     def __init__(
         self,
@@ -28,6 +47,8 @@ class BallTrayBalancingEvaluator:
         ball_radius_m: float = 0.022,
         dropped_local_z_threshold_m: float = 0.008,
         min_lift_m: float = 0.05,
+        require_ball_on_tray_when_lowered: bool = True,
+        forbid_gripper_ball_contact: bool = True,
     ) -> None:
         self.spec = spec
         self._ball_joint_name = ball_joint_name
@@ -36,6 +57,9 @@ class BallTrayBalancingEvaluator:
         self._ball_radius_m = float(ball_radius_m)
         self._dropped_local_z_threshold_m = float(dropped_local_z_threshold_m)
         self._min_lift_m = float(min_lift_m)
+        self.require_ball_on_tray_when_lowered = bool(require_ball_on_tray_when_lowered)
+        self.forbid_gripper_ball_contact = bool(forbid_gripper_ball_contact)
+        self._configured_hold_duration_s = sample_hold_duration_s(0)
         self._bind_model(model)
         self.reset(nworld=1)
 
@@ -52,12 +76,28 @@ class BallTrayBalancingEvaluator:
         )
         if self._tray_site_id < 0:
             raise ValueError(f"Site {self._tray_site_name!r} not found in model")
+        tray_body = int(model.site_bodyid[self._tray_site_id])
+        self._tray_geom_ids = subtree_geom_ids(model, tray_body)
+        table_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "table_plane")
+        if table_geom < 0:
+            raise ValueError("Table geom 'table_plane' not found")
+        self._table_geom_ids = {int(table_geom)}
+        ball_body = int(model.jnt_bodyid[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, self._ball_joint_name)])
+        self._ball_geom_ids = subtree_geom_ids(model, ball_body)
+        self._gripper_geom_ids = gripper_geom_ids(model)
 
     def reset(self, *, nworld: int = 1) -> None:
+        """Clear temporal state while retaining the configured requirement."""
         self._nworld = int(nworld)
-        self._alive = np.ones((self._nworld,), dtype=bool)
-        self._ever_failed = np.zeros((self._nworld,), dtype=bool)
-        self._ever_held = np.zeros((self._nworld,), dtype=bool)
+        self._hold_duration_s = np.full(self._nworld, self._configured_hold_duration_s)
+        self._hold_started_at = np.full(self._nworld, np.nan)
+        self._last_time_s = np.full(self._nworld, np.nan)
+        self._hold_complete = np.zeros(self._nworld, dtype=bool)
+        self._hold_completed_at = np.full(self._nworld, np.nan)
+        self._completed_hold_s = np.zeros(self._nworld, dtype=np.float64)
+        self._last_table_contact = np.zeros(self._nworld, dtype=bool)
+        self._completed = np.zeros(self._nworld, dtype=bool)
+        self._ball_lost = np.zeros(self._nworld, dtype=bool)
         self._rest_tray_z: np.ndarray | None = None
 
     def configure_from_randomization(
@@ -67,7 +107,17 @@ class BallTrayBalancingEvaluator:
     ) -> None:
         if model is not self.model:
             self._bind_model(model)
+        seed = getattr(randomization, "seed", None)
         metadata = getattr(randomization, "metadata", None)
+        duration = (
+            float(metadata["hold_duration_s"])
+            if isinstance(metadata, dict) and "hold_duration_s" in metadata
+            else sample_hold_duration_s(seed)
+        )
+        if not np.isfinite(duration) or not 5.0 <= duration <= 15.0:
+            raise ValueError("hold_duration_s must be between 5 and 15 seconds")
+        self._configured_hold_duration_s = duration
+        self._hold_duration_s[:] = duration
         if not isinstance(metadata, dict):
             return
         usable_half_extents = metadata.get("usable_half_extents_m")
@@ -105,7 +155,13 @@ class BallTrayBalancingEvaluator:
         metrics = self._sample_metrics_from_data(data)
         return self._result_from_metrics(metrics)
 
-    def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
+    def evaluate_qpos_batch(
+        self, qpos_batch: np.ndarray, *, time_s: float | np.ndarray | None = None
+    ) -> TaskEvalResult:
+        if time_s is None:
+            raise ValueError(
+                "Timed ball-tray scoring requires time_s or evaluate_model_data(model, data)"
+            )
         qpos_batch = np.asarray(qpos_batch, dtype=np.float32)
         if qpos_batch.ndim != 2 or qpos_batch.shape[1] != self.model.nq:
             raise ValueError(
@@ -113,11 +169,13 @@ class BallTrayBalancingEvaluator:
             )
         if qpos_batch.shape[0] != self._nworld:
             self.reset(nworld=qpos_batch.shape[0])
+        times = np.broadcast_to(np.asarray(time_s, dtype=np.float64), (self._nworld,))
 
         data = mujoco.MjData(self.model)
         samples = []
-        for qpos in qpos_batch:
+        for qpos, timestamp in zip(qpos_batch, times):
             data.qpos[:] = qpos
+            data.time = float(timestamp)
             mujoco.mj_forward(self.model, data)
             samples.append(self._sample_metrics_from_data(data))
         metrics = {
@@ -128,10 +186,12 @@ class BallTrayBalancingEvaluator:
 
     def _sample_metrics_from_data(self, data: mujoco.MjData) -> dict[str, np.ndarray]:
         ball_pos = np.asarray(
-            data.qpos[self._ball_qpos_addr: self._ball_qpos_addr + 3],
+            data.qpos[self._ball_qpos_addr : self._ball_qpos_addr + 3],
             dtype=np.float32,
         ).copy()
-        tray_center = np.asarray(data.site_xpos[self._tray_site_id], dtype=np.float32).copy()
+        tray_center = np.asarray(
+            data.site_xpos[self._tray_site_id], dtype=np.float32
+        ).copy()
         rot_world_from_tray = np.asarray(
             data.site_xmat[self._tray_site_id],
             dtype=np.float32,
@@ -154,9 +214,18 @@ class BallTrayBalancingEvaluator:
             "tray_center": tray_center,
             "ball_tray_local_pos": local_pos.astype(np.float32),
             "center_error_m": np.array(center_error, dtype=np.float32),
-            "normalized_center_error": np.array(normalized_center_error, dtype=np.float32),
+            "normalized_center_error": np.array(
+                normalized_center_error, dtype=np.float32
+            ),
             "inside_tray": inside_tray,
             "ball_dropped": ball_dropped,
+            "time_s": np.asarray(data.time, dtype=np.float64),
+            "ball_gripper_contact": np.asarray(
+                has_contact(data, self._ball_geom_ids, self._gripper_geom_ids), dtype=bool
+            ),
+            "tray_table_contact": np.asarray(
+                has_contact(data, self._tray_geom_ids, self._table_geom_ids), dtype=bool
+            ),
         }
 
     def _result_from_metrics(self, metrics: dict[str, np.ndarray]) -> TaskEvalResult:
@@ -167,7 +236,9 @@ class BallTrayBalancingEvaluator:
         if current_balanced.ndim == 0:
             current_balanced = current_balanced[None]
             metrics = {
-                key: value[None] if np.asarray(value).ndim > 0 else np.asarray(value)[None]
+                key: value[None]
+                if np.asarray(value).ndim > 0
+                else np.asarray(value)[None]
                 for key, value in metrics.items()
             }
         if current_balanced.shape[0] != self._nworld:
@@ -179,30 +250,55 @@ class BallTrayBalancingEvaluator:
         tray_lift = (tray_z - self._rest_tray_z).astype(np.float32)
         lifted = tray_lift >= self._min_lift_m
 
-        self._alive &= current_balanced
-        self._ever_failed |= np.logical_not(current_balanced)
-        held = np.logical_and(self._alive, lifted)
-        self._ever_held |= held
-        center_error = np.asarray(metrics["center_error_m"], dtype=np.float32)
-        tray_radius = max(float(np.linalg.norm(self._usable_half_extents)), 1e-6)
-        reward = np.clip(1.0 - center_error / tray_radius, 0.0, 1.0).astype(np.float32)
-        reward = np.where(held, reward, 0.0).astype(np.float32)
+        now = np.asarray(metrics["time_s"], dtype=np.float64)
+        if np.any(now < self._last_time_s):
+            raise ValueError(
+                "Simulation time moved backwards without an evaluator reset"
+            )
+        self._last_time_s = now.copy()
+        ready_to_lower = self._hold_complete.copy()
+        valid_hold = current_balanced & lifted
+        if self.forbid_gripper_ball_contact:
+            valid_hold &= ~np.asarray(metrics["ball_gripper_contact"], dtype=bool)
+        self._hold_started_at[~valid_hold & ~self._hold_complete] = np.nan
+        start = valid_hold & ~self._hold_complete & np.isnan(self._hold_started_at)
+        self._hold_started_at[start] = now[start]
+        elapsed = np.where(
+            np.isnan(self._hold_started_at), 0.0, now - self._hold_started_at
+        )
+        self._hold_complete |= valid_hold & (elapsed >= self._hold_duration_s)
+        just_held = self._hold_complete & ~ready_to_lower
+        self._completed_hold_s[just_held] = elapsed[just_held]
+        self._hold_completed_at[just_held] = now[just_held]
+        elapsed = np.where(self._hold_complete, self._completed_hold_s, elapsed)
+        if self.require_ball_on_tray_when_lowered:
+            self._ball_lost |= ready_to_lower & ~self._completed & ~current_balanced
+        table_contact = np.asarray(metrics["tray_table_contact"], dtype=bool)
+        new_contact = table_contact & ~self._last_table_contact
+        self._completed |= (
+            ready_to_lower & (now > self._hold_completed_at) & new_contact & ~self._ball_lost
+        )
+        self._last_table_contact = table_contact.copy()
+        progress = np.clip(elapsed / self._hold_duration_s, 0.0, 1.0)
+        reward = np.where(
+            self._completed,
+            1.0,
+            np.where(self._ball_lost, 0.0, np.where(self._hold_complete, 0.9, 0.9 * progress)),
+        )
 
         return TaskEvalResult(
             reward=reward,
-            success=held.copy(),
+            success=self._completed.copy(),
             metrics={
                 **metrics,
                 "current_balanced": current_balanced.copy(),
                 "tray_lift_m": tray_lift,
                 "lifted": lifted.copy(),
-                "alive": self._alive.copy(),
-                "ever_failed": self._ever_failed.copy(),
-                # Balancing is a maintenance task: a world that has lifted the tray keeps
-                # ever_success until it drops the ball, and the rollout loops stop on
-                # ever_failed rather than ever_success. A trial that ends with the tray back
-                # down fails on final success.
-                "ever_success": np.logical_and(self._ever_held, np.logical_not(self._ever_failed)),
+                "continuous_hold_s": elapsed.copy(),
+                "hold_duration_s": self._hold_duration_s.copy(),
+                "hold_complete": self._hold_complete.copy(),
+                "ball_lost_after_hold": self._ball_lost.copy(),
+                "ever_success": self._completed.copy(),
                 "usable_half_extents_m": np.broadcast_to(
                     self._usable_half_extents,
                     (self._nworld, 2),

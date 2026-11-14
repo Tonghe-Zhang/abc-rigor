@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import mujoco
 import numpy as np
@@ -10,7 +11,6 @@ import numpy as np
 from abc_sim.task_eval.base import TaskEvalResult
 from abc_sim.task_eval.bottles import _quat_to_rotmat_batch
 from abc_sim.task_specs import SimTaskSpec
-
 
 _LEGO_COLORS = ("red", "yellow", "blue")
 
@@ -23,13 +23,17 @@ class LegoBlocksSortingEvaluator:
         *,
         model: mujoco.MjModel,
         spec: SimTaskSpec,
+        goal_tolerance_m: float = 0.005,
         penalize_wrong_bin: bool = True,
     ) -> None:
         self.model = model
         self.spec = spec
+        self.goal_tolerance_m = float(goal_tolerance_m)
         # Each block in a wrong bin cancels one correctly sorted block in the reward (never below 0); off: only
         # correctly sorted blocks count. Either way a wrong-bin block blocks success.
         self.penalize_wrong_bin = bool(penalize_wrong_bin)
+        if not np.isfinite(self.goal_tolerance_m) or self.goal_tolerance_m < 0.0:
+            raise ValueError("goal_tolerance_m must be finite and nonnegative")
         self._block_qpos_addrs: dict[str, np.ndarray] = {}
         self._bin_qpos_addrs: dict[str, int] = {}
         self._goal_regions: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -58,12 +62,18 @@ class LegoBlocksSortingEvaluator:
 
     def set_active_object_joints(self, active_joints_by_world: Any) -> None:
         """Score only each world's active blocks; the rest sit parked off the table."""
-        if self._nworld == 1 and active_joints_by_world and isinstance(active_joints_by_world[0], str):
+        if (
+            self._nworld == 1
+            and active_joints_by_world
+            and isinstance(active_joints_by_world[0], str)
+        ):
             active_joints_by_world = [active_joints_by_world]
         for world, joints in enumerate(active_joints_by_world):
             active = set(joints)
             for color, names in self.block_names.items():
-                self._active[color][world] = [f"{name}_joint" in active for name in names]
+                self._active[color][world] = [
+                    f"{name}_joint" in active for name in names
+                ]
 
     @staticmethod
     def _resolve_block_qpos_addrs(
@@ -80,7 +90,9 @@ class LegoBlocksSortingEvaluator:
             if match is None:
                 continue
             index = int(match.group(1))
-            entries.append((index, f"{color}_lego_{index}", int(model.jnt_qposadr[joint_id])))
+            entries.append(
+                (index, f"{color}_lego_{index}", int(model.jnt_qposadr[joint_id]))
+            )
 
         if not entries:
             raise ValueError(f"No {color}_lego_*_joint freejoints found in model")
@@ -117,18 +129,25 @@ class LegoBlocksSortingEvaluator:
         positions: np.ndarray,
         qpos_batch: np.ndarray,
         color: str,
+        *,
+        tolerance_m: float | None = None,
     ) -> np.ndarray:
         bin_qpos_addr = self._bin_qpos_addrs[color]
         goal_local_center, goal_size = self._goal_regions[color]
-        bin_pos = qpos_batch[:, bin_qpos_addr: bin_qpos_addr + 3]
-        bin_quat = qpos_batch[:, bin_qpos_addr + 3: bin_qpos_addr + 7]
+        bin_pos = qpos_batch[:, bin_qpos_addr : bin_qpos_addr + 3]
+        bin_quat = qpos_batch[:, bin_qpos_addr + 3 : bin_qpos_addr + 7]
         rel_world = positions - bin_pos[:, None, :]
         rot_world_from_bin = _quat_to_rotmat_batch(bin_quat)
-        rel_bin = np.einsum("bij,bnj->bni", np.swapaxes(rot_world_from_bin, 1, 2), rel_world)
-        return np.all(
-            np.abs(rel_bin - goal_local_center[None, None, :]) <= goal_size[None, None, :],
-            axis=-1,
+        rel_bin = np.einsum(
+            "bij,bnj->bni", np.swapaxes(rot_world_from_bin, 1, 2), rel_world
         )
+        outside = np.maximum(
+            np.abs(rel_bin - goal_local_center[None, None, :])
+            - goal_size[None, None, :],
+            0.0,
+        )
+        tolerance = self.goal_tolerance_m if tolerance_m is None else tolerance_m
+        return np.linalg.norm(outside, axis=-1) <= tolerance
 
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
         qpos_batch = np.asarray(qpos_batch, dtype=np.float32)
@@ -145,7 +164,10 @@ class LegoBlocksSortingEvaluator:
         total_blocks = np.zeros((qpos_batch.shape[0],), dtype=np.int32)
         for color in _LEGO_COLORS:
             positions = np.stack(
-                [qpos_batch[:, addr : addr + 3] for addr in self._block_qpos_addrs[color]],
+                [
+                    qpos_batch[:, addr : addr + 3]
+                    for addr in self._block_qpos_addrs[color]
+                ],
                 axis=1,
             )
             active = self._active[color]
@@ -158,9 +180,16 @@ class LegoBlocksSortingEvaluator:
             for other_color in _LEGO_COLORS:
                 if other_color == color:
                     continue
-                num_wrong_bin += (active & self._inside_bin(positions, qpos_batch, other_color)).sum(
-                    axis=1
-                ).astype(np.int32)
+                num_wrong_bin += (
+                    (
+                        active
+                        & self._inside_bin(
+                            positions, qpos_batch, other_color, tolerance_m=0.0
+                        )
+                    )
+                    .sum(axis=1)
+                    .astype(np.int32)
+                )
 
         success = (num_correct == total_blocks) & (num_wrong_bin == 0)
         self._ever_success |= success
@@ -169,6 +198,7 @@ class LegoBlocksSortingEvaluator:
                 "num_correct": num_correct,
                 "num_wrong_bin": num_wrong_bin,
                 "ever_success": self._ever_success.copy(),
+                "goal_tolerance_m": np.full(qpos_batch.shape[0], self.goal_tolerance_m),
             }
         )
         return TaskEvalResult(

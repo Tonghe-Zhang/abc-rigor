@@ -26,7 +26,7 @@ class RelativePlacementEdgeTest(unittest.TestCase):
         self.model = mujoco.MjModel.from_xml_string(XML)
         self.data = mujoco.MjData(self.model)
         self.strict = self.evaluator()
-        self.lenient = self.evaluator(require_past_reference_edge=False)
+        self.lenient = self.evaluator(require_past_reference_edge=False, along_min_m=0.06)
 
     def evaluator(self, **options):
         evaluator = PutRelativeEvaluator(

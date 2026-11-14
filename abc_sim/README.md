@@ -275,15 +275,18 @@ real measurement. The unscored four — `put_markers_in_top_drawer`,
 score themselves: they warn at startup and report reward 0 and success 0
 throughout. Watch the videos to judge those.
 
-One task is scored differently: `ball_tray_balancing` is a maintenance task
-(success means the tray is held up with the ball still on it), so its rollouts
-run the full chunk budget and its `success_rate` is only comparable between runs
-with equal `--num-chunks` — a 10-chunk run asks the policy to hold the ball for
-5 seconds, a 30-chunk run for 15. The tray counts as held once its centre is at
-least `min_lift_m` (5 cm) above its height at reset; a trial whose tray is never
-lifted, or is set back down before the end, fails. Earlier releases scored the
-ball resting on an untouched tray as a success, so ball_tray rows measured
-before this rule are not comparable.
+`ball_tray_balancing` samples a required hold duration from 5–15 seconds in
+half-second increments and includes it in the episode prompt. Keep the tray
+centre at least 5 cm above its reset height and the ball within the tray for
+that duration without interruption, then lower the tray into a new table
+contact. An interruption restarts the hold; ball position no longer affects
+completion after the hold finishes. Success latches after lowering and ends
+the rollout early. `--num-chunks` sets the time budget for completing the task;
+it does not set the required hold duration.
+
+See [the success conditions](../docs/success_conditions.md) for the scoring
+details. Earlier ball-tray results used a maintenance criterion and are not
+directly comparable with the current hold-and-lower success rate.
 
 Task names, aliases, and prompts are listed in `abc_sim/task_specs.py`, and an
 unrecognized `--task` fails immediately with the full catalogue in the error.
@@ -392,7 +395,7 @@ prompt works):
 | `sim_sweep_away_paper_scraps_from_the_table` | `sim sweep away paper scraps from the table` | 2/20 / 1/20 | 0.26 / 0.14 |
 | `count_into_opaque_box` | per-episode directive | 1/20 / 0/20 | 0.28 / 0.17 |
 | `lego_blocks_sorting` | `lego blocks sorting` | 0/20 / 1/20 (400 chunks, see below) | 0.74 / 0.75 |
-| `ball_tray_balancing` | `grab the tray handles and keep the ball balanced on the tray` | 1/20 / 0/20 (see below) | 1.00 / 1.00 |
+| `ball_tray_balancing` | `grab the tray handles and keep the ball balanced on the tray` | 1/20 / 0/20 (historical maintenance criterion; see below) | 1.00 / 1.00 |
 | `nuts_bolts_sorting` | `nuts bolts sorting` | 0/20 / 0/20 | 0.08 / 0.12 |
 | `sim_put_the_plastic_bottles_in_the_bin` | `sim put the plastic bottles in the bin` | **19/20 / 18/20 (20k)** | 0.99 / 0.95 |
 | `sim_load_the_plates_into_the_dish_rack` | `sim load the plates into the dish rack` | **15/20 / 14/20 (20k)** | 0.85 / 0.87 |
@@ -409,10 +412,12 @@ Rows before the conveyor retrain were measured under MuJoCo 3.6; the repo now
 pins 3.8, and contact-heavy tasks are sensitive to the engine step (the
 dishrack 20k checkpoint re-measures at 12/20 on seed A under 3.8).
 
-Reading notes: ball_tray is the maintenance task -- every world earned full
-hold-duration credit but the strict criterion asks the policy to hold roughly
-4x longer than any demonstration, so its zero is a horizon artifact. lego is
-the opposite case: 73% of its demonstrations are longer than the default
+The published ball-tray row and progress values were measured under the
+previous maintenance criterion. Every world earned full hold-duration credit,
+but the criterion asked the policy to hold roughly 4x longer than any
+demonstration, making the zero a horizon artifact. These measurements predate
+the sampled hold-and-lower criterion and require a new evaluation to report
+current success. For LEGO, 73% of its demonstrations are longer than the default
 236-chunk budget, so its row is measured at `--num-chunks 400` (its published
 eval summaries too); at the default budget every world times out mid-sort. The
 inverted-convention and directive-relabel history behind nuts_bolts_sorting
@@ -468,11 +473,11 @@ Two reading notes when comparing against those numbers:
   right column to compare for any task where progress can be undone (a plate
   knocked back out, or still touching the gripper at the end, subtracts from
   `mean_reward` but not from `mean_max_progress`). `success_rate` is stricter
-  than both: every object placed simultaneously, at any instant. On a
-  maintenance task (one that reports `ever_failed`, like
-  `ball_tray_balancing`) the reading flips: progress starts maximal and can
-  only be lost, so `mean_max_progress` reads ≈1.0 regardless of when the ball
-  drops — read `success_rate` there.
+  than both: every object placed simultaneously, at any instant. For the
+  current ball-tray task, reward increases with uninterrupted hold progress
+  up to 0.9, stays at 0.9 until a new table contact, then reaches 1.0 on latched
+  success. Its published historical maintenance results used different reward
+  semantics and should be read under that earlier criterion.
 - Training remaps some sim task names before they become prompts, so two
   catalogue tasks read best under a prompt that differs from their spec
   default. For checkpoints trained on the xdof + sim mixtures: the put-bottles

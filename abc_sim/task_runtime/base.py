@@ -8,7 +8,11 @@ import mujoco
 
 
 class TaskRuntime(Protocol):
-    """Python-side controller for task behavior that cannot live in XML alone."""
+    """Python-side controller for task behavior that cannot live in XML alone.
+
+    A runtime may implement ``on_task_evaluation(result)`` to consume the
+    environment's initial and physics-step scores before its ``after_step`` hook.
+    """
 
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """Bind the runtime to the current MuJoCo model/data pair."""

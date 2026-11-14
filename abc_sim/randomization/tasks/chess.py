@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from typing import Any
+from typing import Any, ClassVar
 
 import mujoco
 import numpy as np
@@ -82,10 +82,11 @@ class ChessRandomizer(SceneRandomizer):
     _tin_floor_half_z = _CHESS_TIN_FLOOR_HALF_Z
     _tin_piece_margin = 0.017
     _tin_piece_grid = (6, 3)
+    _tin_board_clearance_m = 0.02
     _table_z = _CHESS_TABLE_Z
     _tin_joint = _CHESS_TIN_JOINT
     _hidden_tin_pos = (0.6, 0.0, -10.0)
-    perturbations = [
+    perturbations: ClassVar[list[PerturbRange]] = [
         PerturbRange(
             "chessboard",
             delta_x=(-0.05, 0.05),
@@ -109,6 +110,14 @@ class ChessRandomizer(SceneRandomizer):
         self._current_scene_model_cache_key: tuple[Any, ...] | None = None
         self._set_current_tin_variant(_CHESS_TIN_DEFAULT_VARIANT)
         self._reload_chess_tin_scene(_CHESS_TIN_DEFAULT_VARIANT, {})
+
+    def _before_sampling(self, model: Any, data: Any) -> None:
+        geom = model.geom("board_collision")
+        if int(geom.type[0]) != mujoco.mjtGeom.mjGEOM_BOX:
+            raise ValueError("Chess board_collision must be a box")
+        self._board_collision_pos = geom.pos.copy()
+        self._board_collision_quat = geom.quat.copy()
+        self._board_collision_half_xy = geom.size[:2].copy()
 
     @staticmethod
     def _quat_conjugate(quat: np.ndarray) -> np.ndarray:
@@ -201,9 +210,9 @@ class ChessRandomizer(SceneRandomizer):
             self._apply_states(model, data, states)
             self._set_tin_collision_enabled(model, bool(metadata.get("tin_active", False)))
             mujoco.mj_forward(model, data)
-            if not self._object_arm_contacts_ok(model, data):
-                continue
-            if scenario != "knocked_setup" and not self._contacts_ok(model, data):
+            if not self._contacts_ok(
+                model, data, allow_piece_contacts=scenario == "knocked_setup"
+            ):
                 continue
             self._remember_selection(metadata)
             return RandomizationState(
@@ -608,25 +617,42 @@ class ChessRandomizer(SceneRandomizer):
     ) -> dict[str, list[float]]:
         tin_p = next(p for p in self.perturbations if p.joint_name == self._tin_joint)
         nom_pos, nom_quat = nominals[self._tin_joint]
-        x_min, x_max, y_min, y_max = (0.34, 0.84, -0.65, 0.65)
+        x_min, x_max, y_min, y_max = self.table_bounds
         half_x, half_y = self._current_tin_outer_half_xy()
+        board_y_max = float(
+            self._board_footprint(board_state, margin=self._tin_board_clearance_m)[:, 1].max()
+        )
         for _ in range(100):
-            x = float(rng.uniform(
-                max(nom_pos[0] + tin_p.delta_x[0], x_min + half_x),
-                min(nom_pos[0] + tin_p.delta_x[1], x_max - half_x),
-            ))
-            y = float(rng.uniform(
-                max(nom_pos[1] + tin_p.delta_y[0], y_min + half_y),
-                min(nom_pos[1] + tin_p.delta_y[1], y_max - half_y),
-            ))
             yaw = float(rng.uniform(*tin_p.delta_yaw))
+            quat = self._normalize_quat(_quat_mul(_quat_from_yaw(yaw), nom_quat))
+            tin_yaw = _yaw_from_quat(quat)
+            c, s = abs(float(np.cos(tin_yaw))), abs(float(np.sin(tin_yaw)))
+            extent_x = c * half_x + s * half_y
+            extent_y = s * half_x + c * half_y
+            x_lo = max(nom_pos[0] + tin_p.delta_x[0], x_min + extent_x)
+            x_hi = min(nom_pos[0] + tin_p.delta_x[1], x_max - extent_x)
+            # Move the nominal staging strip outward when the board needs room.
+            y_lo = max(
+                nom_pos[1] + tin_p.delta_y[0], y_min + extent_y, board_y_max + extent_y
+            )
+            y_hi = min(
+                max(
+                    nom_pos[1] + tin_p.delta_y[1],
+                    y_lo + tin_p.delta_y[1] - tin_p.delta_y[0],
+                ),
+                y_max - extent_y,
+            )
+            if x_lo > x_hi or y_lo > y_hi:
+                continue
+            x = float(rng.uniform(x_lo, x_hi))
+            y = float(rng.uniform(y_lo, y_hi))
             candidate = {
                 "pos": [x, y, float(self._table_z + self._tin_floor_half_z + 0.001)],
-                "quat": self._normalize_quat(_quat_mul(_quat_from_yaw(yaw), nom_quat)).tolist(),
+                "quat": quat.tolist(),
             }
             if not self._tin_overlaps_board(candidate, board_state):
                 return candidate
-        return candidate
+        raise _ChessPlacementFailure("No separated chess tin placement fits on the table")
 
     def _target_board_poses(
         self,
@@ -866,25 +892,61 @@ class ChessRandomizer(SceneRandomizer):
         tin_state: dict[str, list[float]],
         board_state: dict[str, list[float]],
     ) -> bool:
-        tin_center = np.asarray(tin_state["pos"][:2], dtype=np.float64)
-        board_center = np.asarray(board_state["pos"][:2], dtype=np.float64)
-        board_yaw = _yaw_from_quat(np.asarray(board_state["quat"], dtype=np.float64))
-        local = self._rotate_xy(tin_center - board_center, -board_yaw)
-        tin_outer_half_xy = self._current_tin_outer_half_xy()
-        return (
-            abs(float(local[0])) < self._board_half + tin_outer_half_xy[0] + 0.02
-            and abs(float(local[1])) < self._board_half + tin_outer_half_xy[1] + 0.02
+        tin = self._rectangle_footprint(
+            np.asarray(tin_state["pos"][:2], dtype=np.float64),
+            np.asarray(self._current_tin_outer_half_xy(), dtype=np.float64),
+            _yaw_from_quat(np.asarray(tin_state["quat"], dtype=np.float64)),
         )
+        board = self._board_footprint(board_state, margin=self._tin_board_clearance_m)
+        # A separating axis from either rectangle proves their footprints are disjoint.
+        for footprint in (board, tin):
+            for edge in (footprint[1] - footprint[0], footprint[3] - footprint[0]):
+                axis = np.array([-edge[1], edge[0]], dtype=np.float64)
+                board_projection = board @ axis
+                tin_projection = tin @ axis
+                if (
+                    board_projection.max() <= tin_projection.min()
+                    or tin_projection.max() <= board_projection.min()
+                ):
+                    return False
+        return True
+
+    def _board_footprint(
+        self, board_state: dict[str, list[float]], *, margin: float = 0.0
+    ) -> np.ndarray:
+        quat = np.asarray(board_state["quat"], dtype=np.float64)
+        center = np.asarray(board_state["pos"], dtype=np.float64) + _quat_rotate_vector(
+            quat, self._board_collision_pos
+        )
+        collision_quat = _quat_mul(quat, self._board_collision_quat)
+        return self._rectangle_footprint(
+            center[:2],
+            self._board_collision_half_xy + margin,
+            _yaw_from_quat(collision_quat),
+        )
+
+    @staticmethod
+    def _rectangle_footprint(
+        center: np.ndarray, half_xy: np.ndarray, yaw: float
+    ) -> np.ndarray:
+        corners = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]], dtype=np.float64)
+        c, s = float(np.cos(yaw)), float(np.sin(yaw))
+        rotation = np.array([[c, -s], [s, c]], dtype=np.float64)
+        return center + (corners * half_xy) @ rotation.T
 
     def _pairwise_ok(self, states: dict[str, dict[str, list[float]]]) -> bool:
         # Nominal chess squares are intentionally close, so the generic
         # centre-distance check would reject valid board setups.
         return True
 
-    def _contacts_ok(self, model: Any, data: Any) -> bool:
+    def _contacts_ok(
+        self, model: Any, data: Any, *, allow_piece_contacts: bool = False
+    ) -> bool:
         if not self._object_arm_contacts_ok(model, data):
             return False
 
+        board_root = int(model.body_rootid[model.body("chessboard").id])
+        tin_root = int(model.body_rootid[model.body("tin_box").id])
         piece_roots: set[int] = set()
         for joint_name in _CHESS_PIECE_JOINTS:
             jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
@@ -897,7 +959,16 @@ class ChessRandomizer(SceneRandomizer):
             body_2 = int(model.geom_bodyid[contact.geom2])
             root_1 = int(model.body_rootid[body_1])
             root_2 = int(model.body_rootid[body_2])
-            if root_1 != root_2 and root_1 in piece_roots and root_2 in piece_roots:
+            if (root_1 == board_root and root_2 == tin_root) or (
+                root_1 == tin_root and root_2 == board_root
+            ):
+                return False
+            if (
+                not allow_piece_contacts
+                and root_1 != root_2
+                and root_1 in piece_roots
+                and root_2 in piece_roots
+            ):
                 return False
         return True
 

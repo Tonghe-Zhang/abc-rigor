@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import mujoco
 import numpy as np
+
+from abc_sim.task_eval.ball_tray import format_hold_prompt, sample_hold_duration_s
 
 from ..core import PerturbRange, RandomizationState, SceneRandomizer
 
@@ -22,14 +24,13 @@ _BALL_TRAY_SPAWN_X_RANGE_M = (0.0, 0.0)
 _BALL_TRAY_SPAWN_Y_RANGE_M = (0.0, 0.0)
 _BALL_TRAY_LINEAR_VELOCITY_RANGE_M_S = (0.0, 0.0)
 _BALL_TRAY_ANGULAR_VELOCITY_RANGE_RAD_S = (0.0, 0.0)
-_BALL_TRAY_COUNTDOWN_DURATION_RANGE_S = (10, 15)
-_BALL_TRAY_PROMPT = "grab the tray handles and keep the ball balanced on the tray"
+_BALL_TRAY_COUNTDOWN_DURATION_RANGE_S = (5.0, 15.0)
 
 
 class BallTrayBalancingRandomizer(SceneRandomizer):
     """Fast reset sampler for ball-on-tray balancing."""
 
-    perturbations: list[PerturbRange] = []
+    perturbations: ClassVar[list[PerturbRange]] = []
 
     def __init__(self) -> None:
         super().__init__()
@@ -76,14 +77,14 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
 
         tray_qpos_addr = int(model.jnt_qposadr[tray_joint_id])
         tray_pos = np.asarray(
-            data.qpos[tray_qpos_addr: tray_qpos_addr + 3],
+            data.qpos[tray_qpos_addr : tray_qpos_addr + 3],
             dtype=np.float64,
         ).copy()
         tray_pos[0] += float(rng.uniform(*_BALL_TRAY_POSITION_X_RANGE_M))
         tray_pos[1] += float(rng.uniform(*_BALL_TRAY_POSITION_Y_RANGE_M))
         tray_pos[2] += _BALL_TRAY_FLOOR_HALF_HEIGHT_M * (tray_scale - 1.0)
         tray_quat = np.asarray(
-            data.qpos[tray_qpos_addr + 3: tray_qpos_addr + 7],
+            data.qpos[tray_qpos_addr + 3 : tray_qpos_addr + 7],
             dtype=np.float64,
         ).copy()
         rot_world_from_tray = np.empty((3, 3), dtype=np.float64)
@@ -103,12 +104,7 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
         ball_quat = [1.0, 0.0, 0.0, 0.0]
         linear_velocity = np.zeros(3, dtype=np.float64)
         angular_velocity = np.zeros(3, dtype=np.float64)
-        balance_duration_s = int(
-            rng.integers(
-                _BALL_TRAY_COUNTDOWN_DURATION_RANGE_S[0],
-                _BALL_TRAY_COUNTDOWN_DURATION_RANGE_S[1] + 1,
-            )
-        )
+        balance_duration_s = sample_hold_duration_s(rng)
         states = {
             _BALL_TRAY_TRAY_JOINT: {
                 "pos": tray_pos.tolist(),
@@ -144,7 +140,7 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
                 _BALL_TRAY_BALL_JOINT: ball_scale,
             },
             metadata={
-                "prompt": _BALL_TRAY_PROMPT,
+                "prompt": format_hold_prompt(balance_duration_s),
                 "prompt_type": "ball_tray_balancing",
                 "ball_body": _BALL_TRAY_BALL_BODY,
                 "ball_joint": _BALL_TRAY_BALL_JOINT,
@@ -153,8 +149,7 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
                 "tray_center_site": _BALL_TRAY_CENTER_SITE,
                 "ball_radius_m": ball_radius_m,
                 "usable_half_extents_m": [
-                    extent * tray_scale
-                    for extent in _BALL_TRAY_USABLE_HALF_EXTENTS_M
+                    extent * tray_scale for extent in _BALL_TRAY_USABLE_HALF_EXTENTS_M
                 ],
                 "tray_scale": tray_scale,
                 "ball_scale": ball_scale,
@@ -166,6 +161,8 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
                 "ball_linear_velocity": linear_velocity.tolist(),
                 "ball_angular_velocity": angular_velocity.tolist(),
                 "balance_duration_s": balance_duration_s,
+                "hold_duration_s": balance_duration_s,
+                "hold_duration_range_s": list(_BALL_TRAY_COUNTDOWN_DURATION_RANGE_S),
                 "balance_duration_range_s": list(_BALL_TRAY_COUNTDOWN_DURATION_RANGE_S),
             },
         )
@@ -238,7 +235,9 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
             "site_ids": site_ids,
             "geom_pos": np.asarray(model.geom_pos[geom_ids], dtype=np.float64).copy(),
             "geom_size": np.asarray(model.geom_size[geom_ids], dtype=np.float64).copy(),
-            "geom_rbound": np.asarray(model.geom_rbound[geom_ids], dtype=np.float64).copy(),
+            "geom_rbound": np.asarray(
+                model.geom_rbound[geom_ids], dtype=np.float64
+            ).copy(),
             "geom_aabb": np.asarray(model.geom_aabb[geom_ids], dtype=np.float64).copy(),
             "site_pos": np.asarray(model.site_pos[site_ids], dtype=np.float64).copy(),
             "site_size": np.asarray(model.site_size[site_ids], dtype=np.float64).copy(),
@@ -285,5 +284,5 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
         if joint_id < 0:
             return
         dof_adr = int(model.jnt_dofadr[joint_id])
-        data.qvel[dof_adr: dof_adr + 3] = linear_velocity
-        data.qvel[dof_adr + 3: dof_adr + 6] = angular_velocity
+        data.qvel[dof_adr : dof_adr + 3] = linear_velocity
+        data.qvel[dof_adr + 3 : dof_adr + 6] = angular_velocity

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
 
 import mujoco
 import numpy as np
 
 from abc_sim.task_eval.base import TaskEvalResult
+from abc_sim.task_eval.contacts import gripper_geom_ids, has_contact, subtree_geom_ids
 from abc_sim.task_specs import SimTaskSpec
 
 
@@ -15,8 +16,8 @@ class InhandTransferOtherSideEvaluator:
     """Score the item resting on the table opposite its sampled spawn side.
 
     The item must cross the configured y band, remain within the tabletop,
-    and sit below the resting-height limit. The start side comes from reset
-    metadata.
+    contact the table without touching either gripper. The start side comes
+    from reset metadata.
     """
 
     def __init__(
@@ -51,6 +52,18 @@ class InhandTransferOtherSideEvaluator:
             self._table_y_bounds,
             self._table_z,
         ) = self._resolve_table(model, self._table_geom_name)
+        joint_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_JOINT, self._object_joint_name
+        )
+        self._object_geom_ids = subtree_geom_ids(model, int(model.jnt_bodyid[joint_id]))
+        self._table_geom_ids = {
+            int(
+                mujoco.mj_name2id(
+                    model, mujoco.mjtObj.mjOBJ_GEOM, self._table_geom_name
+                )
+            )
+        }
+        self._gripper_geom_ids = gripper_geom_ids(model)
 
     def reset(self, *, nworld: int = 1) -> None:
         self._nworld = int(nworld)
@@ -120,6 +133,22 @@ class InhandTransferOtherSideEvaluator:
             float(pos[2]),
         )
 
+    def evaluate_model_data(
+        self, model: mujoco.MjModel, data: mujoco.MjData
+    ) -> TaskEvalResult:
+        if model is not self.model:
+            self._bind_model(model)
+            self.reset(nworld=1)
+        return self._evaluate(
+            np.asarray(data.qpos, dtype=np.float32)[None, :],
+            np.asarray(
+                [has_contact(data, self._object_geom_ids, self._table_geom_ids)]
+            ),
+            np.asarray(
+                [has_contact(data, self._object_geom_ids, self._gripper_geom_ids)]
+            ),
+        )
+
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
         qpos_batch = np.asarray(qpos_batch, dtype=np.float32)
         if qpos_batch.ndim != 2 or qpos_batch.shape[1] != self.model.nq:
@@ -128,8 +157,30 @@ class InhandTransferOtherSideEvaluator:
             )
         if qpos_batch.shape[0] != self._nworld:
             self.reset(nworld=qpos_batch.shape[0])
+        data = mujoco.MjData(self.model)
+        table_contacts, gripper_contacts = [], []
+        for qpos in qpos_batch:
+            data.qpos[:] = qpos
+            mujoco.mj_forward(self.model, data)
+            table_contacts.append(
+                has_contact(data, self._object_geom_ids, self._table_geom_ids)
+            )
+            gripper_contacts.append(
+                has_contact(data, self._object_geom_ids, self._gripper_geom_ids)
+            )
+        return self._evaluate(
+            qpos_batch, np.asarray(table_contacts), np.asarray(gripper_contacts)
+        )
 
+    def _evaluate(
+        self,
+        qpos_batch: np.ndarray,
+        table_contact: np.ndarray,
+        gripper_contact: np.ndarray,
+    ) -> TaskEvalResult:
         batch = qpos_batch.shape[0]
+        if batch != self._nworld:
+            self.reset(nworld=batch)
         if self._start_sign is None:
             zeros = np.zeros((batch,), dtype=np.float32)
             return TaskEvalResult(
@@ -144,7 +195,7 @@ class InhandTransferOtherSideEvaluator:
         pos = qpos_batch[:, self._object_adr : self._object_adr + 3]
         sign = self._start_sign
         crossed = (pos[:, 1] * sign) <= -self.other_side_min_y_m
-        placed = pos[:, 2] <= self._table_z + self.max_resting_height_m
+        placed = table_contact & ~gripper_contact
         x_lo, x_hi = self._table_x_bounds
         y_lo, y_hi = self._table_y_bounds
         on_table = (
@@ -175,6 +226,8 @@ class InhandTransferOtherSideEvaluator:
                 "object_z": pos[:, 2].astype(np.float32),
                 "crossed_to_other_side": crossed,
                 "object_placed": placed,
+                "object_table_contact": table_contact,
+                "object_gripper_contact": gripper_contact,
                 "object_on_table": on_table,
                 "ever_success": self._ever_success.copy(),
             },

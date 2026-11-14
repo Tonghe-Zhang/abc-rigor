@@ -8,6 +8,7 @@ import mujoco
 import numpy as np
 
 from abc_sim.task_eval.base import TaskEvalResult
+from abc_sim.task_eval.contacts import gripper_geom_ids, subtree_geom_ids
 from abc_sim.task_specs import SimTaskSpec
 
 
@@ -31,36 +32,6 @@ def _body_id(model: mujoco.MjModel, name: str) -> int:
     if body_id < 0:
         raise ValueError(f"Body {name!r} not found")
     return int(body_id)
-
-
-def _body_subtree_ids(model: mujoco.MjModel, root_body_id: int) -> set[int]:
-    body_ids = {int(root_body_id)}
-    for body_id in range(int(model.nbody)):
-        current = int(body_id)
-        while current > 0:
-            current = int(model.body_parentid[current])
-            if current == root_body_id:
-                body_ids.add(int(body_id))
-                break
-    return body_ids
-
-
-def _geom_ids_for_bodies(model: mujoco.MjModel, body_ids: set[int]) -> set[int]:
-    return {
-        int(geom_id)
-        for geom_id in range(int(model.ngeom))
-        if int(model.geom_bodyid[geom_id]) in body_ids
-    }
-
-
-def _gripper_geom_ids(model: mujoco.MjModel) -> set[int]:
-    gripper_bodies: set[int] = set()
-    parts = ("link_left_finger", "link_right_finger", "_lf_rot", "_lf_down", "_rf_rot", "_rf_down")
-    for body_id in range(int(model.nbody)):
-        body_name = model.body(body_id).name or ""
-        if any(part in body_name for part in parts):
-            gripper_bodies.update(_body_subtree_ids(model, body_id))
-    return _geom_ids_for_bodies(model, gripper_bodies)
 
 
 def _plate_joint_name(index: int) -> str:
@@ -135,10 +106,8 @@ class DishrackEvaluator:
             self._rack_geom_ids = set()
         else:
             self._rack_body_id = int(rack_body_id)
-            self._rack_geom_ids = _geom_ids_for_bodies(
-                model, _body_subtree_ids(model, self._rack_body_id)
-            )
-        self._gripper_geom_ids = _gripper_geom_ids(model)
+            self._rack_geom_ids = subtree_geom_ids(model, self._rack_body_id)
+        self._gripper_geom_ids = gripper_geom_ids(model)
 
     def _rack_half_extents(self, data: mujoco.MjData) -> tuple[float, float]:
         if self._rack_body_id is None:
@@ -162,7 +131,7 @@ class DishrackEvaluator:
         return float(np.max(np.abs(points[:, 0]))), float(np.max(np.abs(points[:, 1])))
 
     def _contact_flags_for_plate(self, data: mujoco.MjData, plate_body_id: int) -> tuple[bool, bool]:
-        plate_geom_ids = _geom_ids_for_bodies(self.model, _body_subtree_ids(self.model, plate_body_id))
+        plate_geom_ids = subtree_geom_ids(self.model, plate_body_id)
         has_rack_contact = False
         has_gripper_contact = False
         for contact_index in range(int(data.ncon)):
