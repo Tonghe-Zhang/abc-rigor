@@ -131,6 +131,7 @@ class MuJoCoYAMEnv(gym.Env):
         self.terminate_on_success = bool(terminate_on_success)
         self._scene_xml_string: str | None = None  # set directly for in-memory XML
         self._task_request: str | SimTaskSpec = ""
+        self._task_reset_request: dict[str, Any] | None = None
         self._task: str = ""  # set by make_env after construction
         self._task_spec: SimTaskSpec | None = None
         self._task_evaluator = None
