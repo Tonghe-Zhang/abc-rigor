@@ -26,9 +26,8 @@ from ..core import RandomizationState, SceneRandomizer, _yaw_from_quat
 class InHandTransferRandomizer(SceneRandomizer):
     """Randomizer for inhand_transfer: swaps the entire MuJoCo model on each reset.
 
-    Unlike other randomizers that perturb existing object positions, this one
-    picks a new kitchen tool category/variant and reloads the model from XML so
-    the mesh assets change.  Call ``bind_env(env)`` after construction.
+    Picks a new kitchen tool category/variant and reloads the model from XML so
+    the mesh assets change. Call ``bind_env(env)`` after construction.
     """
 
     perturbations: list = []  # no PerturbRange — we handle placement ourselves
