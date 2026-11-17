@@ -9,7 +9,7 @@ import mujoco
 import numpy as np
 
 from abc_sim.multi_drawer_episode import DrawerEpisode
-from abc_sim.task_eval.multi_drawer import DrawerProgressSource
+from abc_sim.task_eval.multi_drawer import DrawerProgressSource, resolve_drawer_goal
 
 from ..assets.inhand import _inhand_parse_model_xml
 from ..assets.paths import _MODELS_DIR
@@ -713,6 +713,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         """Require the bound task's ordered drawer progress and scene contract."""
         if not isinstance(env._step_evaluator, DrawerProgressSource):
             raise ValueError("Drawer randomization requires an ordered drawer progress source.")
+        env._step_evaluator.validate_model(env.model)
         super().bind_env(env)
 
     def prepare_env(self) -> None:
@@ -820,26 +821,20 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
                 raise ValueError(f"Drawer object {body!r} requires its own free joint.")
         self._validate_goal(model)
 
-    @staticmethod
-    def _validate_goal(model: Any) -> None:
+    def _validate_goal(self, model: Any) -> None:
         """Require the goal bin's free joint and attached region in either layout."""
+        goal_joint, _ = resolve_drawer_goal(
+            model,
+            goal_bin_joint_name=_MULTI_DRAWER_SEARCH_GOAL_BIN_JOINT,
+            goal_site_name="drawer_search_goal_region",
+        )
         goal_body = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_BODY, "drawer_search_goal_bin"
         )
-        goal_joint = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_JOINT, _MULTI_DRAWER_SEARCH_GOAL_BIN_JOINT
-        )
-        if (
-            goal_body < 0 or goal_joint < 0
-            or model.jnt_type[goal_joint] != mujoco.mjtJoint.mjJNT_FREE
-            or model.jnt_bodyid[goal_joint] != goal_body
-        ):
+        if goal_body < 0 or model.jnt_bodyid[goal_joint] != goal_body:
             raise ValueError("The drawer goal bin requires its own free joint.")
-        goal_site = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_SITE, "drawer_search_goal_region"
-        )
-        if goal_site < 0 or model.site_bodyid[goal_site] != goal_body:
-            raise ValueError("The drawer goal region must belong to the goal bin.")
+        if self._env_ref is not None:
+            self._env_ref._step_evaluator.validate_model(model)
 
     def _sample_selections(
         self, rng: np.random.Generator, *, target_count: int | None = None

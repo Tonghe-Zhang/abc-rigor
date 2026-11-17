@@ -11,8 +11,11 @@ import numpy as np
 
 import abc_sim
 from abc_sim.randomization.core import RandomizationState
+from abc_sim.randomization.tasks.multi_drawer_search import MultiDrawerSearchRandomizer
+from abc_sim.task_eval.multi_drawer import MultiDrawerSearchTargetInBinEvaluator
 from abc_sim.task_specs import SimTaskSpec
 from tests.test_multi_drawer_custom_spec import drawer_xml
+from tests.test_multi_drawer_scene import misplaced_goal
 
 
 TASKS = (
@@ -166,6 +169,201 @@ class DrawerGoalTransformTest(unittest.TestCase):
                             env, targets[0], (0.08, 0, 0), expected
                         )
                         self.assert_one_observation(env, targets, expected)
+
+    def test_compiled_entry_points_reject_wrong_goal_owner_without_mutation(self):
+        for task in (TASKS[0], TASKS[2]):
+            for enabled in (False, True):
+                with self.subTest(task=task, initial_sampler=enabled):
+                    env = abc_sim.make_env(
+                        task,
+                        scene_xml_string=self.identity_xml,
+                        enable_task_randomizer=enabled,
+                        render_cameras=False,
+                    )
+                    self.addCleanup(env.close)
+                    source = env._step_evaluator
+                    episode = source.prepare_randomization(env.model, None)
+                    site = env.model.site("drawer_search_goal_region").id
+                    owner = int(env.model.site_bodyid[site])
+                    env.model.site_bodyid[site] = 0
+                    env.np_random = np.random.default_rng(89)
+                    rng = copy.deepcopy(env.np_random.bit_generator.state)
+                    env.data.qvel[:] = 0.3
+                    env.data.ctrl[:] = 0.2
+                    env.data.time = 12
+                    env.cur_step = 7
+                    physical = {
+                        name: getattr(env.data, name).copy()
+                        for name in ("qpos", "qvel", "ctrl")
+                    }
+                    history = env.task_runtime_debug_state()
+                    sampler = getattr(env, "_task_randomizer", None)
+                    attempts = [
+                        lambda: env.reset(seed=123, randomize=False),
+                        lambda: env.finalize_randomization(None, restorer=None),
+                        lambda: source.prepare_randomization(env.model, None),
+                        lambda: source.configure_episode(env.model, episode),
+                        lambda: source.evaluate_qpos_batch(env.data.qpos[None]),
+                    ]
+                    if env._task_evaluator is not None:
+                        attempts.append(env.evaluate_task)
+                    for attempt in attempts:
+                        with self.assertRaisesRegex(
+                            ValueError, "goal region must belong"
+                        ):
+                            attempt()
+                        for name, values in physical.items():
+                            np.testing.assert_array_equal(
+                                getattr(env.data, name), values
+                            )
+                        self.assertEqual(env.data.time, 12)
+                        self.assertEqual(env.cur_step, 7)
+                        self.assertEqual(env.np_random.bit_generator.state, rng)
+                        self.assertEqual(env.task_runtime_debug_state(), history)
+                        self.assertIsNone(source._episode)
+                        self.assertIsNone(env._step_task_eval)
+                        self.assertIsNone(env._last_randomization)
+                        self.assertIsNone(env._episode_restorer)
+                        self.assertIs(getattr(env, "_task_randomizer", None), sampler)
+                    restorer = MultiDrawerSearchRandomizer()
+                    with self.assertRaisesRegex(ValueError, "goal region must belong"):
+                        restorer.bind_env(env)
+                    self.assertIsNone(restorer._env_ref)
+                    self.assertIsNone(restorer._base_scene_xml_string)
+                    env.model.site_bodyid[site] = owner
+                    env.reset(randomize=False)
+                    self.assertEqual(env.task_runtime_debug_state()["target_count"], 1)
+
+    def test_candidate_and_replay_goal_validation_preserves_live_episode(self):
+        bad_xml = misplaced_goal(self.identity_xml)
+        bad_model = mujoco.MjModel.from_xml_string(bad_xml)
+        for task in TASKS:
+            with self.subTest(task=task):
+                env = self.make_env(task, self.identity_xml)
+                _, info = env.reset(
+                    seed=6, options={"randomization": {"target_count": 2}}
+                )
+                saved = info["randomization"]
+                source = env._step_evaluator
+                episode = source.prepare_randomization(env.model, saved)
+                model, data = env.model, env.data
+                owner = env._episode_restorer
+                evaluation = env._step_task_eval
+                history = env.task_runtime_debug_state()
+                initial_episode = source._episode
+                rng = copy.deepcopy(env.np_random.bit_generator.state)
+                xml = env._scene_xml_string
+                env.data.qvel[:] = 0.3
+                env.data.ctrl[:] = 0.2
+                env.data.time = 12
+                env.cur_step = 7
+                physical = {
+                    name: getattr(env.data, name).copy()
+                    for name in ("qpos", "qvel", "ctrl")
+                }
+                attempts = [
+                    lambda: source.prepare_randomization(bad_model, saved),
+                    lambda: source.configure_episode(bad_model, episode),
+                    lambda: env.reload_from_xml(bad_xml),
+                    lambda: env.reload_from_model(bad_model),
+                ]
+                with (
+                    mock.patch.object(
+                        env, "_close_camera_backend", wraps=env._close_camera_backend
+                    ) as close_cameras,
+                    mock.patch.object(
+                        env,
+                        "initialize_randomization",
+                        wraps=env.initialize_randomization,
+                    ) as initialize,
+                ):
+                    for attempt in attempts:
+                        with self.assertRaisesRegex(
+                            ValueError, "goal region must belong"
+                        ):
+                            attempt()
+                        self.assertIs(env.model, model)
+                        self.assertIs(env.data, data)
+                        self.assertIs(source.model, model)
+                        self.assertIs(source._episode, initial_episode)
+                        self.assertIs(env._step_evaluator, source)
+                        self.assertIs(env._step_task_eval, evaluation)
+                        self.assertIs(env._episode_restorer, owner)
+                        self.assertIs(env._last_randomization, saved)
+                        self.assertEqual(env._scene_xml_string, xml)
+                        self.assertEqual(env.task_runtime_debug_state(), history)
+                        self.assertEqual(env.np_random.bit_generator.state, rng)
+                        for name, values in physical.items():
+                            np.testing.assert_array_equal(
+                                getattr(env.data, name), values
+                            )
+                        self.assertEqual(env.data.time, 12)
+                        self.assertEqual(env.cur_step, 7)
+                    site = model.site("drawer_search_goal_region").id
+                    original_owner = int(model.site_bodyid[site])
+                    model.site_bodyid[site] = 0
+                    with self.assertRaisesRegex(ValueError, "goal region must belong"):
+                        owner.apply(model, data, saved)
+                    model.site_bodyid[site] = original_owner
+                    close_cameras.assert_not_called()
+                    initialize.assert_not_called()
+                self.assertEqual(env.task_runtime_debug_state(), history)
+                self.assertIs(env._episode_restorer, owner)
+                self.assertIs(env._step_task_eval, evaluation)
+                self.assertIs(source._episode, initial_episode)
+                self.assertEqual(env.np_random.bit_generator.state, rng)
+                for name, values in physical.items():
+                    np.testing.assert_array_equal(getattr(env.data, name), values)
+                self.assertEqual(env.data.time, 12)
+                self.assertEqual(env.cur_step, 7)
+                env.reset(randomize=False)
+                self.assertEqual(env.task_runtime_debug_state()["target_count"], 2)
+
+    def test_configured_goal_names_are_authoritative(self):
+        root = ET.fromstring(self.rotated_xml)
+        root.find(".//*[@name='drawer_search_goal_bin_joint']").set(
+            "name", "custom_bin_joint"
+        )
+        root.find(".//site[@name='drawer_search_goal_region']").set(
+            "name", "custom_goal"
+        )
+        ET.SubElement(
+            root.find("worldbody"),
+            "site",
+            name="drawer_search_goal_region",
+            type="box",
+            size=".05 .05 .05",
+        )
+        model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+        kwargs = dict(
+            spec=SimTaskSpec(
+                name="custom_goal_preview",
+                env_task="multi_drawer_search",
+                prompt="find the target",
+            ),
+            goal_bin_joint_name="custom_bin_joint",
+            goal_site_name="custom_goal",
+        )
+        source = MultiDrawerSearchTargetInBinEvaluator(model=model, **kwargs)
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        result = source.evaluate_qpos_batch(data.qpos[None])
+        np.testing.assert_allclose(
+            result.metrics["goal_bin_center"][0], data.site("custom_goal").xpos
+        )
+        candidate = copy.deepcopy(model)
+        candidate.site_bodyid[candidate.site("custom_goal").id] = 0
+        with self.assertRaisesRegex(ValueError, "goal region must belong"):
+            MultiDrawerSearchTargetInBinEvaluator(model=candidate, **kwargs)
+        episode = source._episode
+        for attempt in (
+            lambda: source.prepare_randomization(candidate, None),
+            lambda: source.configure_episode(candidate, episode),
+        ):
+            with self.assertRaisesRegex(ValueError, "goal region must belong"):
+                attempt()
+            self.assertIs(source.model, model)
+            self.assertIs(source._episode, episode)
 
 
 if __name__ == "__main__":

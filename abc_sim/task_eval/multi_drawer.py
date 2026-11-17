@@ -14,6 +14,19 @@ from abc_sim.task_eval.bottles import _quat_to_rotmat_batch
 from abc_sim.task_specs import SimTaskSpec
 
 
+def resolve_drawer_goal(
+    model: mujoco.MjModel, *, goal_bin_joint_name: str, goal_site_name: str
+) -> tuple[int, int]:
+    """Validate a bin freejoint and its directly attached goal-site frame."""
+    joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, goal_bin_joint_name)
+    if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+        raise ValueError(f"Drawer goal joint {goal_bin_joint_name!r} must be a free joint.")
+    site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, goal_site_name)
+    if site_id < 0 or model.site_bodyid[site_id] != model.jnt_bodyid[joint_id]:
+        raise ValueError("The drawer goal region must belong to the configured goal bin.")
+    return joint_id, site_id
+
+
 @runtime_checkable
 class DrawerProgressSource(EpisodeTaskEvaluator, Protocol):
     """Ordered drawer deposits shared by prompt sequencing and optional scores.
@@ -53,6 +66,7 @@ class MultiDrawerSearchProgress:
         self._goal_bin_joint_name = goal_bin_joint_name
         self._goal_site_name = goal_site_name
         self._episode: DrawerEpisode | None = None
+        self.validate_model(model)
         self._target_qpos_addrs = [
             self._resolve_free_joint_qpos_addr(model, target_joint_name)
         ]
@@ -76,6 +90,7 @@ class MultiDrawerSearchProgress:
 
     def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
         """Validate the effective sequence before changing episode or physics state."""
+        self.validate_model(model)
         if randomization is None:
             joint_id = mujoco.mj_name2id(
                 model, mujoco.mjtObj.mjOBJ_JOINT, self._initial_target_joint_name
@@ -99,6 +114,15 @@ class MultiDrawerSearchProgress:
                 raise ValueError("Target body and free joint must identify the same object.")
         return episode
 
+    def validate_model(self, model: mujoco.MjModel) -> None:
+        """Require the configured qpos target and directly attached goal frame."""
+        self._resolve_free_joint_qpos_addr(model, self._initial_target_joint_name)
+        resolve_drawer_goal(
+            model,
+            goal_bin_joint_name=self._goal_bin_joint_name,
+            goal_site_name=self._goal_site_name,
+        )
+
     def validate_drawer_joints(
         self, model: mujoco.MjModel, names: Sequence[str]
     ) -> list[int]:
@@ -113,6 +137,11 @@ class MultiDrawerSearchProgress:
 
     def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
         """Install the same validated episode definition used by the runtime."""
+        self.validate_model(model)
+        target_qpos_addrs = [
+            self._resolve_free_joint_qpos_addr(model, target.joint)
+            for target in episode.targets
+        ]
         if model is not self.model:
             self.model = model
             self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
@@ -124,10 +153,7 @@ class MultiDrawerSearchProgress:
                 self._rot_bin_from_goal,
                 self._goal_half_size,
             ) = self._resolve_goal_site(model, self._goal_site_name)
-        self._target_qpos_addrs = [
-            self._resolve_free_joint_qpos_addr(self.model, joint_name)
-            for joint_name in (target.joint for target in episode.targets)
-        ]
+        self._target_qpos_addrs = target_qpos_addrs
         self._episode = episode
         self.reset(nworld=self._nworld)
 

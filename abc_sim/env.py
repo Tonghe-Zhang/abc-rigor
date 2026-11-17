@@ -310,6 +310,8 @@ class MuJoCoYAMEnv(gym.Env):
         model = self._compile_scene_xml(xml_string)
         if validate_model is not None:
             validate_model(model)
+        if isinstance(self._step_evaluator, EpisodeTaskEvaluator):
+            self._step_evaluator.validate_model(model)
         self._scene_xml_string = xml_string
         self._close_camera_backend()
         self._bind_model(model)
@@ -330,6 +332,8 @@ class MuJoCoYAMEnv(gym.Env):
 
     def reload_from_model(self, model: mujoco.MjModel) -> None:
         """Swap in a copy of an already-compiled MuJoCo model."""
+        if isinstance(self._step_evaluator, EpisodeTaskEvaluator):
+            self._step_evaluator.validate_model(model)
         replacement = self.copy_model(model)
         self._scene_xml_string = None
         self._close_camera_backend()

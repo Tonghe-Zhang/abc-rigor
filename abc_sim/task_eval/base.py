@@ -98,6 +98,9 @@ class EpisodeTaskEvaluator(TaskEvaluator, Protocol):
     A runtime can use this source for progress without exposing reward scores.
     """
 
+    def validate_model(self, model: Any) -> None:
+        """Check model assumptions before binding or replacing the live scene."""
+
     def prepare_randomization(self, model: Any, state: Any | None) -> Any:
         """Validate a recording or compiled initial state and return its definition."""
 

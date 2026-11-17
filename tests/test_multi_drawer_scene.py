@@ -15,6 +15,19 @@ from abc_sim.config import RobotSystemConfig
 from abc_sim.env import MuJoCoYAMEnv
 from abc_sim.randomization.core import RandomizationState
 from abc_sim.randomization.tasks import multi_drawer_search as drawer
+from abc_sim.task_specs import SimTaskSpec
+
+
+def misplaced_goal(xml):
+    """Move the drawer goal from its bin body into the world frame."""
+    root = ET.fromstring(xml)
+    for parent in root.iter():
+        for child in list(parent):
+            if child.tag == "site" and child.get("name") == "drawer_search_goal_region":
+                parent.remove(child)
+                root.find("worldbody").append(child)
+                return ET.tostring(root, encoding="unicode")
+    raise AssertionError("The drawer fixture must contain its goal region.")
 
 
 def _model():
@@ -368,29 +381,46 @@ class DrawerSceneTest(unittest.TestCase):
                             gc.collect()
 
     def test_template_and_assembled_candidate_reject_before_live_replacement(self):
-        def misplaced_goal(xml):
-            root = ET.fromstring(xml)
-            for parent in root.iter():
-                for child in list(parent):
-                    if (
-                        child.tag == "site"
-                        and child.get("name") == "drawer_search_goal_region"
-                    ):
-                        parent.remove(child)
-                        root.find("worldbody").append(child)
-                        return ET.tostring(root, encoding="unicode")
-            self.fail("The drawer fixture must contain its goal region.")
-
         template = drawer._MULTI_DRAWER_SEARCH_BASE_SCENE_XML.read_text()
         builder = drawer._multi_drawer_search_build_xml
-        for task in ("multi_drawer_search", "multi_drawer_search_2_shaped"):
+        for task in (
+            "multi_drawer_search",
+            "multi_drawer_search_2_shaped",
+            SimTaskSpec(
+                name="drawer_preview",
+                env_task="multi_drawer_search",
+                prompt="find the target",
+            ),
+        ):
             for invalid_stage in ("template", "assembled_candidate"):
                 with self.subTest(task=task, invalid_stage=invalid_stage):
+                    if invalid_stage == "template":
+                        for enabled in (False, True):
+                            with (
+                                self.subTest(initial_sampler=enabled),
+                                mock.patch.object(
+                                    drawer, "_multi_drawer_search_build_xml"
+                                ) as assemble,
+                                mock.patch.object(
+                                    MuJoCoYAMEnv, "initialize_randomization"
+                                ) as initialize,
+                            ):
+                                with self.assertRaisesRegex(
+                                    ValueError, "goal region must belong"
+                                ):
+                                    env = abc_sim.make_env(
+                                        task,
+                                        scene_xml_string=misplaced_goal(template),
+                                        enable_task_randomizer=enabled,
+                                        render_cameras=False,
+                                    )
+                                assemble.assert_not_called()
+                                initialize.assert_not_called()
+                            gc.collect()
+                        continue
                     env = abc_sim.make_env(
                         task,
-                        scene_xml_string=misplaced_goal(template)
-                        if invalid_stage == "template"
-                        else template,
+                        scene_xml_string=template,
                         enable_task_randomizer=False,
                         render_cameras=False,
                     )
@@ -412,12 +442,7 @@ class DrawerSceneTest(unittest.TestCase):
                         arm_initialized = env._arm_state_initialized
 
                         def build(*args, **kwargs):
-                            assembled = builder(*args, **kwargs)
-                            return (
-                                misplaced_goal(assembled)
-                                if invalid_stage == "assembled_candidate"
-                                else assembled
-                            )
+                            return misplaced_goal(builder(*args, **kwargs))
 
                         with (
                             mock.patch.object(
@@ -439,12 +464,8 @@ class DrawerSceneTest(unittest.TestCase):
                             ):
                                 env.reset(seed=19)
                             close_cameras.assert_not_called()
-                            if invalid_stage == "template":
-                                assemble.assert_not_called()
-                                compile_scene.assert_not_called()
-                            else:
-                                assemble.assert_called_once()
-                                compile_scene.assert_called_once()
+                            assemble.assert_called_once()
+                            compile_scene.assert_called_once()
                         self.assertIs(env.model, model)
                         self.assertIs(env.data, data)
                         self.assertIs(env._task_evaluator, evaluator)

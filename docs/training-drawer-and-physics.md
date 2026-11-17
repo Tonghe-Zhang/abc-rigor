@@ -43,6 +43,13 @@ Goal containment uses the complete bin-to-site transform, including the site's
 local orientation and center. These model constants are cached on binding, so
 rotated nonsquare regions use the same qpos-only observation path. The XY
 proximity score remains measured from the transformed world-space goal center.
+The progress source validates that the configured goal site belongs directly to
+the configured bin freejoint's body. This read-only model contract applies at
+source construction, episode preparation and configuration, and before public
+XML/model replacement changes live state. Sampler readiness reuses the same
+relationship check while retaining its complete scene-inventory requirements.
+Malformed goal ownership is rejected even when scoring or sampling is disabled,
+including compiled initialization and native scoring before reset.
 
 The training task returns `0.75 * B + drawer_bonus` until completion, then exactly
 `1`. Opening each previously unopened drawer adds `0.05`, with at most `0.20`
