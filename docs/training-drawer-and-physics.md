@@ -101,6 +101,10 @@ initial sampler attachment; an explicit randomized reset can initialize a sample
 and subsequent resets reuse it. When starting with a native template and sampling
 disabled, perform a randomized reset before applying a full-scene recording.
 Bound drawer replay expects that assembled inventory.
+The template's goal-bin joint and goal-site ownership are checked before
+assembly. The assembled candidate is compiled once and validated before binding;
+rejected candidates leave the live model, data, evaluator, renderer and episode
+state in place.
 
 Explicit replay with `keep_arm_state=True`, or retained reset with
 `options={"keep_arm_state": True}`, carries the current arm and gripper pose.
@@ -109,6 +113,11 @@ does not include every physical robot joint. Scene-object poses still come from
 the sampled or recorded initial scene.
 The default restores configured arm initialization. Both choices clear
 velocities, controls, time, step count, and chronological drawer history.
+Task runtimes may supply a default robot-pose initializer after scene restoration.
+It is skipped when a pose is explicitly preserved. Conveyor's default still opens
+both grippers and sets their opening controls; preserved-pose reset/replay keeps
+all four finger positions and leaves reset controls cleared. Ongoing conveyor
+roller and object controls are unchanged.
 
 ## Friction profile
 

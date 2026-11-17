@@ -739,6 +739,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         ):
             raise ValueError("Drawer scene mixes template and assembled stacks.")
         self._validate_stack(model, _MULTI_DRAWER_SEARCH_TEMPLATE_DRAWER_BODY, "")
+        self._validate_goal(model)
 
         base_text = (
             self._base_scene_xml_string
@@ -762,14 +763,13 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
             )
 
         preserved_robot_qpos = self._env_ref._get_reset_robot_qpos()
-        self._env_ref.reload_from_xml(xml)
+        self._env_ref.reload_from_xml(xml, validate_model=self._validate_full_scene)
         mujoco.mj_resetData(self._env_ref.model, self._env_ref.data)
         self._env_ref._set_robot_qpos(preserved_robot_qpos)
         mujoco.mj_forward(self._env_ref.model, self._env_ref.data)
         self._base_scene_xml_string = xml
         self._base_scene_xml_dir = base_dir
         self._base_scene_xml_transformed = True
-        self._validate_full_scene(self._env_ref.model)
 
     def _validate_stack(self, model: Any, stack: str, prefix: str) -> None:
         """Require drawer ownership and the selected evaluator's joint contract."""
@@ -802,11 +802,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         for stack_id in _MULTI_DRAWER_SEARCH_STACK_IDS:
             stack = _multi_drawer_search_stack_body_name(stack_id)
             self._validate_stack(model, stack, f"{stack}_")
-        pairs = (
-            *_MULTI_DRAWER_SEARCH_JOINT_BY_BODY.items(),
-            ("drawer_search_goal_bin", _MULTI_DRAWER_SEARCH_GOAL_BIN_JOINT),
-        )
-        for body, joint in pairs:
+        for body, joint in _MULTI_DRAWER_SEARCH_JOINT_BY_BODY.items():
             body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body)
             joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint)
             if (
@@ -815,9 +811,23 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
                 or model.jnt_bodyid[joint_id] != body_id
             ):
                 raise ValueError(f"Drawer object {body!r} requires its own free joint.")
+        self._validate_goal(model)
+
+    @staticmethod
+    def _validate_goal(model: Any) -> None:
+        """Require the goal bin's free joint and attached region in either layout."""
         goal_body = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_BODY, "drawer_search_goal_bin"
         )
+        goal_joint = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_JOINT, _MULTI_DRAWER_SEARCH_GOAL_BIN_JOINT
+        )
+        if (
+            goal_body < 0 or goal_joint < 0
+            or model.jnt_type[goal_joint] != mujoco.mjtJoint.mjJNT_FREE
+            or model.jnt_bodyid[goal_joint] != goal_body
+        ):
+            raise ValueError("The drawer goal bin requires its own free joint.")
         goal_site = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_SITE, "drawer_search_goal_region"
         )

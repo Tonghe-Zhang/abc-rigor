@@ -4,6 +4,7 @@ import copy
 import gc
 import json
 import unittest
+import xml.etree.ElementTree as ET
 from unittest import mock
 
 import mujoco
@@ -365,6 +366,104 @@ class DrawerSceneTest(unittest.TestCase):
                             env.close()
                             del env, restorer, rejected, model
                             gc.collect()
+
+    def test_template_and_assembled_candidate_reject_before_live_replacement(self):
+        def misplaced_goal(xml):
+            root = ET.fromstring(xml)
+            for parent in root.iter():
+                for child in list(parent):
+                    if (
+                        child.tag == "site"
+                        and child.get("name") == "drawer_search_goal_region"
+                    ):
+                        parent.remove(child)
+                        root.find("worldbody").append(child)
+                        return ET.tostring(root, encoding="unicode")
+            self.fail("The drawer fixture must contain its goal region.")
+
+        template = drawer._MULTI_DRAWER_SEARCH_BASE_SCENE_XML.read_text()
+        builder = drawer._multi_drawer_search_build_xml
+        for task in ("multi_drawer_search", "multi_drawer_search_2_shaped"):
+            for invalid_stage in ("template", "assembled_candidate"):
+                with self.subTest(task=task, invalid_stage=invalid_stage):
+                    env = abc_sim.make_env(
+                        task,
+                        scene_xml_string=misplaced_goal(template)
+                        if invalid_stage == "template"
+                        else template,
+                        enable_task_randomizer=False,
+                        render_cameras=False,
+                    )
+                    try:
+                        env.data.qvel[:] = 0.3
+                        env.data.ctrl[:] = 0.2
+                        env.data.time = 12
+                        env.cur_step = 7
+                        physical = _physical(env)
+                        model, data = env.model, env.data
+                        evaluator = env._task_evaluator
+                        runtime = env._task_runtime
+                        history = env.task_runtime_debug_state()
+                        prompt = env.prompt
+                        rng = copy.deepcopy(env.np_random.bit_generator.state)
+                        xml_before = env._scene_xml_string
+                        owner = env._episode_restorer
+                        record = env._last_randomization
+                        arm_initialized = env._arm_state_initialized
+
+                        def build(*args, **kwargs):
+                            assembled = builder(*args, **kwargs)
+                            return (
+                                misplaced_goal(assembled)
+                                if invalid_stage == "assembled_candidate"
+                                else assembled
+                            )
+
+                        with (
+                            mock.patch.object(
+                                drawer,
+                                "_multi_drawer_search_build_xml",
+                                side_effect=build,
+                            ) as assemble,
+                            mock.patch.object(
+                                env, "_compile_scene_xml", wraps=env._compile_scene_xml
+                            ) as compile_scene,
+                            mock.patch.object(
+                                env,
+                                "_close_camera_backend",
+                                wraps=env._close_camera_backend,
+                            ) as close_cameras,
+                        ):
+                            with self.assertRaisesRegex(
+                                ValueError, "goal region must belong"
+                            ):
+                                env.reset(seed=19)
+                            close_cameras.assert_not_called()
+                            if invalid_stage == "template":
+                                assemble.assert_not_called()
+                                compile_scene.assert_not_called()
+                            else:
+                                assemble.assert_called_once()
+                                compile_scene.assert_called_once()
+                        self.assertIs(env.model, model)
+                        self.assertIs(env.data, data)
+                        self.assertIs(env._task_evaluator, evaluator)
+                        self.assertIs(env._task_runtime, runtime)
+                        self.assertIs(env._last_randomization, record)
+                        self.assertIs(env._episode_restorer, owner)
+                        self.assertEqual(env._scene_xml_string, xml_before)
+                        self.assertEqual(env._arm_state_initialized, arm_initialized)
+                        self.assert_physical_equal(env, physical)
+                        self.assertEqual(env.data.time, 12)
+                        self.assertEqual(env.cur_step, 7)
+                        self.assertEqual(env.prompt, prompt)
+                        self.assertEqual(env.task_runtime_debug_state(), history)
+                        self.assertEqual(env.np_random.bit_generator.state, rng)
+                        self.assertFalse(hasattr(env, "_task_randomizer"))
+                    finally:
+                        env.close()
+                        del env, model, data, evaluator, runtime
+                        gc.collect()
 
     def test_invalid_bound_scene_rejects_reset_before_episode_mutation(self):
         joint_names = tuple(drawer._MULTI_DRAWER_SEARCH_DRAWER_JOINT_BY_DRAWER.values())

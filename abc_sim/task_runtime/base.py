@@ -16,6 +16,10 @@ class TaskRuntime(Protocol):
     through the randomizer on nonrandomized reset. When an evaluator implements
     ``prepare_randomization(model, state)``, the environment passes its validated
     definition to ``after_reset(..., episode=...)`` and ``configure_episode``.
+    Optional ``initialize_robot_pose(model, data)`` applies task-specific default
+    joint positions and controls on the final restored model. The environment
+    calls it only when ``keep_arm_state`` is false. ``after_reset`` initializes
+    episode bookkeeping without overriding the selected robot pose policy.
     """
 
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:

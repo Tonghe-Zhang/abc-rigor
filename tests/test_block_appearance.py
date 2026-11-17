@@ -41,6 +41,32 @@ from tests.test_spelling_goals import blocks_xml
 SCENE = Path(__file__).resolve().parents[1] / "abc_sim/models/yam_blocks_scene.xml"
 
 
+def blocks_with_passive_fingers():
+    root = ET.fromstring(blocks_xml())
+    ET.SubElement(root, "asset")
+    robot_joints = []
+    for arm in ("left", "right"):
+        owner = next(
+            body
+            for body in root.iter("body")
+            if body.find(f"joint[@name='{arm}_left_finger']") is not None
+        )
+        passive = ET.SubElement(owner, "body", name=f"{arm}_passive_finger_body")
+        ET.SubElement(passive, "joint", name=f"{arm}_right_finger", type="slide")
+        ET.SubElement(
+            passive,
+            "geom",
+            type="sphere",
+            size=".01",
+            mass=".1",
+            contype="0",
+            conaffinity="0",
+        )
+        robot_joints.extend(f"{arm}_joint{index}" for index in range(1, 7))
+        robot_joints.extend((f"{arm}_left_finger", f"{arm}_right_finger"))
+    return root, robot_joints
+
+
 def sample_compiled_letter_faces(model, letter, texture_name):
     """Sample both physical letter faces using compiled geometry and UVs."""
     data = mujoco.MjData(model)
@@ -647,28 +673,7 @@ class CameraModelBindingTests(unittest.TestCase):
         self.assertEqual(len(env._wrist_camera_positions), 1)
 
     def test_reset_arm_policy_is_explicit_and_preserves_only_requested_pose(self):
-        root = ET.fromstring(blocks_xml())
-        ET.SubElement(root, "asset")
-        robot_joints = []
-        for arm in ("left", "right"):
-            owner = next(
-                body
-                for body in root.iter("body")
-                if body.find(f"joint[@name='{arm}_left_finger']") is not None
-            )
-            passive = ET.SubElement(owner, "body", name=f"{arm}_passive_finger_body")
-            ET.SubElement(passive, "joint", name=f"{arm}_right_finger", type="slide")
-            ET.SubElement(
-                passive,
-                "geom",
-                type="sphere",
-                size=".01",
-                mass=".1",
-                contype="0",
-                conaffinity="0",
-            )
-            robot_joints.extend(f"{arm}_joint{index}" for index in range(1, 7))
-            robot_joints.extend((f"{arm}_left_finger", f"{arm}_right_finger"))
+        root, robot_joints = blocks_with_passive_fingers()
         env = make_env(
             task="spell_cat",
             scene_xml_string=ET.tostring(root, encoding="unicode"),
@@ -721,6 +726,71 @@ class CameraModelBindingTests(unittest.TestCase):
                     self.assertEqual(env.data.time, 0)
                     np.testing.assert_array_equal(env.data.qvel, 0)
                     np.testing.assert_array_equal(env.data.ctrl, 0)
+
+    def test_physical_robot_pose_uses_joint_identity_across_layout_changes(self):
+        root, robot_joints = blocks_with_passive_fingers()
+        env = make_env(
+            "spell_cat",
+            scene_xml_string=ET.tostring(root, encoding="unicode"),
+            render_cameras=False,
+        )
+        self.addCleanup(env.close)
+        env.reset(seed=31)
+        addresses = {
+            name: int(env.model.joint(name).qposadr[0]) for name in robot_joints
+        }
+        expected = {}
+        for index, name in enumerate(robot_joints):
+            expected[name] = -0.03 + index * 0.0037
+            env.data.qpos[addresses[name]] = expected[name]
+        pose = env._get_reset_robot_qpos()
+
+        world = root.find("worldbody")
+        world[:] = list(reversed(world))
+        independent = ET.Element("body", name="independent_object", pos=".7 .8 .9")
+        ET.SubElement(independent, "freejoint", name="independent_joint")
+        ET.SubElement(independent, "geom", type="sphere", size=".01", mass=".1")
+        world.insert(0, independent)
+        env.reload_from_xml(ET.tostring(root, encoding="unicode"))
+        relocated = {
+            name: int(env.model.joint(name).qposadr[0]) for name in robot_joints
+        }
+        self.assertTrue(
+            all(addresses[name] != relocated[name] for name in robot_joints)
+        )
+        object_address = env.model.joint("independent_joint").qposadr[0]
+        object_pose = np.array([0.9, -0.4, 0.7, 1, 0, 0, 0])
+        env.data.qpos[object_address : object_address + 7] = object_pose
+        before = env.data.qpos.copy()
+        expected_qpos = before.copy()
+        for name, value in expected.items():
+            expected_qpos[relocated[name]] = value
+        env._set_robot_qpos(pose)
+        np.testing.assert_array_equal(env.data.qpos, expected_qpos)
+        np.testing.assert_array_equal(
+            env.data.qpos[object_address : object_address + 7], object_pose
+        )
+        self.assertEqual(env.get_state().shape, (14,))
+
+        for incompatible in ("missing_joint", "different_qpos_width"):
+            with self.subTest(incompatible=incompatible):
+                bad_root = deepcopy(root)
+                passive = next(
+                    body
+                    for body in bad_root.iter("body")
+                    if body.get("name") == "right_passive_finger_body"
+                )
+                joint = passive.find("joint")
+                if incompatible == "missing_joint":
+                    passive.remove(joint)
+                else:
+                    joint.set("type", "ball")
+                env.reload_from_xml(ET.tostring(bad_root, encoding="unicode"))
+                env.data.qpos[:] = np.linspace(0.001, 0.9, env.model.nq)
+                before = env.data.qpos.copy()
+                with self.assertRaisesRegex(ValueError, "joint inventory|qpos size"):
+                    env._set_robot_qpos(pose)
+                np.testing.assert_array_equal(env.data.qpos, before)
 
 
 if __name__ == "__main__":

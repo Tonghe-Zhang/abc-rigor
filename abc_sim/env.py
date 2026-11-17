@@ -7,6 +7,7 @@ import math
 import os
 import string
 import weakref
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -223,18 +224,20 @@ class MuJoCoYAMEnv(gym.Env):
 
     def setup_model(self):
         if self._scene_xml_string is not None:
-            # Composed scene XML references assets relative to the bundled
-            # models directory, but MuJoCo resolves them against the process
-            # CWD — anchor it during compilation.
-            prev_cwd = os.getcwd()
-            os.chdir(Path(__file__).parent / "models")
-            try:
-                model = mujoco.MjModel.from_xml_string(self._scene_xml_string)
-            finally:
-                os.chdir(prev_cwd)
+            model = self._compile_scene_xml(self._scene_xml_string)
         else:
             model = mujoco.MjModel.from_xml_path(str(self._scene_xml))
         self._bind_model(model)
+
+    @staticmethod
+    def _compile_scene_xml(xml_string: str) -> mujoco.MjModel:
+        """Compile a candidate with asset paths relative to the bundled models."""
+        prev_cwd = os.getcwd()
+        os.chdir(Path(__file__).parent / "models")
+        try:
+            return mujoco.MjModel.from_xml_string(xml_string)
+        finally:
+            os.chdir(prev_cwd)
 
     def _bind_model(self, model: mujoco.MjModel) -> None:
         apply_physics_profile(model, self.physics_profile)
@@ -287,16 +290,25 @@ class MuJoCoYAMEnv(gym.Env):
             self.model.cam_pos[camera_id] = positions[camera_id]
             self.model.cam_pos[camera_id, 1] -= clearance_offset
 
-    def reload_from_xml(self, xml_string: str) -> None:
-        """Swap out the MuJoCo model in-place from an XML string.
+    def reload_from_xml(
+        self,
+        xml_string: str,
+        *,
+        validate_model: Callable[[mujoco.MjModel], None] | None = None,
+    ) -> None:
+        """Compile and validate a replacement before changing the live scene.
 
-        Closes the existing renderer, loads a new model/data/renderer from
-        the given XML string, and rebuilds index maps.  Does NOT call
-        mj_resetData — the caller is responsible for resetting state afterward.
+        ``validate_model`` is a read-only task preflight on the compiled candidate.
+        Compilation and validation failure leave live model, data, renderers and
+        XML unchanged. A successful candidate is bound directly, without another
+        compilation or model copy. Callers initialize its fresh data afterward.
         """
+        model = self._compile_scene_xml(xml_string)
+        if validate_model is not None:
+            validate_model(model)
         self._scene_xml_string = xml_string
         self._close_camera_backend()
-        self.setup_model()
+        self._bind_model(model)
         self._bind_task_evaluator()
 
     def copy_model(self, model: mujoco.MjModel) -> mujoco.MjModel:
@@ -476,6 +488,7 @@ class MuJoCoYAMEnv(gym.Env):
         self.finalize_randomization(
             self._last_randomization,
             restorer=randomizer if self._last_randomization is not None else None,
+            keep_arm_state=(options or {}).get("keep_arm_state", False),
         )
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
         if self._last_randomization is not None:
@@ -510,6 +523,7 @@ class MuJoCoYAMEnv(gym.Env):
         *,
         restorer: SceneRandomizer | None,
         episode: Any = None,
+        keep_arm_state: bool = False,
     ) -> None:
         """Bind a restored initial scene to its episode metadata and evaluator.
 
@@ -518,6 +532,8 @@ class MuJoCoYAMEnv(gym.Env):
         restore the history of a partially completed trajectory. A recorded
         scene keeps its bound restorer for subsequent retained resets,
         independently of the optional sampling randomizer.
+        Task-specific default robot poses apply only when ``keep_arm_state`` is
+        false, after any scene replacement and before evaluation.
         """
         if state is not None and (restorer is None or restorer._env_ref is not self):
             raise ValueError(
@@ -533,6 +549,12 @@ class MuJoCoYAMEnv(gym.Env):
             if prompt is not None:
                 self.prompt = str(prompt)
         if self._task_runtime is not None:
+            if not keep_arm_state:
+                initialize_pose = getattr(
+                    self._task_runtime, "initialize_robot_pose", None
+                )
+                if initialize_pose is not None:
+                    initialize_pose(self.model, self.data)
             episode_kwargs = {} if episode is None else {"episode": episode}
             self._task_runtime.after_reset(
                 self.model,

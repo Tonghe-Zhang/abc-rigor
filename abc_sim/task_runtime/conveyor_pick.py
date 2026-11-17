@@ -75,6 +75,9 @@ class ConveyorPickRuntime:
         self._last_active_objects = ()
         self._removed_objects = ()
         self._belt_speed_y = self._speed_from_randomization(randomization)
+
+    def initialize_robot_pose(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        """Open idle grippers when the environment requests its default reset pose."""
         self._open_idle_grippers(model, data)
         mujoco.mj_forward(model, data)
 
