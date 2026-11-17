@@ -1,6 +1,7 @@
 """Task evaluation helpers for automatic reward/success scoring."""
 
 from abc_sim.task_eval.base import (
+    EpisodeTaskEvaluator,
     PhysicsObservedTaskEvaluator,
     TaskEvalResult,
     TaskEvaluator,
@@ -28,6 +29,7 @@ from abc_sim.task_eval.registry import make_task_evaluator
 __all__ = [
     "TaskEvalResult",
     "TaskEvaluator",
+    "EpisodeTaskEvaluator",
     "PhysicsObservedTaskEvaluator",
     "BottlesInBinEvaluator",
     "PutBottlesInBinEvaluator",

@@ -24,6 +24,7 @@ from abc_sim.task_eval import (
     TaskEvalResult,
     make_task_evaluator,
 )
+from abc_sim.task_eval.base import EpisodeTaskEvaluator, TaskEvaluator
 from abc_sim.task_registry import (
     DEFAULT_SCENE_XML,
     SCENE_XMLS,
@@ -31,6 +32,7 @@ from abc_sim.task_registry import (
     resolve_task,
 )
 from abc_sim.task_runtime import make_task_runtime
+from abc_sim.task_runtime.base import TaskProgressRuntime
 from abc_sim.task_specs import SimTaskSpec, maybe_get_task_spec
 
 if TYPE_CHECKING:
@@ -142,6 +144,8 @@ class MuJoCoYAMEnv(gym.Env):
         self._task: str = ""  # set by make_env after construction
         self._task_spec: SimTaskSpec | None = None
         self._task_evaluator = None
+        self._step_evaluator: TaskEvaluator | None = None
+        self._uses_runtime_progress = False
         self._step_updates = False
         self._step_requires_position_refresh = False
         self._step_update_interval = 1
@@ -333,23 +337,36 @@ class MuJoCoYAMEnv(gym.Env):
         self._bind_task_evaluator()
 
     def _bind_task_evaluator(self) -> None:
-        """Cache the evaluator's update requirements when its model/task changes."""
-        self._task_evaluator = make_task_evaluator(self.model, self._task_spec)
+        """Bind optional scoring and the runtime's shared progress requirements."""
+        evaluator = make_task_evaluator(self.model, self._task_spec)
+        progress_runtime = isinstance(self._task_runtime, TaskProgressRuntime)
+        source = evaluator
+        if progress_runtime:
+            source = self._task_runtime.make_progress_source(
+                self.model, self._task_spec, evaluator
+            )
+            if not isinstance(source, EpisodeTaskEvaluator):
+                raise ValueError("Runtime progress requires an episode-aware source.")
+            if evaluator is not None and source is not evaluator:
+                raise ValueError("Runtime progress and task scoring must share one source.")
+        self._task_evaluator = evaluator
+        self._step_evaluator = source
+        self._uses_runtime_progress = progress_runtime
         self._physics_evaluator = (
-            self._task_evaluator
-            if isinstance(self._task_evaluator, PhysicsObservedTaskEvaluator)
+            evaluator
+            if isinstance(evaluator, PhysicsObservedTaskEvaluator)
             else None
         )
         self._physics_observer = None
-        self._step_updates = bool(
-            getattr(self._task_evaluator, "requires_step_updates", False)
+        self._step_updates = progress_runtime or bool(
+            getattr(source, "requires_step_updates", False)
         )
         self._step_requires_position_refresh = self._step_updates and hasattr(
-            self._task_evaluator, "evaluate_model_data"
+            source, "evaluate_model_data"
         )
         self._step_update_interval = (
             self._control_decimation
-            if getattr(self._task_evaluator, "evaluate_at_control_rate", False)
+            if not progress_runtime and getattr(source, "evaluate_at_control_rate", False)
             else 1
         )
         self._step_task_eval = None
@@ -514,8 +531,9 @@ class MuJoCoYAMEnv(gym.Env):
 
     def prepare_randomization(self, state: RandomizationState) -> Any:
         """Validate and prepare task-owned episode data before replay mutation."""
-        prepare = getattr(self._task_evaluator, "prepare_randomization", None)
-        return None if prepare is None else prepare(self.model, state)
+        if isinstance(self._step_evaluator, EpisodeTaskEvaluator):
+            return self._step_evaluator.prepare_randomization(self.model, state)
+        return None
 
     def finalize_randomization(
         self,
@@ -565,34 +583,35 @@ class MuJoCoYAMEnv(gym.Env):
 
         self._reset_camera_backend()
         self._step_task_eval = None
-        if self._task_evaluator is not None:
-            self._task_evaluator.reset(nworld=1)
+        source = self._step_evaluator
+        if source is not None:
+            source.reset(nworld=1)
             if episode is not None:
-                self._task_evaluator.configure_episode(self.model, episode)
+                source.configure_episode(self.model, episode)
             elif state is not None and hasattr(
-                self._task_evaluator,
+                source,
                 "configure_from_randomization",
             ):
-                self._task_evaluator.configure_from_randomization(
+                source.configure_from_randomization(
                     self.model,
                     state,
                 )
             if self._last_randomization is not None and hasattr(
-                self._task_evaluator, "set_active_trash_joints"
+                source, "set_active_trash_joints"
             ):
                 trash_joints = getattr(self._last_randomization, "metadata", {}).get(
                     "trash_joints"
                 )
                 if trash_joints is not None:
-                    self._task_evaluator.set_active_trash_joints(trash_joints)
+                    source.set_active_trash_joints(trash_joints)
             if self._last_randomization is not None and hasattr(
-                self._task_evaluator, "set_active_object_joints"
+                source, "set_active_object_joints"
             ):
                 active_joints = getattr(self._last_randomization, "metadata", {}).get(
                     "active_object_joints"
                 )
                 if active_joints is not None:
-                    self._task_evaluator.set_active_object_joints(active_joints)
+                    source.set_active_object_joints(active_joints)
             if self._step_updates:
                 self._update_step_task_eval()
             if self._physics_evaluator is not None:
@@ -839,12 +858,13 @@ class MuJoCoYAMEnv(gym.Env):
                 self._sync_prompt_from_task_runtime()
 
     def _update_step_task_eval(self) -> None:
-        """Share the latest task score with runtime controls and env rewards."""
-        self._step_task_eval = self.evaluate_task()
-        if self._task_runtime is not None and self._step_task_eval is not None:
+        """Observe one source for runtime progress and optional reward exposure."""
+        result = self._evaluate_task_source(self._step_evaluator)
+        self._step_task_eval = result if self._task_evaluator is not None else None
+        if self._task_runtime is not None:
             on_task_evaluation = getattr(self._task_runtime, "on_task_evaluation", None)
             if on_task_evaluation is not None:
-                on_task_evaluation(self._step_task_eval)
+                on_task_evaluation(result)
 
     def _sync_prompt_from_task_runtime(self) -> None:
         """Adopt a runtime-owned prompt when the task exposes one."""
@@ -890,12 +910,12 @@ class MuJoCoYAMEnv(gym.Env):
             self.prompt = task.replace("_", " ")
         else:
             self.prompt = "fold the towel"
-        self._bind_task_evaluator()
         self._task_runtime = make_task_runtime(
             resolved.task_spec or self._task,
             self.model,
             self.data,
         )
+        self._bind_task_evaluator()
 
     def task_runtime_debug_state(self) -> dict[str, Any] | None:
         """Return task runtime diagnostics, when a runtime is attached."""
@@ -905,13 +925,27 @@ class MuJoCoYAMEnv(gym.Env):
         return self._task_runtime.debug_state()
 
     def evaluate_task(self) -> TaskEvalResult | None:
-        """Compute the current task reward/success from the current simulation state."""
+        """Return optional reward/success for the current simulation state.
+
+        Chronological runtime progress reads the last reset/physics observation;
+        querying a score does not advance its history again. Before reset, the
+        source may evaluate its compiled initial state if it supports that state.
+        """
 
         if self._task_evaluator is None:
             return None
-        if self._physics_evaluator is not None:
+        if self._uses_runtime_progress and self._step_task_eval is not None:
+            return self._step_task_eval
+        result = self._evaluate_task_source(self._task_evaluator)
+        if self._uses_runtime_progress:
+            self._step_task_eval = result
+        return result
+
+    def _evaluate_task_source(self, source: TaskEvaluator) -> TaskEvalResult:
+        """Observe a bound source without deciding whether its score is exposed."""
+        if source is self._physics_evaluator:
             return self._physics_evaluator.evaluate_model_data(self.model, self.data)
-        evaluate_model_data = getattr(self._task_evaluator, "evaluate_model_data", None)
+        evaluate_model_data = getattr(source, "evaluate_model_data", None)
         if evaluate_model_data is not None:
             if not self._step_updates:
                 # Contact-based tasks still need current state when explicitly
@@ -919,7 +953,7 @@ class MuJoCoYAMEnv(gym.Env):
                 mujoco.mj_fwdPosition(self.model, self.data)
             return evaluate_model_data(self.model, self.data)
         qpos_batch = np.asarray(self.data.qpos, dtype=np.float32)[None, :]
-        return self._task_evaluator.evaluate_qpos_batch(qpos_batch)
+        return source.evaluate_qpos_batch(qpos_batch)
 
     def get_obs(self) -> dict[str, Any]:
         """Return observation dict with state, images, and metadata."""

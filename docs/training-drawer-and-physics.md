@@ -47,13 +47,44 @@ count. This is an opening proxy, not a visibility test. Finding an object alone
 does not count as retrieving it: the existing three-dimensional goal-bin
 containment condition still controls completion.
 
-The evaluator is the authority for both reward and runtime prompts and updates
-on every native physics tick. Ordered deposit progress remains latched, including
+One drawer progress source advances runtime prompts on every native physics
+tick. When reward evaluation is configured, that evaluator is the same source;
+the environment observes it once and shares the result. Score queries read the
+last observed result without advancing history again. Native scoring can inspect
+the compiled initial state before reset; shaped scoring requires its sampled
+episode metadata. Ordered deposit progress remains latched, including
 transient bin entries, as in the existing sequence semantics. Reward-history
 replay must start from reset and provide chronological physics observations.
 A final qpos snapshot or a 30 Hz video does not contain enough information to
 reconstruct unique openings or transient deposits. Batched MJWarp environments
 already reject drawer tasks because they require a per-step Python runtime.
+
+Custom specs can omit reward evaluation:
+
+```python
+from abc_sim import SimTaskSpec, make_env
+
+env = make_env(
+    SimTaskSpec(
+        name="drawer_preview",
+        env_task="multi_drawer_search",
+        prompt="find the target",
+    ),
+    render_cameras=False,
+)
+env.reset(seed=6)
+```
+
+This uses native scene validity and ordered deposit progress. Randomized resets,
+retained resets and recorded replay continue to update the live target prompt.
+`evaluate_task()` returns `None`; steps return zero reward and omit task scoring
+fields, so `terminate_on_success` does not terminate these unscored tasks.
+Caller horizons still apply. `EpisodeTaskEvaluator` declares read-only episode
+preparation and later configuration, and `TaskProgressRuntime` declares the
+shared physics observation source. The drawer runtime requires
+`DrawerProgressSource`: an optional configured evaluator must supply ordered
+drawer progress and its joint requirements. Unsupported evaluator/runtime or
+randomizer/task combinations are rejected explicitly at binding.
 
 These rewards are persistent progress **scores**, not increments. `step` returns
 the current score; `step_chunk` returns the last action's score. Neither method
@@ -73,7 +104,7 @@ aggregation, horizon, and termination settings with the training objective.
 Nonrandomized resets restore the current episode's recorded initial physical
 scene while clearing deposit and opening history. This includes stack poses,
 active-object collision masks, object/bin positions, and inactive placements;
-compiled defaults are not the retained episode. Runtime prompts and scoring
+compiled defaults are not the retained episode. Runtime prompts and optional scoring
 consume the same validated target definition. The first shaped episode requires a randomized
 reset or recorded-state replay so target-to-drawer metadata is available.
 Fresh replay binds its recorded sequence before scoring; it does not recover
@@ -91,8 +122,8 @@ replay leaves the previous restorer in place.
 Drawer scene readiness follows the bound model's inventory. Complete assembled
 scenes are validated and reused; native templates are assembled before sampling.
 Incomplete or mixed assembled inventories are rejected before reset clears
-dynamics or retained episode state. Readiness and evaluator preparation share
-the selected task's read-only drawer-joint validation. The shaped task requires
+dynamics or retained episode state. Readiness and episode preparation share
+the selected progress source's read-only drawer-joint validation. The shaped task requires
 limited slides with zero lower travel bounds on every potentially sampled drawer,
 including currently inactive stacks. Native drawer tasks retain their existing
 custom slide-limit semantics. This applies to direct full-XML construction

@@ -1,6 +1,6 @@
 """Python-side task runtime hooks."""
 
-from abc_sim.task_runtime.base import TaskRuntime
+from abc_sim.task_runtime.base import TaskProgressRuntime, TaskRuntime
 from abc_sim.task_runtime.ball_tray import BallTrayBalancingRuntime
 from abc_sim.task_runtime.conveyor_pick import ConveyorPickRuntime
 from abc_sim.task_runtime.multi_drawer import MultiDrawerSearchRuntime
@@ -11,5 +11,6 @@ __all__ = [
     "ConveyorPickRuntime",
     "MultiDrawerSearchRuntime",
     "TaskRuntime",
+    "TaskProgressRuntime",
     "make_task_runtime",
 ]

@@ -9,6 +9,7 @@ import mujoco
 import numpy as np
 
 from abc_sim.multi_drawer_episode import DrawerEpisode
+from abc_sim.task_eval.multi_drawer import DrawerProgressSource
 
 from ..assets.inhand import _inhand_parse_model_xml
 from ..assets.paths import _MODELS_DIR
@@ -708,6 +709,12 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
 
     perturbations: list = []
 
+    def bind_env(self, env: Any) -> None:
+        """Require the bound task's ordered drawer progress and scene contract."""
+        if not isinstance(env._step_evaluator, DrawerProgressSource):
+            raise ValueError("Drawer randomization requires an ordered drawer progress source.")
+        super().bind_env(env)
+
     def prepare_env(self) -> None:
         if self._env_ref is not None:
             self._ensure_full_scene_loaded()
@@ -772,7 +779,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         self._base_scene_xml_transformed = True
 
     def _validate_stack(self, model: Any, stack: str, prefix: str) -> None:
-        """Require drawer ownership and the selected evaluator's joint contract."""
+        """Require native drawer ownership and the selected progress contract."""
         stack_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, stack)
         if stack_body < 0:
             raise ValueError(f"Drawer stack {stack!r} is missing from the model.")
@@ -791,7 +798,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
                 raise ValueError(f"Drawer {body!r} requires its own slide joint.")
             joints.append(joint)
         if self._env_ref is not None:
-            self._env_ref._task_evaluator.validate_drawer_joints(model, joints)
+            self._env_ref._step_evaluator.validate_drawer_joints(model, joints)
 
     def _validate_full_scene(self, model: Any) -> None:
         """Require the complete assembled drawer inventory and joint ownership."""

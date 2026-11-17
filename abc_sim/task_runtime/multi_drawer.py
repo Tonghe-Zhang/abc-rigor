@@ -7,7 +7,12 @@ from typing import Any
 
 import mujoco
 from abc_sim.multi_drawer_episode import DrawerEpisode
-from abc_sim.task_eval.base import TaskEvalResult
+from abc_sim.task_eval.base import TaskEvalResult, TaskEvaluator
+from abc_sim.task_eval.multi_drawer import (
+    DrawerProgressSource,
+    MultiDrawerSearchProgress,
+)
+from abc_sim.task_specs import SimTaskSpec
 
 
 class MultiDrawerSearchRuntime:
@@ -22,6 +27,21 @@ class MultiDrawerSearchRuntime:
 
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """The prompt sequence holds no compiled-model indices."""
+
+    def make_progress_source(
+        self,
+        model: mujoco.MjModel,
+        spec: SimTaskSpec,
+        evaluator: TaskEvaluator | None,
+    ) -> DrawerProgressSource:
+        """Share compatible scoring or bind native progress for an unscored task."""
+        if evaluator is None:
+            return MultiDrawerSearchProgress(model=model, spec=spec)
+        if not isinstance(evaluator, DrawerProgressSource):
+            raise ValueError(
+                "Multi-drawer runtime requires an evaluator with ordered drawer progress."
+            )
+        return evaluator
 
     def retained_randomization(self) -> Any:
         """Return the physical initial scene to restore on nonrandomized reset."""
@@ -55,11 +75,13 @@ class MultiDrawerSearchRuntime:
         """No pre-step controls are needed."""
 
     def after_step(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
-        """Progress arrives through the environment's task-evaluation hook."""
+        """The environment has already observed the shared progress source."""
 
     def on_task_evaluation(self, result: TaskEvalResult) -> None:
-        """Use the evaluator's deposit counter as the prompt sequence authority."""
-        if result.num_worlds != 1 or int(result.metrics["target_count"][0]) != len(self._targets):
+        """Use the shared deposit counter as the prompt sequence authority."""
+        if result.num_worlds != 1 or int(result.metrics["target_count"][0]) != len(
+            self._targets
+        ):
             raise ValueError("Runtime and evaluator target sequences must match.")
         self._current_index = int(result.metrics["completed_target_count"][0])
         self._state = (
@@ -97,4 +119,4 @@ class MultiDrawerSearchRuntime:
         if self._current_index >= len(self._targets):
             self._display_prompt = "finished"
             return
-        self._display_prompt = f'find the {self._targets[self._current_index]["label"]}'
+        self._display_prompt = f"find the {self._targets[self._current_index]['label']}"

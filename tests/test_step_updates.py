@@ -20,6 +20,7 @@ class StepUpdatesTest(unittest.TestCase):
         )
         env.data = mujoco.MjData(env.model)
         env._task_spec = None
+        env._task_runtime = None
         env._control_decimation = 17
         evaluator = SimpleNamespace(
             requires_step_updates=requires_updates,

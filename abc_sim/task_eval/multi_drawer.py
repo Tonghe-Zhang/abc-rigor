@@ -3,19 +3,38 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import mujoco
 import numpy as np
 
 from abc_sim.multi_drawer_episode import DrawerEpisode
-from abc_sim.task_eval.base import TaskEvalResult
+from abc_sim.task_eval.base import EpisodeTaskEvaluator, TaskEvalResult
 from abc_sim.task_eval.bottles import _quat_to_rotmat_batch
 from abc_sim.task_specs import SimTaskSpec
 
 
-class MultiDrawerSearchTargetInBinEvaluator:
-    """Score success when the sampled target drawer object is placed in the goal bin."""
+@runtime_checkable
+class DrawerProgressSource(EpisodeTaskEvaluator, Protocol):
+    """Ordered drawer deposits shared by prompt sequencing and optional scores.
+
+    Results identify ``target_count`` and ``completed_target_count`` for each
+    world. Preparation and configuration consume ``DrawerEpisode`` definitions.
+    Joint validation declares the source's native or shaped travel requirements.
+    """
+
+    def validate_drawer_joints(
+        self, model: mujoco.MjModel, names: Sequence[str]
+    ) -> list[int]:
+        """Validate every potentially sampled drawer without changing state."""
+
+
+class MultiDrawerSearchProgress:
+    """Observe ordered deposits and produce native drawer progress diagnostics.
+
+    This source also serves tasks without a reward evaluator. Reward exposure
+    is selected by the task specification, independently of prompt progression.
+    """
 
     requires_step_updates = True
 
@@ -223,6 +242,10 @@ class MultiDrawerSearchTargetInBinEvaluator:
                 "ever_success": self._ever_success.copy(),
             },
         )
+
+
+class MultiDrawerSearchTargetInBinEvaluator(MultiDrawerSearchProgress):
+    """Expose the native ordered-retrieval score and success condition."""
 
 
 class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):

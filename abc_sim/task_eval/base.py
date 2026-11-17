@@ -75,13 +75,7 @@ class TaskEvalResult:
 
 
 class TaskEvaluator(Protocol):
-    """Task evaluator with an explicit qpos scoring entry point.
-
-    A task may expose ``prepare_randomization(model, state)`` to validate an
-    initial episode without mutation and return an opaque definition. The
-    environment passes that same definition to ``configure_episode`` and the
-    runtime's ``after_reset(..., episode=...)`` after restoring the scene.
-    """
+    """Task evaluator with an explicit qpos scoring entry point."""
 
     spec: SimTaskSpec
 
@@ -90,6 +84,23 @@ class TaskEvaluator(Protocol):
 
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
         """Score ``(B, nq)`` states, or reject tasks requiring native history."""
+
+
+@runtime_checkable
+class EpisodeTaskEvaluator(TaskEvaluator, Protocol):
+    """Prepare and consume one task-owned episode definition.
+
+    Preparation is read-only and runs before replay changes model, data or
+    episode history. The environment passes its opaque result to both
+    ``configure_episode`` and the runtime's ``after_reset(..., episode=...)``.
+    A runtime can use this source for progress without exposing reward scores.
+    """
+
+    def prepare_randomization(self, model: Any, state: Any) -> Any:
+        """Validate the recording and return its initial episode definition."""
+
+    def configure_episode(self, model: Any, episode: Any) -> None:
+        """Bind the validated definition after restoring the initial scene."""
 
 
 @runtime_checkable
