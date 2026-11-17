@@ -89,12 +89,12 @@ class BlocksRandomizer(SceneRandomizer):
         env._set_qpos_from_state(arm_state)
         self._appearance_active = appearance is not None
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         """Restore the model and poses before episode finalization."""
         self._restore_visuals(state.metadata.get("block_appearance"))
         if self._env_ref is not None:
             model, data = self._env_ref.model, self._env_ref.data
-        super()._restore_scene(model, data, state)
+        return super()._restore_scene(model, data, state)
 
     def randomize(
         self,

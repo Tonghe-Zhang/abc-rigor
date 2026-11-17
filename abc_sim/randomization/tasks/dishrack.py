@@ -115,7 +115,7 @@ class DishRackRandomizer(SceneRandomizer):
 
         self._raise_sampling_failure(seed)
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         dish_rack_variant = _dishrack_canonical_variant_name(
             "dish_rack",
             str(state.metadata.get("dish_rack_variant", _DISHRACK_DEFAULT_VARIANTS["dish_rack"])),
@@ -143,6 +143,7 @@ class DishRackRandomizer(SceneRandomizer):
             data = self._env_ref.data
         self._apply_states(model, data, state.object_states)
         mujoco.mj_forward(model, data)
+        return state
 
     def _refresh_collision_metadata(self) -> None:
         plate_radii: list[float] = []

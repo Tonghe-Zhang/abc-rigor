@@ -172,7 +172,7 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
             },
         )
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         self._apply_runtime_scales(
             model,
             data,
@@ -203,6 +203,7 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
             angular_velocity,
         )
         mujoco.mj_forward(model, data)
+        return state
 
     def _apply_runtime_scales(
         self,

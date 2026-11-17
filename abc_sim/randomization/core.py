@@ -460,14 +460,14 @@ class SceneRandomizer:
                 "Construct the replay environment with the recorded physics_profile."
             )
         apply_physics_profile(model, profile)
-        self._restore_scene(model, data, state)
+        restored = self._restore_scene(model, data, state)
         if self._env_ref is not None:
-            self._env_ref.finalize_randomization(state)
+            self._env_ref.finalize_randomization(restored)
 
     def _restore_scene(
         self, model: Any, data: Any, state: RandomizationState
-    ) -> None:
-        """Restore task-owned model and pose state after replay validation."""
+    ) -> RandomizationState:
+        """Restore the scene and return its effective episode definition."""
         self._current_scale_states = dict(state.scale_states)
         if state.scale_states:
             self._reload_scene_for_scale_states(state.scale_states)
@@ -476,6 +476,7 @@ class SceneRandomizer:
                 data = self._env_ref.data
         self._apply_states(model, data, state.object_states)
         mujoco.mj_forward(model, data)
+        return state
 
     def _get_size_perturbations(self) -> list[ScalePerturbRange]:
         if self.size_perturbations:

@@ -427,6 +427,9 @@ class MuJoCoYAMEnv(gym.Env):
                 seed=seed,
                 request=randomization_request,
             )
+            self._last_randomization.metadata["physics_profile"] = (
+                self.physics_profile_metadata()
+            )
 
         self.finalize_randomization(self._last_randomization)
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
@@ -515,10 +518,6 @@ class MuJoCoYAMEnv(gym.Env):
         self._sync_prompt_from_task_runtime()
 
         self.cur_step = 0
-        if self._last_randomization is not None:
-            self._last_randomization.metadata["physics_profile"] = (
-                self.physics_profile_metadata()
-            )
 
     def step(self, action: np.ndarray, *, render_obs: bool = True):
         """Apply one 14D policy-space action.

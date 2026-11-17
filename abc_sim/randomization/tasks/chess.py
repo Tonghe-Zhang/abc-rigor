@@ -224,7 +224,7 @@ class ChessRandomizer(SceneRandomizer):
 
         self._raise_sampling_failure(seed)
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         self._current_scale_states = dict(state.scale_states)
         raw_tin_variant = state.metadata.get(
             "tin_variant",
@@ -239,6 +239,7 @@ class ChessRandomizer(SceneRandomizer):
         self._set_tin_collision_enabled(model, bool(state.metadata.get("tin_active", False)))
         mujoco.mj_forward(model, data)
         self._remember_selection(state.metadata)
+        return state
 
     def _remember_selection(self, metadata: dict[str, Any]) -> None:
         scenario = metadata.get("scenario")

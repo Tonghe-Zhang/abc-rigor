@@ -143,7 +143,7 @@ class WaterBottleRandomizer(SceneRandomizer):
         self._sample_and_apply_bin_color(model, state, rng)
         return state
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         bottle_variants = self._bottle_variants_from_state(state)
         self._set_active_bottle_count(len(bottle_variants))
         self._current_scale_states = dict(state.scale_states)
@@ -154,6 +154,7 @@ class WaterBottleRandomizer(SceneRandomizer):
         self._apply_states(model, data, state.object_states)
         mujoco.mj_forward(model, data)
         self._apply_bin_color(model, state.metadata.get("bin_color"))
+        return state
 
     def _resolve_bottle_variants(
         self,

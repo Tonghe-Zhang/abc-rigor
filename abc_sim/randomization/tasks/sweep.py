@@ -95,7 +95,7 @@ class SweepRandomizer(SceneRandomizer):
 
         self._raise_sampling_failure(seed)
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         raw_trash_count = state.metadata.get("trash_count")
         if raw_trash_count is None:
             trash_count = sum(
@@ -117,9 +117,13 @@ class SweepRandomizer(SceneRandomizer):
             seed=state.seed,
             object_states=object_states,
             scale_states=dict(state.scale_states),
-            metadata=dict(state.metadata),
+            metadata={
+                **state.metadata,
+                "trash_count": trash_count,
+                "trash_joints": list(self._trash_joints),
+            },
         )
-        super()._restore_scene(model, data, full_state)
+        return super()._restore_scene(model, data, full_state)
 
     def _resolve_trash_count(
         self,

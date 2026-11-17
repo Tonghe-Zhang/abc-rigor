@@ -269,9 +269,10 @@ class PhysicsProfileTest(unittest.TestCase):
         env = self.make_env(None)
         randomizer = SceneRandomizer()
         randomizer.bind_env(env)
-        randomizer.apply(
-            env.model, env.data, RandomizationState(seed=1, object_states={})
-        )
+        state = RandomizationState(seed=1, object_states={})
+        before = copy.deepcopy(state.to_dict())
+        randomizer.apply(env.model, env.data, state)
+        self.assertEqual(state.to_dict(), before)
         self.assertEqual(env.model.geom_friction[:, 0].max(), 5)
 
     def test_replay_preflight_cannot_be_overridden(self):
