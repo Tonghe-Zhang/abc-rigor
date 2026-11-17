@@ -55,8 +55,8 @@ env = abc_sim.make_env(
 )
 ```
 
-Without `physics_profile`, models retain their original coefficients, including
-new appearance-only spelling tasks. `round2_low_friction_v1` caps sliding friction
+Without `physics_profile`, models retain their original coefficients.
+`round2_low_friction_v1` caps sliding friction
 at **1.5**, preserving already-lower values and all torsional/rolling values.
 It covers geoms, flexes, explicit contact pairs in both tangent directions, and
 global contact overrides. Geom priorities remain unchanged. MuJoCo selects geom
