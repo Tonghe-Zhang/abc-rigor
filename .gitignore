@@ -8,7 +8,7 @@ cache/
 uv.lock
 checkpoints/
 outputs/
-abc_sim/models/assets/
+abc_sim/models/assets
 abc_sim/models/assets_robocasa/
 MUJOCO_LOG.TXT
 wandb/

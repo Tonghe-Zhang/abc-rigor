@@ -407,6 +407,21 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         evaluator_options=(("word", "agi"),),
         aliases=("sim_spell_agi",),
     ),
+    *(
+        SimTaskSpec(
+            name=f"spell_random_{length}_appearance",
+            env_task="blocks",
+            prompt=f"spell the sampled {length}-letter sequence with varied block appearances",
+            evaluator_name="spell_word",
+            evaluator_options=(("sequence_length", length),),
+            reset_request=(("sequence_length", length), ("randomize_appearance", True)),
+            description=(
+                "Spell a seeded sequence of distinct letters with independently sampled "
+                "cube colors, wood/plastic finishes, face panels and glyph decoration."
+            ),
+        )
+        for length in (2, 3, 4)
+    ),
 )
 
 

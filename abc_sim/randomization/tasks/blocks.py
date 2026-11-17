@@ -2,9 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import mujoco
+
 from abc_sim.spelling_goal import SpellingGoal
 
-from ..core import PerturbRange, RandomizationState, ScalePerturbRange, SceneRandomizer
+from ..assets.block_appearance import (
+    appearance_xml,
+    apply_appearance,
+    sample_appearance,
+)
+from ..core import (
+    PerturbRange,
+    RandomizationState,
+    ScalePerturbRange,
+    SceneRandomizer,
+    _resolve_scene_xml_paths,
+)
 
 
 class BlocksRandomizer(SceneRandomizer):
@@ -30,6 +43,40 @@ class BlocksRandomizer(SceneRandomizer):
     def _get_size_perturbations(self) -> list[ScalePerturbRange]:
         return []
 
+    def _restore_visuals(self, appearance: dict | None) -> None:
+        """Reload complete textures before creating any camera backend."""
+        if appearance is None and not getattr(self, "_appearance_active", False):
+            return
+        if self._env_ref is None:
+            raise RuntimeError(
+                "Randomized block appearance requires a bound environment."
+            )
+        env = self._env_ref
+        arm_state = env._get_reset_arm_state()
+        if appearance is None:
+            env.reload_from_xml(
+                _resolve_scene_xml_paths(
+                    self._base_scene_xml_string, self._base_scene_xml_dir
+                )
+            )
+        else:
+            if not hasattr(self, "_appearance_model"):
+                xml = appearance_xml(self._base_scene_xml_string)
+                self._appearance_model = mujoco.MjModel.from_xml_string(
+                    _resolve_scene_xml_paths(xml, self._base_scene_xml_dir)
+                )
+            apply_appearance(self._appearance_model, appearance)
+            env.reload_from_model(self._appearance_model)
+        env._set_qpos_from_state(arm_state)
+        self._appearance_active = appearance is not None
+
+    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+        """Replay realized materials and poses without resampling."""
+        self._restore_visuals(state.metadata.get("block_appearance"))
+        if self._env_ref is not None:
+            model, data = self._env_ref.model, self._env_ref.data
+        super().apply(model, data, state)
+
     def randomize(
         self,
         model: Any,
@@ -38,19 +85,37 @@ class BlocksRandomizer(SceneRandomizer):
         request: Any | None = None,
     ) -> RandomizationState:
         """Sample block poses and, when requested, a seeded spelling goal."""
-        if not isinstance(request, dict) or "sequence_length" not in request:
-            return super().randomize(model, data, seed=seed, request=request)
-
-        goal = SpellingGoal.sample(request["sequence_length"], seed)
+        appearance = None
+        goal = None
+        if isinstance(request, dict):
+            if "sequence_length" in request:
+                goal = SpellingGoal.sample(request["sequence_length"], seed)
+            if "randomize_appearance" in request:
+                if type(request["randomize_appearance"]) is not bool:
+                    raise ValueError("randomize_appearance must be boolean.")
+                if request["randomize_appearance"]:
+                    if goal is None:
+                        raise ValueError(
+                            "Appearance tasks require a seeded spelling goal."
+                        )
+                    appearance = sample_appearance(seed)
+            request = {
+                key: value
+                for key, value in request.items()
+                if key not in ("sequence_length", "randomize_appearance")
+            }
         state = super().randomize(
             model,
             data,
             seed=seed,
-            request={
-                key: value for key, value in request.items() if key != "sequence_length"
-            },
+            request=request,
         )
-        state.metadata.update(goal.to_metadata())
+        if goal is not None:
+            state.metadata.update(goal.to_metadata())
+        if appearance is not None:
+            state.metadata["block_appearance"] = appearance
+        if appearance is not None or getattr(self, "_appearance_active", False):
+            self.apply(model, data, state)
         return state
 
 

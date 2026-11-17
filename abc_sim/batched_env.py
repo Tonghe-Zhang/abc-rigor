@@ -133,6 +133,14 @@ class BatchedWarpYAMEnv:
         """Reset world i from seeds[i] through the base env and load the batch."""
         if len(seeds) != self.num_worlds:
             raise ValueError(f"expected {self.num_worlds} seeds, got {len(seeds)}")
+        request = None if options is None else options.get("randomization")
+        if request is None:
+            request = self.base_env._task_reset_request
+        if isinstance(request, dict) and request.get("randomize_appearance"):
+            raise NotImplementedError(
+                "Per-episode block textures require independent environments; "
+                "the batched renderer shares texture buffers across worlds."
+            )
         snapshots = []
         for index, seed in enumerate(seeds):
             try:
