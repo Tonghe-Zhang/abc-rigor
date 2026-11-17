@@ -142,6 +142,7 @@ class MuJoCoYAMEnv(gym.Env):
         self._task_spec: SimTaskSpec | None = None
         self._task_evaluator = None
         self._step_updates = False
+        self._step_requires_position_refresh = False
         self._step_update_interval = 1
         self._step_task_eval: TaskEvalResult | None = None
         self._physics_evaluator: PhysicsObservedTaskEvaluator | None = None
@@ -330,6 +331,9 @@ class MuJoCoYAMEnv(gym.Env):
         self._step_updates = bool(
             getattr(self._task_evaluator, "requires_step_updates", False)
         )
+        self._step_requires_position_refresh = self._step_updates and hasattr(
+            self._task_evaluator, "evaluate_model_data"
+        )
         self._step_update_interval = (
             self._control_decimation
             if getattr(self._task_evaluator, "evaluate_at_control_rate", False)
@@ -394,13 +398,14 @@ class MuJoCoYAMEnv(gym.Env):
         options: dict[str, Any] | None = None,
         randomize: bool = True,
     ):
+        randomization_request = (options or {}).get("randomization")
+        if self._task_spec is not None:
+            randomization_request = self._task_spec.resolve_reset_request(
+                randomization_request
+            )
         self._validate_physics_observation_cadence()
         self._physics_observer = None
         super().reset(seed=seed)
-        randomization_request = (options or {}).get("randomization")
-        if randomization_request is None:
-            # Task variants such as fixed-count aliases pin part of every reset.
-            randomization_request = getattr(self, "_task_reset_request", None)
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
@@ -456,6 +461,13 @@ class MuJoCoYAMEnv(gym.Env):
         self._validate_physics_observation_cadence()
         self._physics_observer = None
         self._last_randomization = state
+        episode_state = state
+        if self._task_runtime is not None:
+            resolve_episode = getattr(
+                self._task_runtime, "resolve_reset_randomization", None
+            )
+            if resolve_episode is not None:
+                episode_state = resolve_episode(state)
         if state is not None:
             prompt = state.metadata.get("prompt")
             if prompt is not None:
@@ -464,20 +476,20 @@ class MuJoCoYAMEnv(gym.Env):
             self._task_runtime.after_reset(
                 self.model,
                 self.data,
-                randomization=self._last_randomization,
+                randomization=episode_state,
             )
 
         self._reset_camera_backend()
         self._step_task_eval = None
         if self._task_evaluator is not None:
             self._task_evaluator.reset(nworld=1)
-            if self._last_randomization is not None and hasattr(
+            if episode_state is not None and hasattr(
                 self._task_evaluator,
                 "configure_from_randomization",
             ):
                 self._task_evaluator.configure_from_randomization(
                     self.model,
-                    self._last_randomization,
+                    episode_state,
                 )
             if self._last_randomization is not None and hasattr(
                 self._task_evaluator, "set_active_trash_joints"
@@ -701,7 +713,8 @@ class MuJoCoYAMEnv(gym.Env):
             ):
                 # Refresh only when scoring needs the integrated positions/contacts.
                 # Always score the final state, including a partial control step.
-                mujoco.mj_fwdPosition(self.model, self.data)
+                if self._step_requires_position_refresh:
+                    mujoco.mj_fwdPosition(self.model, self.data)
                 self._update_step_task_eval()
             if self._task_runtime is not None:
                 after_step = getattr(self._task_runtime, "after_step", None)

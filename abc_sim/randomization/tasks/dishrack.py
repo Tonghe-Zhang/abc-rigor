@@ -115,7 +115,7 @@ class DishRackRandomizer(SceneRandomizer):
 
         self._raise_sampling_failure(seed)
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
         dish_rack_variant = _dishrack_canonical_variant_name(
             "dish_rack",
             str(state.metadata.get("dish_rack_variant", _DISHRACK_DEFAULT_VARIANTS["dish_rack"])),

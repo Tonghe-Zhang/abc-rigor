@@ -95,7 +95,7 @@ class SweepRandomizer(SceneRandomizer):
 
         self._raise_sampling_failure(seed)
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
         raw_trash_count = state.metadata.get("trash_count")
         if raw_trash_count is None:
             trash_count = sum(
@@ -119,7 +119,7 @@ class SweepRandomizer(SceneRandomizer):
             scale_states=dict(state.scale_states),
             metadata=dict(state.metadata),
         )
-        super().apply(model, data, full_state)
+        super()._restore_scene(model, data, full_state)
 
     def _resolve_trash_count(
         self,
@@ -365,7 +365,6 @@ class SweepRandomizer(SceneRandomizer):
             tries: int,
         ) -> dict[str, list[float]]:
             perturbation = perturb_by_name[joint_name]
-            last_state: dict[str, list[float]] | None = None
             for _ in range(tries):
                 candidate = sample_from_range(perturbation, extra_xy=extra_xy)
                 candidate_xy = np.asarray(candidate["pos"][:2], dtype=np.float64)
@@ -373,14 +372,12 @@ class SweepRandomizer(SceneRandomizer):
                     candidate_xy,
                     states=states,
                 ):
-                    last_state = candidate
                     continue
                 if all(
                     np.linalg.norm(candidate_xy - other_xy) >= self._clearance_for_pair(joint_name, other_name)
                     for other_name, other_xy in placed_xy.items()
                 ):
                     return candidate
-                last_state = candidate
             raise _SweepPlacementFailure(f"could not place {joint_name}")
 
         for joint_name in self._tool_joints:

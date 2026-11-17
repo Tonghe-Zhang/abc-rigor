@@ -61,6 +61,7 @@ class MultiDrawerSearchTargetInBinEvaluator:
                     )
                 )
             ]
+        self.spec.resolve_reset_request({"target_count": len(target_joint_names)})
         if model is not self.model:
             self.model = model
             self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(

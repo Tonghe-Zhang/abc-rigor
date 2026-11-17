@@ -8,6 +8,11 @@ with their own rollout controller. With the default 0.002-second physics tick an
 17 ticks per action, a caller can use `max_episode_steps=3529` (119.986 seconds).
 This cap is an experiment setting, not a task success condition.
 
+The training task's two-target count is a fixed constraint. Empty caller
+randomization options retain it; an explicit incompatible count is rejected
+before reset mutates the environment. Native task options remain configurable.
+The variant has a distinct prompt alias, preserving native prompt lookup.
+
 ## Reward and prompt sequence
 
 Let `C` be the number of ordered targets already deposited in the goal bin and
@@ -40,6 +45,14 @@ replay must start from reset and provide chronological physics observations.
 A final qpos snapshot or a 30 Hz video does not contain enough information to
 reconstruct unique openings or transient deposits. Batched MJWarp environments
 already reject drawer tasks because they require a per-step Python runtime.
+
+Nonrandomized resets preserve the current drawer goal sequence while clearing
+deposit and opening history. Runtime prompts and scoring are initialized from
+that same episode definition. The first shaped episode requires a randomized
+reset or recorded-state replay so target-to-drawer metadata is available.
+Fresh replay binds its recorded sequence before scoring; it does not recover
+mid-episode history from positions alone. Drawer scoring reads qpos and cached
+model constants, so physics-rate observation does not add position refreshes.
 
 ## Friction profile
 
@@ -85,7 +98,13 @@ replay_env = abc_sim.make_env(task, physics_profile=profile)
 
 `SceneRandomizer.apply` reapplies the recorded profile to standalone models and
 rejects mismatches with an already-bound environment, avoiding stale renderer or
-Warp copies. Replay adapters outside this package must pass the recorded profile
+Warp copies. This is the shared final replay entry point: task implementations
+override `_restore_scene`, which runs only after physics validation. Rejection
+precedes model reloads, randomizer selections, and data changes. A recording
+without profile metadata means native physics and is rejected by a bound
+low-friction environment. Standalone callers must supply a freshly constructed
+model with the recording's native coefficients before profile application.
+Replay adapters outside this package must pass the recorded profile
 when constructing their environments. Pin task ID, evaluator ID, profile
 definition, simulator revision, and the caller's horizon in experiment metadata;
 scores from different physics conditions are separate evaluation conditions.

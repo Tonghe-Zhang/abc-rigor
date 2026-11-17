@@ -111,12 +111,12 @@ class InHandTransferRandomizer(SceneRandomizer):
             metadata={"category": category, "variant": variant_dir.name, "side": side},
         )
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
         env = self._env_ref
         category = str(state.metadata.get("category", ""))
         variant_name = str(state.metadata.get("variant", ""))
         if env is None or not category or not variant_name:
-            super().apply(model, data, state)
+            super()._restore_scene(model, data, state)
             return
 
         variant_dir = _inhand_asset_base(category) / category / variant_name

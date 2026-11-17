@@ -104,7 +104,7 @@ class MugVariantRandomizer(SceneRandomizer):
             self._apply_plain_mug_colors(model, mug_colors, mug_variants)
         return state
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
         mug_variants = self._mug_variants_from_state(state)
         self._set_active_mug_count(len(mug_variants))
         self._current_scale_states = dict(state.scale_states)
@@ -722,8 +722,8 @@ class MugFlipRandomizer(MugVariantRandomizer):
         self._sample_and_apply_tray_color(model, state, rng)
         return state
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
-        super().apply(model, data, state)
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+        super()._restore_scene(model, data, state)
         target_model = self._env_ref.model if self._env_ref is not None else model
         tray_color = state.metadata.get("tray_color")
         if tray_color is not None:

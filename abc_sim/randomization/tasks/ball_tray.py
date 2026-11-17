@@ -172,7 +172,7 @@ class BallTrayBalancingRandomizer(SceneRandomizer):
             },
         )
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
         self._apply_runtime_scales(
             model,
             data,

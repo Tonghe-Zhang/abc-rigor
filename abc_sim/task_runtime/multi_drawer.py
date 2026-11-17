@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import mujoco
@@ -16,10 +17,20 @@ class MultiDrawerSearchRuntime:
         self._current_index = 0
         self._display_prompt = "find the target object"
         self._state = "waiting_for_target"
+        self._episode_randomization = None
 
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """The prompt sequence holds no compiled-model indices."""
 
+    def resolve_reset_randomization(self, randomization: Any) -> Any:
+        """Preserve the current drawer goal when resetting without resampling.
+
+        The environment passes this same episode definition to the runtime and
+        evaluator. Counters and opening history are still reset for each episode.
+        """
+        if randomization is not None:
+            self._episode_randomization = copy.deepcopy(randomization)
+        return self._episode_randomization
 
     def after_reset(
         self,

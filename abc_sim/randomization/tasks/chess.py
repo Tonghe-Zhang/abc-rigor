@@ -224,7 +224,7 @@ class ChessRandomizer(SceneRandomizer):
 
         self._raise_sampling_failure(seed)
 
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
         self._current_scale_states = dict(state.scale_states)
         raw_tin_variant = state.metadata.get(
             "tin_variant",

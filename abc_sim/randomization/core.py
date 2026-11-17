@@ -7,7 +7,7 @@ import logging
 import xml.etree.ElementTree as _ET
 from dataclasses import dataclass, field
 from pathlib import Path as _Path
-from typing import Any
+from typing import Any, final
 
 import mujoco
 import numpy as np
@@ -351,6 +351,11 @@ class SceneRandomizer:
     reject_arm_contacts: bool = True
     arm_root_body_names: tuple[str, ...] = ("left_arm", "right_arm")
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if "apply" in cls.__dict__:
+            raise TypeError("Replay implementations must override _restore_scene, not apply.")
+
     def __init__(self) -> None:
         # Cache fixed-body nominal positions on first read so that subsequent
         # randomizations don't drift (mj_resetData restores data.qpos but not
@@ -438,24 +443,37 @@ class SceneRandomizer:
 
         self._raise_sampling_failure(seed)
 
+    @final
     def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
-        """Restore a previously saved state without sampling (for replay)."""
-        if "physics_profile" in state.metadata:
-            metadata = state.metadata["physics_profile"]
-            profile = None if metadata is None else PhysicsProfile.from_dict(metadata)
-            if self._env_ref is not None and self._env_ref.physics_profile != profile:
-                raise ValueError(
-                    "Replay physics profile differs from the environment. "
-                    "Construct the replay environment with the recorded physics_profile."
-                )
+        """Validate physics, restore the scene, and start a fresh replay episode.
+
+        Recordings without profile metadata use native physics. A bound
+        environment must already have the recorded profile so its model copies
+        and renderers share the same condition. Task restoration belongs in
+        ``_restore_scene`` and cannot bypass this preflight.
+        """
+        metadata = state.metadata.get("physics_profile")
+        profile = None if metadata is None else PhysicsProfile.from_dict(metadata)
+        if self._env_ref is not None and self._env_ref.physics_profile != profile:
+            raise ValueError(
+                "Replay physics profile differs from the environment. "
+                "Construct the replay environment with the recorded physics_profile."
+            )
+        apply_physics_profile(model, profile)
+        self._restore_scene(model, data, state)
+        if self._env_ref is not None:
+            self._env_ref.finalize_randomization(state)
+
+    def _restore_scene(
+        self, model: Any, data: Any, state: RandomizationState
+    ) -> None:
+        """Restore task-owned model and pose state after replay validation."""
         self._current_scale_states = dict(state.scale_states)
         if state.scale_states:
             self._reload_scene_for_scale_states(state.scale_states)
             if self._env_ref is not None:
                 model = self._env_ref.model
                 data = self._env_ref.data
-        if "physics_profile" in state.metadata:
-            apply_physics_profile(model, profile)
         self._apply_states(model, data, state.object_states)
         mujoco.mj_forward(model, data)
 
