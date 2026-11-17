@@ -71,7 +71,7 @@ class BlocksRandomizer(SceneRandomizer):
                 "Randomized block appearance requires a bound environment."
             )
         env = self._env_ref
-        arm_state = env._get_reset_arm_state()
+        robot_qpos = env._get_reset_robot_qpos()
         if appearance is None:
             env.reload_from_xml(
                 _resolve_scene_xml_paths(
@@ -86,7 +86,7 @@ class BlocksRandomizer(SceneRandomizer):
                 )
             apply_appearance(self._appearance_model, appearance)
             env.reload_from_model(self._appearance_model)
-        env._set_qpos_from_state(arm_state)
+        env._set_robot_qpos(robot_qpos)
         self._appearance_active = appearance is not None
 
     def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:

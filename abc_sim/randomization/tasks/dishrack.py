@@ -501,7 +501,7 @@ class DishRackRandomizer(SceneRandomizer):
             raise RuntimeError("DishRackRandomizer requires a bound env before scene reload")
 
         dish_rack_variant = _dishrack_canonical_variant_name("dish_rack", dish_rack_variant)
-        preserved_arm_state = self._env_ref._get_reset_arm_state()
+        preserved_robot_qpos = self._env_ref._get_reset_robot_qpos()
         normalized_plate_variants = _dishrack_normalize_plate_variants(plate_variants)
         self._set_active_plate_count(len(normalized_plate_variants))
         scene_cache_key = self._scene_model_cache_key(
@@ -545,7 +545,7 @@ class DishRackRandomizer(SceneRandomizer):
         }
         self._refresh_collision_metadata()
         mujoco.mj_resetData(self._env_ref.model, self._env_ref.data)
-        self._env_ref._set_qpos_from_state(preserved_arm_state)
+        self._env_ref._set_robot_qpos(preserved_robot_qpos)
         mujoco.mj_forward(self._env_ref.model, self._env_ref.data)
         self._fixed_body_nominals = None
 

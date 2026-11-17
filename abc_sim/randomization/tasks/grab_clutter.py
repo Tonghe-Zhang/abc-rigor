@@ -550,10 +550,10 @@ class GrabClutterRandomizer(SceneRandomizer):
                 accepted = (selections, target_selection, target_box, prompt)
                 break
 
-            preserved_arm_state = env._get_reset_arm_state()
+            preserved_robot_qpos = env._get_reset_robot_qpos()
             env.reload_from_xml(xml)
             mujoco.mj_resetData(env.model, env.data)
-            env._set_qpos_from_state(preserved_arm_state)
+            env._set_robot_qpos(preserved_robot_qpos)
             mujoco.mj_forward(env.model, env.data)
             if not self._layout_contacts_ok(env.model, env.data, selections):
                 continue

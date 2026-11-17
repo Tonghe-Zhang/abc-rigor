@@ -761,22 +761,22 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
                 self._scene_xml_transform_options,
             )
 
-        preserved_arm_state = self._env_ref._get_reset_arm_state()
+        preserved_robot_qpos = self._env_ref._get_reset_robot_qpos()
         self._env_ref.reload_from_xml(xml)
         mujoco.mj_resetData(self._env_ref.model, self._env_ref.data)
-        self._env_ref._set_qpos_from_state(preserved_arm_state)
+        self._env_ref._set_robot_qpos(preserved_robot_qpos)
         mujoco.mj_forward(self._env_ref.model, self._env_ref.data)
         self._base_scene_xml_string = xml
         self._base_scene_xml_dir = base_dir
         self._base_scene_xml_transformed = True
         self._validate_full_scene(self._env_ref.model)
 
-    @staticmethod
-    def _validate_stack(model: Any, stack: str, prefix: str) -> None:
-        """Require a stack and its three directly owned slide drawers."""
+    def _validate_stack(self, model: Any, stack: str, prefix: str) -> None:
+        """Require drawer ownership and the selected evaluator's joint contract."""
         stack_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, stack)
         if stack_body < 0:
             raise ValueError(f"Drawer stack {stack!r} is missing from the model.")
+        joints = []
         for level in _MULTI_DRAWER_SEARCH_DRAWER_LEVELS:
             body = f"{prefix}link_{level}_drawer_low"
             body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body)
@@ -789,9 +789,11 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
                 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_SLIDE
             ):
                 raise ValueError(f"Drawer {body!r} requires its own slide joint.")
+            joints.append(joint)
+        if self._env_ref is not None:
+            self._env_ref._task_evaluator.validate_drawer_joints(model, joints)
 
-    @classmethod
-    def _validate_full_scene(cls, model: Any) -> None:
+    def _validate_full_scene(self, model: Any) -> None:
         """Require the complete assembled drawer inventory and joint ownership."""
         if mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_BODY, _MULTI_DRAWER_SEARCH_TEMPLATE_DRAWER_BODY
@@ -799,7 +801,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
             raise ValueError("An assembled drawer scene must not retain the template stack.")
         for stack_id in _MULTI_DRAWER_SEARCH_STACK_IDS:
             stack = _multi_drawer_search_stack_body_name(stack_id)
-            cls._validate_stack(model, stack, f"{stack}_")
+            self._validate_stack(model, stack, f"{stack}_")
         pairs = (
             *_MULTI_DRAWER_SEARCH_JOINT_BY_BODY.items(),
             ("drawer_search_goal_bin", _MULTI_DRAWER_SEARCH_GOAL_BIN_JOINT),
@@ -1155,7 +1157,7 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         for target in episode.targets:
             if target.body not in active or any(
                 by_body[target.body][key] != getattr(target, key)
-                for key in ("joint", "drawer")
+                for key in ("joint", "drawer", "label")
             ):
                 raise ValueError("Targets must match the recorded active object selection.")
         expected_joints = {*_MULTI_DRAWER_SEARCH_OBJECT_JOINTS, _MULTI_DRAWER_SEARCH_GOAL_BIN_JOINT}

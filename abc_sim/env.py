@@ -359,6 +359,7 @@ class MuJoCoYAMEnv(gym.Env):
         self._qpos_indices: list[int] = []
         self._ctrl_indices: list[int] = []
         self._gripper_indices: list[int] = []  # which of the 14 are grippers
+        robot_roots: set[int] = set()
 
         idx = 0
         for robot_name in self.robot_names:
@@ -368,6 +369,9 @@ class MuJoCoYAMEnv(gym.Env):
                     self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name
                 )
                 self._qpos_indices.append(self.model.jnt_qposadr[jnt_id])
+                robot_roots.add(
+                    int(self.model.body_rootid[self.model.jnt_bodyid[jnt_id]])
+                )
 
                 act_name = f"{robot_name}_joint{j}"
                 act_id = mujoco.mj_name2id(
@@ -381,6 +385,9 @@ class MuJoCoYAMEnv(gym.Env):
                 self.model, mujoco.mjtObj.mjOBJ_JOINT, finger_name
             )
             self._qpos_indices.append(self.model.jnt_qposadr[finger_jnt_id])
+            robot_roots.add(
+                int(self.model.body_rootid[self.model.jnt_bodyid[finger_jnt_id]])
+            )
 
             grip_act_name = f"{robot_name}_gripper"
             grip_act_id = mujoco.mj_name2id(
@@ -391,6 +398,20 @@ class MuJoCoYAMEnv(gym.Env):
             idx += 1
 
         self._gripper_set = set(self._gripper_indices)
+        self._robot_qpos_slices: dict[str, slice] = {}
+        for joint_id in range(self.model.njnt):
+            if self.model.body_rootid[self.model.jnt_bodyid[joint_id]] not in robot_roots:
+                continue
+            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if name is None:
+                raise ValueError("Robot joints must be named for scene reloads.")
+            start = int(self.model.jnt_qposadr[joint_id])
+            stop = (
+                int(self.model.jnt_qposadr[joint_id + 1])
+                if joint_id + 1 < self.model.njnt
+                else self.model.nq
+            )
+            self._robot_qpos_slices[name] = slice(start, stop)
 
     def reset(
         self,
@@ -473,9 +494,9 @@ class MuJoCoYAMEnv(gym.Env):
         self._physics_observer = None
         if not keep_arm_state:
             self.forget_arm_state()
-        arm_state = self._get_reset_arm_state()
+        robot_qpos = self._get_reset_robot_qpos()
         mujoco.mj_resetData(self.model, self.data)
-        self._set_qpos_from_state(arm_state)
+        self._set_robot_qpos(robot_qpos)
         mujoco.mj_forward(self.model, self.data)
 
     def prepare_randomization(self, state: RandomizationState) -> Any:
@@ -700,20 +721,24 @@ class MuJoCoYAMEnv(gym.Env):
 
     def _set_qpos_from_state(self, state: np.ndarray):
         """Write a 14D state vector into MuJoCo qpos."""
+        self._write_policy_qpos(self.data.qpos, state)
+        self._arm_state_initialized = True
+
+    def _write_policy_qpos(self, qpos: np.ndarray, state: np.ndarray) -> None:
+        """Write policy coordinates into the supplied physical qpos vector."""
         for i, qpos_idx in enumerate(self._qpos_indices):
             val = state[i]
             if i in self._gripper_set:
                 # Scale [0, 1] policy space → MuJoCo joint space
                 val = val * _GRIPPER_CTRL_MAX
-            self.data.qpos[qpos_idx] = val
-        self._arm_state_initialized = True
+            qpos[qpos_idx] = val
 
     def forget_arm_state(self) -> None:
         """Drop the carried arm pose so the next reset starts from init_q."""
         self._arm_state_initialized = False
 
     def _get_reset_arm_state(self) -> np.ndarray:
-        """Return the arm state to preserve across scene resets."""
+        """Return the reset arm pose projected into policy coordinates."""
         if self._arm_state_initialized:
             return project_policy_state(
                 np.asarray(self.data.qpos, dtype=np.float64),
@@ -721,6 +746,35 @@ class MuJoCoYAMEnv(gym.Env):
                 self._gripper_indices,
             )
         return self.get_init_q().astype(np.float32, copy=True)
+
+    def _get_reset_robot_qpos(self) -> dict[str, np.ndarray]:
+        """Capture every physical joint in the configured robots' kinematic trees.
+
+        Joint names preserve identity when task scene reloads move qpos addresses.
+        Passive joints retain their exact physical values. Before initialization,
+        robot joints use model defaults with the configured policy-space init_q.
+        Independent scene objects are excluded.
+        """
+        qpos = self.data.qpos
+        if not self._arm_state_initialized:
+            qpos = self.model.qpos0.copy()
+            self._write_policy_qpos(
+                qpos, self.get_init_q().astype(np.float32, copy=True)
+            )
+        return {
+            name: qpos[span].copy() for name, span in self._robot_qpos_slices.items()
+        }
+
+    def _set_robot_qpos(self, pose: dict[str, np.ndarray]) -> None:
+        """Restore a complete physical robot pose after a compatible scene reload."""
+        if pose.keys() != self._robot_qpos_slices.keys():
+            raise ValueError("Scene reload changed the physical robot joint inventory.")
+        for name, span in self._robot_qpos_slices.items():
+            if np.shape(pose[name]) != (span.stop - span.start,):
+                raise ValueError(f"Scene reload changed robot joint {name!r} qpos size.")
+        for name, span in self._robot_qpos_slices.items():
+            self.data.qpos[span] = pose[name]
+        self._arm_state_initialized = True
 
     def _step_single(self, action_14d: np.ndarray, *, physics_steps: int | None = None):
         """Apply a single 14D action and step physics."""

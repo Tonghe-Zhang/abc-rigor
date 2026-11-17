@@ -371,7 +371,7 @@ class MugVariantRandomizer(SceneRandomizer):
             return
 
         mug_variants = [_mug_canonical_variant_name(variant) for variant in mug_variants]
-        preserved_arm_state = self._env_ref._get_reset_arm_state()
+        preserved_robot_qpos = self._env_ref._get_reset_robot_qpos()
         scene_cache_key = self._scene_model_cache_key(mug_variants, scale_states)
         if not self._try_reload_cached_scene_model(scene_cache_key):
             base_scene_xml = self._base_scene_xml_string
@@ -400,7 +400,7 @@ class MugVariantRandomizer(SceneRandomizer):
         self._current_mug_variants = list(mug_variants)
         self._current_active_mug_count = len(mug_variants)
         mujoco.mj_resetData(self._env_ref.model, self._env_ref.data)
-        self._env_ref._set_qpos_from_state(preserved_arm_state)
+        self._env_ref._set_robot_qpos(preserved_robot_qpos)
         mujoco.mj_forward(self._env_ref.model, self._env_ref.data)
         self._fixed_body_nominals = None
 

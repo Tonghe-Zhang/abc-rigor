@@ -507,10 +507,10 @@ class PutRelativeRandomizer(SceneRandomizer):
 
         env = self._env_ref
         if env is not None:
-            preserved_arm_state = env._get_reset_arm_state()
+            preserved_robot_qpos = env._get_reset_robot_qpos()
             env.reload_from_xml(xml)
             mujoco.mj_resetData(env.model, env.data)
-            env._set_qpos_from_state(preserved_arm_state)
+            env._set_robot_qpos(preserved_robot_qpos)
             env.prompt = str(prompt_info["prompt"])
             mujoco.mj_forward(env.model, env.data)
 

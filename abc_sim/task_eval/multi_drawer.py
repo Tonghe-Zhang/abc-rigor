@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import mujoco
@@ -60,6 +61,18 @@ class MultiDrawerSearchTargetInBinEvaluator:
             if body_id < 0 or model.jnt_bodyid[joint_id] != body_id:
                 raise ValueError("Target body and free joint must identify the same object.")
         return episode
+
+    def validate_drawer_joints(
+        self, model: mujoco.MjModel, names: Sequence[str]
+    ) -> list[int]:
+        """Resolve drawer slides without changing the model or episode history."""
+        joint_ids = []
+        for name in names:
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_SLIDE:
+                raise ValueError(f"Drawer joint {name!r} must be a slide joint.")
+            joint_ids.append(joint_id)
+        return joint_ids
 
     def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
         """Install the same validated episode definition used by the runtime."""
@@ -231,24 +244,22 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         episode = super().prepare_randomization(model, randomization)
         if not episode.drawers or any(target.drawer not in episode.drawers for target in episode.targets):
             raise ValueError("Each target must identify an active source drawer.")
-        self._drawer_joint_ids(model, episode)
+        self.validate_drawer_joints(model, episode.drawer_joints)
         return episode
 
-    @staticmethod
-    def _drawer_joint_ids(model: mujoco.MjModel, episode: DrawerEpisode) -> list[int]:
-        joint_ids = []
-        for name in episode.drawer_joints:
-            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-            if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_SLIDE:
-                raise ValueError(f"Drawer joint {name!r} must be a sliding joint.")
+    def validate_drawer_joints(
+        self, model: mujoco.MjModel, names: Sequence[str]
+    ) -> list[int]:
+        """Require the travel limits used by chronological opening detection."""
+        joint_ids = super().validate_drawer_joints(model, names)
+        for name, joint_id in zip(names, joint_ids):
             if not model.jnt_limited[joint_id] or model.jnt_range[joint_id, 0] != 0:
                 raise ValueError(f"Drawer joint {name!r} must have a zero-based travel limit.")
-            joint_ids.append(joint_id)
         return joint_ids
 
     def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
         super().configure_episode(model, episode)
-        joint_ids = self._drawer_joint_ids(model, episode)
+        joint_ids = self.validate_drawer_joints(model, episode.drawer_joints)
         self._drawer_qpos_addrs = [int(model.jnt_qposadr[j]) for j in joint_ids]
         self._drawer_open_thresholds = 0.5 * model.jnt_range[joint_ids, 1]
         self._target_drawer_indices = [episode.drawers.index(target.drawer) for target in episode.targets]

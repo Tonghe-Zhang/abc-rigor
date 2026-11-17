@@ -7,6 +7,7 @@ import sys
 import textwrap
 import unittest
 import weakref
+import xml.etree.ElementTree as ET
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
@@ -646,25 +647,80 @@ class CameraModelBindingTests(unittest.TestCase):
         self.assertEqual(len(env._wrist_camera_positions), 1)
 
     def test_reset_arm_policy_is_explicit_and_preserves_only_requested_pose(self):
+        root = ET.fromstring(blocks_xml())
+        ET.SubElement(root, "asset")
+        robot_joints = []
+        for arm in ("left", "right"):
+            owner = next(
+                body
+                for body in root.iter("body")
+                if body.find(f"joint[@name='{arm}_left_finger']") is not None
+            )
+            passive = ET.SubElement(owner, "body", name=f"{arm}_passive_finger_body")
+            ET.SubElement(passive, "joint", name=f"{arm}_right_finger", type="slide")
+            ET.SubElement(
+                passive,
+                "geom",
+                type="sphere",
+                size=".01",
+                mass=".1",
+                contype="0",
+                conaffinity="0",
+            )
+            robot_joints.extend(f"{arm}_joint{index}" for index in range(1, 7))
+            robot_joints.extend((f"{arm}_left_finger", f"{arm}_right_finger"))
         env = make_env(
             task="spell_cat",
-            scene_xml_string=blocks_xml(),
+            scene_xml_string=ET.tostring(root, encoding="unicode"),
             render_cameras=False,
         )
         self.addCleanup(env.close)
-        env.reset(seed=31)
-        initial = env._get_reset_arm_state()
-        action = env.get_state()
-        action[0] += 0.1
-        env.step(action, render_obs=False)
-        carried = env._get_reset_arm_state()
-        env.reset(seed=31, options={"keep_arm_state": True})
-        np.testing.assert_array_equal(env._get_reset_arm_state(), carried)
-        self.assertEqual(env.data.time, 0)
-        np.testing.assert_array_equal(env.data.qvel, 0)
-        np.testing.assert_array_equal(env.data.ctrl, 0)
-        env.reset(seed=31)
-        np.testing.assert_array_equal(env._get_reset_arm_state(), initial)
+        _, info = env.reset(seed=31)
+        saved = info["randomization"]
+        initial = env.data.qpos.copy()
+        self.assertEqual(env.get_state().shape, (14,))
+        for operation in ("sample", "replay", "scaled_replay"):
+            for keep in (True, False):
+                with self.subTest(operation=operation, keep_arm_state=keep):
+                    expected = initial.copy()
+                    for index, name in enumerate(robot_joints):
+                        address = env.model.joint(name).qposadr[0]
+                        moved = (
+                            -0.013
+                            if name.endswith("_right_finger")
+                            else 0.027
+                            if name.endswith("_left_finger")
+                            else 0.1 + index * 0.017
+                        )
+                        env.data.qpos[address] = moved
+                        if keep:
+                            expected[address] = moved
+                    block_address = env.model.joint("block_A_jnt").qposadr[0]
+                    env.data.qpos[block_address : block_address + 3] = [4, 5, 6]
+                    env.data.qvel[:] = 0.3
+                    env.data.ctrl[:] = 0.2
+                    env.data.time = 12
+                    if operation == "sample":
+                        env.reset(seed=31, options={"keep_arm_state": keep})
+                    else:
+                        replay = deepcopy(saved)
+                        if operation == "scaled_replay":
+                            replay.scale_states["block_A_jnt"] = 1.1
+                        previous_model = env.model
+                        env._task_randomizer.apply(
+                            env.model, env.data, replay, keep_arm_state=keep
+                        )
+                        if operation == "scaled_replay":
+                            self.assertIsNot(env.model, previous_model)
+                            geom = env.model.body_geomadr[env.model.body("block_A").id]
+                            np.testing.assert_allclose(
+                                env.model.geom_size[geom], 0.015 * 1.1
+                            )
+                    np.testing.assert_array_equal(env.data.qpos, expected)
+                    self.assertEqual(env.get_state().shape, (14,))
+                    self.assertEqual(env.data.time, 0)
+                    np.testing.assert_array_equal(env.data.qvel, 0)
+                    np.testing.assert_array_equal(env.data.ctrl, 0)
 
 
 if __name__ == "__main__":

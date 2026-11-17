@@ -267,17 +267,47 @@ class DrawerSceneTest(unittest.TestCase):
                                             ][0],
                                             1,
                                         )
-                                    moved = np.full(14, 0.25)
-                                    moved[env._gripper_indices] = (
-                                        np.array([0.25, 0.75], dtype=np.float32)
-                                        * 0.0475
-                                    )
-                                    self.assertFalse(
-                                        np.array_equal(
-                                            moved, initial["qpos"][env._qpos_indices]
+                                    robot_joints = [
+                                        env.model.joint(index)
+                                        for index in range(env.model.njnt)
+                                        if env.model.joint(index).name.startswith(
+                                            ("left_", "right_")
                                         )
+                                    ]
+                                    self.assertEqual(len(robot_joints), 16)
+                                    finger_names = {
+                                        f"{arm}_{side}_finger"
+                                        for arm in ("left", "right")
+                                        for side in ("left", "right")
+                                    }
+                                    self.assertTrue(
+                                        finger_names
+                                        <= {joint.name for joint in robot_joints}
                                     )
-                                    env.data.qpos[env._qpos_indices] = moved
+                                    moved = {}
+                                    for robot_joint in robot_joints:
+                                        self.assertIn(
+                                            robot_joint.type[0],
+                                            (
+                                                mujoco.mjtJoint.mjJNT_HINGE,
+                                                mujoco.mjtJoint.mjJNT_SLIDE,
+                                            ),
+                                        )
+                                        value = 0.25
+                                        if robot_joint.name in finger_names:
+                                            value = (
+                                                -0.017
+                                                if robot_joint.name.endswith(
+                                                    "right_finger"
+                                                )
+                                                else 0.017
+                                            )
+                                        address = int(robot_joint.qposadr[0])
+                                        moved[address] = value
+                                        self.assertNotEqual(
+                                            initial["qpos"][address], value
+                                        )
+                                        env.data.qpos[address] = value
                                     env.data.qvel[:] = 0.3
                                     env.data.ctrl[:] = 0.2
                                     env.data.time = 12
@@ -300,7 +330,8 @@ class DrawerSceneTest(unittest.TestCase):
                                         for key, value in initial.items()
                                     }
                                     if keep:
-                                        expected["qpos"][env._qpos_indices] = moved
+                                        for address, value in moved.items():
+                                            expected["qpos"][address] = value
                                     self.assert_fresh_episode(env, expected, record)
                                     self.assertIs(env._episode_restorer, restorer)
                                     self.assertIs(env.model, model)
@@ -336,48 +367,111 @@ class DrawerSceneTest(unittest.TestCase):
                             gc.collect()
 
     def test_invalid_bound_scene_rejects_reset_before_episode_mutation(self):
-        env = _env()
-        env.reset(seed=6)
-        state = env._last_randomization
-        target = state.metadata["target_sequence"][0]
-        address = env.model.joint(target["joint"]).qposadr[0]
-        env.data.qpos[address : address + 3] = env._step_task_eval.metrics[
-            "goal_bin_center"
-        ][0]
-        env.advance_physics(1)
-        joint = env.model.joint(state.metadata["drawer_joints"][0]).id
-        env.model.jnt_type[joint] = mujoco.mjtJoint.mjJNT_HINGE
-        env.data.qvel[:] = 0.3
-        env.data.ctrl[:] = 0.2
-        env.data.time = 12
-        env.cur_step = 7
-        del env._task_randomizer
-        physical = _physical(env)
-        model, data = env.model, env.data
-        runtime = env.task_runtime_debug_state()
-        prompt = env.prompt
-        evaluation = env._step_task_eval
-        owner = env._episode_restorer
-        rng = copy.deepcopy(env.np_random.bit_generator.state)
-        with self.assertRaisesRegex(ValueError, "slide joint"):
-            env.reset(seed=0)
-        self.assertIs(env.model, model)
-        self.assertIs(env.data, data)
-        self.assert_physical_equal(env, physical)
-        self.assertEqual(env.data.time, 12)
-        self.assertEqual(env.cur_step, 7)
-        self.assertEqual(env.prompt, prompt)
-        self.assertEqual(env.task_runtime_debug_state(), runtime)
-        self.assertEqual(env.np_random.bit_generator.state, rng)
-        self.assertIs(env._step_task_eval, evaluation)
-        self.assertIs(env._last_randomization, state)
-        self.assertIs(env._episode_restorer, owner)
-        self.assertFalse(hasattr(env, "_task_randomizer"))
-        env.model.jnt_type[joint] = mujoco.mjtJoint.mjJNT_SLIDE
-        env.reset(seed=0)
-        self.assertIs(env.model, model)
-        self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 0)
-        self.assertIs(env._episode_restorer, env._task_randomizer)
+        joint_names = tuple(drawer._MULTI_DRAWER_SEARCH_DRAWER_JOINT_BY_DRAWER.values())
+        for variant in ("hinge", "unlimited", "nonzero_lower"):
+            for has_sampler in (False, True):
+                for joint_name in joint_names:
+                    with self.subTest(
+                        variant=variant, sampler=has_sampler, joint=joint_name
+                    ):
+                        env = _env()
+                        env.reset(seed=6)
+                        state = env._last_randomization
+                        target = state.metadata["target_sequence"][0]
+                        address = env.model.joint(target["joint"]).qposadr[0]
+                        env.data.qpos[address : address + 3] = (
+                            env._step_task_eval.metrics["goal_bin_center"][0]
+                        )
+                        opening = env.model.joint(
+                            state.metadata["drawer_joints"][0]
+                        ).qposadr[0]
+                        env.data.qpos[opening] = 0.15
+                        env.advance_physics(1)
+                        joint = env.model.joint(joint_name).id
+                        if variant == "hinge":
+                            env.model.jnt_type[joint] = mujoco.mjtJoint.mjJNT_HINGE
+                        elif variant == "unlimited":
+                            env.model.jnt_limited[joint] = 0
+                        else:
+                            env.model.jnt_range[joint, 0] = -0.01
+                        env.data.qvel[:] = 0.3
+                        env.data.ctrl[:] = 0.2
+                        env.data.time = 12
+                        env.cur_step = 7
+                        sampler = env._task_randomizer
+                        if not has_sampler:
+                            del env._task_randomizer
+                        physical = _physical(env)
+                        model, data = env.model, env.data
+                        runtime = env.task_runtime_debug_state()
+                        retained = env._task_runtime.retained_randomization().to_dict()
+                        prompt = env.prompt
+                        evaluation = env._step_task_eval
+                        evaluator = env._task_evaluator
+                        opened = evaluator._opened_drawers.copy()
+                        credited = evaluator._credited_openings.copy()
+                        completed = evaluator._completed_target_count.copy()
+                        owner = env._episode_restorer
+                        rng = copy.deepcopy(env.np_random.bit_generator.state)
+                        message = (
+                            "slide joint"
+                            if variant == "hinge"
+                            else "zero-based travel limit"
+                        )
+                        with self.assertRaisesRegex(ValueError, message):
+                            env.reset(seed=0)
+                        self.assertIs(env.model, model)
+                        self.assertIs(env.data, data)
+                        self.assert_physical_equal(env, physical)
+                        self.assertEqual(env.data.time, 12)
+                        self.assertEqual(env.cur_step, 7)
+                        self.assertEqual(env.prompt, prompt)
+                        self.assertEqual(env.task_runtime_debug_state(), runtime)
+                        self.assertEqual(
+                            env._task_runtime.retained_randomization().to_dict(),
+                            retained,
+                        )
+                        self.assertEqual(env.np_random.bit_generator.state, rng)
+                        self.assertIs(env._step_task_eval, evaluation)
+                        self.assertIs(env._task_evaluator, evaluator)
+                        np.testing.assert_array_equal(evaluator._opened_drawers, opened)
+                        np.testing.assert_array_equal(
+                            evaluator._credited_openings, credited
+                        )
+                        np.testing.assert_array_equal(
+                            evaluator._completed_target_count, completed
+                        )
+                        self.assertIs(env._last_randomization, state)
+                        self.assertIs(env._episode_restorer, owner)
+                        if has_sampler:
+                            self.assertIs(env._task_randomizer, sampler)
+                        else:
+                            self.assertFalse(hasattr(env, "_task_randomizer"))
+                        env.model.jnt_type[joint] = mujoco.mjtJoint.mjJNT_SLIDE
+                        env.model.jnt_limited[joint] = 1
+                        env.model.jnt_range[joint, 0] = 0
+                        env.reset(seed=0)
+                        self.assertIs(env.model, model)
+                        self.assertEqual(
+                            env.task_runtime_debug_state()["completed_target_count"], 0
+                        )
+                        self.assertIs(env._episode_restorer, env._task_randomizer)
+
+    def test_native_scene_preserves_custom_slide_limits(self):
+        for variant in ("unlimited", "nonzero_lower"):
+            with self.subTest(variant=variant):
+                env = _env("multi_drawer_search")
+                for name in drawer._MULTI_DRAWER_SEARCH_DRAWER_JOINT_BY_DRAWER.values():
+                    joint = env.model.joint(name).id
+                    if variant == "unlimited":
+                        env.model.jnt_limited[joint] = 0
+                    else:
+                        env.model.jnt_range[joint, 0] = -0.01
+                env.reset(seed=6)
+                saved = copy.deepcopy(env._last_randomization)
+                env._task_randomizer.apply(env.model, env.data, saved)
+                env.reset(randomize=False)
+                self.assertEqual(env._last_randomization.to_dict(), saved.to_dict())
 
     def test_invalid_effective_sequence_rejects_before_any_episode_mutation(self):
         env = _env()
@@ -402,6 +496,7 @@ class DrawerSceneTest(unittest.TestCase):
             "missing_label",
             "bad_drawer",
             "bad_layout",
+            "contradictory_label",
         ):
             with self.subTest(variant=variant):
                 bad = copy.deepcopy(saved)
@@ -416,6 +511,8 @@ class DrawerSceneTest(unittest.TestCase):
                     del sequence[0]["label"]
                 elif variant == "bad_drawer":
                     sequence[0]["drawer"] = "missing"
+                elif variant == "contradictory_label":
+                    sequence[0]["label"] = "a different physical object"
                 else:
                     bad.metadata["stack_poses"] = {}
                 bad_record = copy.deepcopy(bad.to_dict())

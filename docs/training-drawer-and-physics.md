@@ -18,6 +18,9 @@ The declared count must match the actual ordered sequence; malformed, repeated,
 or inconsistently associated targets are rejected before replay changes the
 running episode. Explicit native counts 1–4 sample enough objects to satisfy the
 request. The no-count native sampling distribution and RNG order are unchanged.
+Each active object's recorded label identifies the requested object. Ordered
+targets must repeat that label consistently with their body, joint, and source
+drawer; replay rejects contradictory labels before changing the running episode.
 
 ## Reward and prompt sequence
 
@@ -88,7 +91,11 @@ replay leaves the previous restorer in place.
 Drawer scene readiness follows the bound model's inventory. Complete assembled
 scenes are validated and reused; native templates are assembled before sampling.
 Incomplete or mixed assembled inventories are rejected before reset clears
-dynamics or retained episode state. This applies to direct full-XML construction
+dynamics or retained episode state. Readiness and evaluator preparation share
+the selected task's read-only drawer-joint validation. The shaped task requires
+limited slides with zero lower travel bounds on every potentially sampled drawer,
+including currently inactive stacks. Native drawer tasks retain their existing
+custom slide-limit semantics. This applies to direct full-XML construction
 and to randomized resets after replay. `enable_task_randomizer=False` skips
 initial sampler attachment; an explicit randomized reset can initialize a sampler
 and subsequent resets reuse it. When starting with a native template and sampling
@@ -97,6 +104,9 @@ Bound drawer replay expects that assembled inventory.
 
 Explicit replay with `keep_arm_state=True`, or retained reset with
 `options={"keep_arm_state": True}`, carries the current arm and gripper pose.
+This includes both physical fingers on each gripper; the 14D policy projection
+does not include every physical robot joint. Scene-object poses still come from
+the sampled or recorded initial scene.
 The default restores configured arm initialization. Both choices clear
 velocities, controls, time, step count, and chronological drawer history.
 

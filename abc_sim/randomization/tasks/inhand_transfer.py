@@ -89,10 +89,10 @@ class InHandTransferRandomizer(SceneRandomizer):
         xml = _inhand_apply_scene_transforms(xml, self._scene_xml_transform_options)
 
         if env is not None:
-            preserved_arm_state = env._get_reset_arm_state()
+            preserved_robot_qpos = env._get_reset_robot_qpos()
             env.reload_from_xml(xml)
             mujoco.mj_resetData(env.model, env.data)
-            env._set_qpos_from_state(preserved_arm_state)
+            env._set_robot_qpos(preserved_robot_qpos)
             jnt_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_JOINT, "task_object_joint")
             qadr = env.model.jnt_qposadr[jnt_id]
             w, s = np.cos(yaw / 2), np.sin(yaw / 2)
@@ -135,10 +135,10 @@ class InHandTransferRandomizer(SceneRandomizer):
         )
         xml = _inhand_apply_scene_transforms(xml, self._scene_xml_transform_options)
 
-        preserved_arm_state = env._get_reset_arm_state()
+        preserved_robot_qpos = env._get_reset_robot_qpos()
         env.reload_from_xml(xml)
         mujoco.mj_resetData(env.model, env.data)
-        env._set_qpos_from_state(preserved_arm_state)
+        env._set_robot_qpos(preserved_robot_qpos)
         jnt_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_JOINT, "task_object_joint")
         qadr = env.model.jnt_qposadr[jnt_id]
         env.data.qpos[qadr:qadr + 3] = pos

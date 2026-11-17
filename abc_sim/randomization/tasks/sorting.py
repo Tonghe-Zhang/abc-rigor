@@ -166,10 +166,10 @@ class _VariableCountSortingRandomizer(_ScaleAwareTabletopRandomizer):
 
     def _reload_configured_scene(self) -> None:
         env = self._env_ref
-        preserved_arm_state = env._get_reset_arm_state()
+        preserved_robot_qpos = env._get_reset_robot_qpos()
         env.reload_from_xml(self._scene_xml_for_scale_states({}))
         mujoco.mj_resetData(env.model, env.data)
-        env._set_qpos_from_state(preserved_arm_state)
+        env._set_robot_qpos(preserved_robot_qpos)
         mujoco.mj_forward(env.model, env.data)
 
     def randomize(
