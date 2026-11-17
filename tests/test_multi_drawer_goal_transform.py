@@ -365,6 +365,76 @@ class DrawerGoalTransformTest(unittest.TestCase):
             self.assertIs(source.model, model)
             self.assertIs(source._episode, episode)
 
+    def test_rejected_task_rebinding_preserves_running_task_then_accepts_valid_spec(
+        self,
+    ):
+        root = ET.fromstring(self.identity_xml)
+        ET.SubElement(
+            root.find("worldbody"),
+            "site",
+            name="unattached_goal",
+            type="box",
+            size=".05 .05 .05",
+        )
+        env = self.make_env(TASKS[0], ET.tostring(root, encoding="unicode"))
+        _, info = env.reset(seed=6, options={"randomization": {"target_count": 2}})
+        first = info["randomization"].metadata["target_sequence"][0]
+        self.position_target_and_check_site_oracle(env, first, (0, 0, 0), True)
+        env.advance_physics(1)
+        self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 1)
+        names = (
+            "_task_request",
+            "_task",
+            "_task_spec",
+            "_task_reset_request",
+            "_task_runtime",
+            "_task_evaluator",
+            "_step_evaluator",
+            "_step_task_eval",
+            "_episode_restorer",
+            "_last_randomization",
+            "_physics_observer",
+        )
+        before = {name: getattr(env, name) for name in names}
+        history = env.task_runtime_debug_state()
+        prompt = env.prompt
+        rng = copy.deepcopy(env.np_random.bit_generator.state)
+        env.data.qvel[:] = 0.3
+        env.data.ctrl[:] = 0.2
+        env.data.time = 12
+        env.cur_step = 7
+        physical = {
+            name: getattr(env.data, name).copy() for name in ("qpos", "qvel", "ctrl")
+        }
+        bad = SimTaskSpec(
+            name="wrong_goal",
+            env_task="multi_drawer_search",
+            prompt="find a different target",
+            evaluator_name="multi_drawer_target_in_bin",
+            evaluator_options=(("goal_site_name", "unattached_goal"),),
+        )
+        with self.assertRaisesRegex(ValueError, "goal region must belong"):
+            env.set_task(bad)
+        for name, value in before.items():
+            self.assertIs(getattr(env, name), value, name)
+        for name, value in physical.items():
+            np.testing.assert_array_equal(getattr(env.data, name), value)
+        self.assertEqual(env.data.time, 12)
+        self.assertEqual(env.cur_step, 7)
+        self.assertEqual(env.np_random.bit_generator.state, rng)
+        self.assertEqual(env.task_runtime_debug_state(), history)
+        self.assertEqual(env.prompt, prompt)
+        env.set_task(TASKS[2])
+        self.assertIs(env._task_spec, TASKS[2])
+        self.assertIsNone(env._task_evaluator)
+        self.assertIsNot(env._task_runtime, before["_task_runtime"])
+        self.assertIsNot(env._step_evaluator, before["_step_evaluator"])
+        self.assertIsNone(env._step_task_eval)
+        self.assertEqual(env.prompt, TASKS[2].prompt)
+        env.reset(seed=6, options={"randomization": {"target_count": 2}})
+        self.assertEqual(env.task_runtime_debug_state()["target_count"], 2)
+        self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

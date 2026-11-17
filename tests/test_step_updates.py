@@ -28,7 +28,7 @@ class StepUpdatesTest(unittest.TestCase):
             evaluate_model_data=mock.Mock(return_value=SimpleNamespace()),
         )
         with mock.patch("abc_sim.env.make_task_evaluator", return_value=evaluator):
-            env._bind_task_evaluator()
+            env._bind_task_evaluator(env._task_spec, env._task_runtime)
         env._task_runtime = SimpleNamespace(
             before_step=mock.Mock(),
             after_step=mock.Mock(),
@@ -112,7 +112,7 @@ class StepUpdatesTest(unittest.TestCase):
     def test_rebinding_clears_the_previous_tasks_update_requirements(self):
         env = self.make_env(requires_updates=True, control_rate=True)
         with mock.patch("abc_sim.env.make_task_evaluator", return_value=None):
-            env._bind_task_evaluator()
+            env._bind_task_evaluator(env._task_spec, env._task_runtime)
         self.assertFalse(env._step_updates)
         self.assertEqual(env._step_update_interval, 1)
         self.assertIsNone(env._step_task_eval)

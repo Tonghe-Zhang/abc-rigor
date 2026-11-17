@@ -48,6 +48,9 @@ the configured bin freejoint's body. This read-only model contract applies at
 source construction, episode preparation and configuration, and before public
 XML/model replacement changes live state. Sampler readiness reuses the same
 relationship check while retaining its complete scene-inventory requirements.
+Task rebinding constructs and validates its prospective runtime/source before
+committing task fields, so rejected configured goals retain the running task,
+prompt, cached score and progress history.
 Malformed goal ownership is rejected even when scoring or sampling is disabled,
 including compiled initialization and native scoring before reset.
 

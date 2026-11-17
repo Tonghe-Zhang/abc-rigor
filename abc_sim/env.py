@@ -32,7 +32,7 @@ from abc_sim.task_registry import (
     resolve_task,
 )
 from abc_sim.task_runtime import make_task_runtime
-from abc_sim.task_runtime.base import TaskProgressRuntime
+from abc_sim.task_runtime.base import TaskProgressRuntime, TaskRuntime
 from abc_sim.task_specs import SimTaskSpec, maybe_get_task_spec
 
 if TYPE_CHECKING:
@@ -315,7 +315,7 @@ class MuJoCoYAMEnv(gym.Env):
         self._scene_xml_string = xml_string
         self._close_camera_backend()
         self._bind_model(model)
-        self._bind_task_evaluator()
+        self._bind_task_evaluator(self._task_spec, self._task_runtime)
 
     def copy_model(self, model: mujoco.MjModel) -> mujoco.MjModel:
         """Copy a compiled model, preserving its original camera mounts.
@@ -338,21 +338,24 @@ class MuJoCoYAMEnv(gym.Env):
         self._scene_xml_string = None
         self._close_camera_backend()
         self._bind_model(replacement)
-        self._bind_task_evaluator()
+        self._bind_task_evaluator(self._task_spec, self._task_runtime)
 
-    def _bind_task_evaluator(self) -> None:
+    def _bind_task_evaluator(
+        self, task_spec: SimTaskSpec | None, runtime: TaskRuntime | None
+    ) -> None:
         """Bind optional scoring and the runtime's shared progress requirements."""
-        evaluator = make_task_evaluator(self.model, self._task_spec)
-        progress_runtime = isinstance(self._task_runtime, TaskProgressRuntime)
+        evaluator = make_task_evaluator(self.model, task_spec)
+        progress_runtime = isinstance(runtime, TaskProgressRuntime)
         source = evaluator
         if progress_runtime:
-            source = self._task_runtime.make_progress_source(
-                self.model, self._task_spec, evaluator
+            source = runtime.make_progress_source(
+                self.model, task_spec, evaluator
             )
             if not isinstance(source, EpisodeTaskEvaluator):
                 raise ValueError("Runtime progress requires an episode-aware source.")
             if evaluator is not None and source is not evaluator:
                 raise ValueError("Runtime progress and task scoring must share one source.")
+        self._task_runtime = runtime
         self._task_evaluator = evaluator
         self._step_evaluator = source
         self._uses_runtime_progress = progress_runtime
@@ -904,26 +907,30 @@ class MuJoCoYAMEnv(gym.Env):
         """
 
         resolved = resolve_task(task)
-        self._task_request = task
-        self._task = resolved.env_task or task
-        self._task_spec = resolved.task_spec or maybe_get_task_spec(task)
-        self._task_reset_request = (
-            self._task_spec.reset_request_options() if self._task_spec is not None else None
+        env_task = resolved.env_task or task
+        task_spec = resolved.task_spec or maybe_get_task_spec(task)
+        reset_request = (
+            task_spec.reset_request_options() if task_spec is not None else None
         )
         if self._prompt_override is not None:
-            self.prompt = self._prompt_override
-        elif self._task_spec is not None:
-            self.prompt = self._task_spec.prompt
+            prompt = self._prompt_override
+        elif task_spec is not None:
+            prompt = task_spec.prompt
         elif isinstance(task, str) and task:
-            self.prompt = task.replace("_", " ")
+            prompt = task.replace("_", " ")
         else:
-            self.prompt = "fold the towel"
-        self._task_runtime = make_task_runtime(
-            resolved.task_spec or self._task,
+            prompt = "fold the towel"
+        runtime = make_task_runtime(
+            resolved.task_spec or env_task,
             self.model,
             self.data,
         )
-        self._bind_task_evaluator()
+        self._bind_task_evaluator(task_spec, runtime)
+        self._task_request = task
+        self._task = env_task
+        self._task_spec = task_spec
+        self._task_reset_request = reset_request
+        self.prompt = prompt
 
     def task_runtime_debug_state(self) -> dict[str, Any] | None:
         """Return task runtime diagnostics, when a runtime is attached."""
