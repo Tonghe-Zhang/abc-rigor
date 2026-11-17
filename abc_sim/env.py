@@ -293,12 +293,22 @@ class MuJoCoYAMEnv(gym.Env):
         self.setup_model()
         self._bind_task_evaluator()
 
-    def reload_from_model(self, model: mujoco.MjModel) -> None:
-        """Swap in a copy of an already-compiled MuJoCo model."""
+    def copy_model(self, model: mujoco.MjModel) -> mujoco.MjModel:
+        """Copy a compiled model, preserving its original camera mounts.
+
+        Environment-owned model caches use this method so later reloads apply
+        constructor calibration relative to the original mounts. Calibration
+        records remain weakly held and expire with their corresponding models.
+        """
         replacement = copy.deepcopy(model)
         positions = self._wrist_camera_positions.get(model)
         if positions is not None:
             self._wrist_camera_positions[replacement] = positions.copy()
+        return replacement
+
+    def reload_from_model(self, model: mujoco.MjModel) -> None:
+        """Swap in a copy of an already-compiled MuJoCo model."""
+        replacement = self.copy_model(model)
         self._scene_xml_string = None
         self._close_camera_backend()
         self._bind_model(replacement)

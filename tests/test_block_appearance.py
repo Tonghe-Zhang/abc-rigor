@@ -2,6 +2,9 @@
 
 import gc
 import json
+import subprocess
+import sys
+import textwrap
 import unittest
 import weakref
 from copy import deepcopy
@@ -26,6 +29,10 @@ from abc_sim.randomization.assets.block_appearance import (
     validate_appearance,
 )
 from abc_sim.randomization.core import RandomizationState, _resolve_scene_xml_paths
+from abc_sim.randomization.tasks.bottles import WaterBottleRandomizer
+from abc_sim.randomization.tasks.chess import ChessRandomizer
+from abc_sim.randomization.tasks.dishrack import DishRackRandomizer
+from abc_sim.randomization.tasks.mugs import MugVariantRandomizer
 from abc_sim.spelling_goal import SpellingGoal
 from abc_sim.task_specs import SimTaskSpec, get_task_spec
 from tests.test_spelling_goals import blocks_xml
@@ -95,6 +102,40 @@ def sample_compiled_letter_faces(model, letter, texture_name):
 
 
 class AppearanceTextureTests(unittest.TestCase):
+    def test_simulator_randomizers_and_glyphs_do_not_require_imageio(self):
+        probe = textwrap.dedent(
+            """
+            import importlib.abc
+            import sys
+
+            class UnavailableImagePackages(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.split(".", 1)[0] in {"imageio", "PIL"}:
+                        raise ModuleNotFoundError(fullname)
+
+            sys.meta_path.insert(0, UnavailableImagePackages())
+            from abc_sim.task_registry import get_task_randomizer
+            from abc_sim.randomization.assets.block_appearance import (
+                LETTERS, TILE, glyph_masks, sample_appearance, texture_tiles,
+            )
+
+            assert get_task_randomizer("bottles") is not None
+            masks = glyph_masks()
+            assert set(masks) == set(LETTERS)
+            assert all(mask.sum() > 150 for mask in masks.values())
+            body, face = texture_tiles("B", sample_appearance(31)["blocks"]["B"])
+            assert body.shape == face.shape == (TILE, TILE, 3)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=SCENE.parents[2],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_seed_roundtrip_variety_and_no_fixed_letter_color(self):
         records = [sample_appearance(seed) for seed in range(12)]
         self.assertEqual(records, [sample_appearance(seed) for seed in range(12)])
@@ -493,6 +534,64 @@ class AppearanceSceneTests(unittest.TestCase):
 
 
 class CameraModelBindingTests(unittest.TestCase):
+    def test_native_model_cache_cycles_preserve_camera_mounts(self):
+        scene = blocks_xml().replace(
+            "<worldbody>",
+            '<worldbody><camera name="left" pos=".1 .2 .3" fovy="58"/>'
+            '<camera name="right" pos=".4 .5 .6" fovy="58"/>',
+        )
+        replacement_scene = scene.replace('pos=".1 .2 .3"', 'pos=".7 .8 .9"')
+        for wrist_fov in (58, 72):
+            for randomizer_type in (
+                WaterBottleRandomizer,
+                ChessRandomizer,
+                DishRackRandomizer,
+                MugVariantRandomizer,
+            ):
+                with self.subTest(
+                    randomizer=randomizer_type.__name__, wrist_fov=wrist_fov
+                ):
+                    env = make_env(
+                        task="spell_cat",
+                        scene_xml_string=scene,
+                        render_cameras=False,
+                        wrist_fov=wrist_fov,
+                    )
+                    self.addCleanup(env.close)
+                    randomizer = randomizer_type()
+                    randomizer.bind_env(env)
+                    expected = {}
+                    for key, xml in (
+                        ("original", scene),
+                        ("changed", replacement_scene),
+                    ):
+                        env.reload_from_xml(xml)
+                        expected[key] = (
+                            env.model.cam_pos.copy(),
+                            env.model.cam_fovy.copy(),
+                        )
+                        randomizer._store_compiled_scene_model((key,))
+                    for key in ("original", "changed") * 3:
+                        self.assertTrue(
+                            randomizer._try_reload_cached_scene_model((key,))
+                        )
+                        np.testing.assert_array_equal(
+                            env.model.cam_pos, expected[key][0]
+                        )
+                        np.testing.assert_array_equal(
+                            env.model.cam_fovy, expected[key][1]
+                        )
+                    templates = [
+                        weakref.ref(model)
+                        for model in randomizer._compiled_scene_model_cache.values()
+                    ]
+                    randomizer._compiled_scene_model_cache.clear()
+                    gc.collect()
+                    self.assertTrue(all(template() is None for template in templates))
+                    self.assertEqual(
+                        len(env._wrist_camera_positions), int(wrist_fov != 58)
+                    )
+
     def test_cached_model_reloads_do_not_accumulate_camera_clearance(self):
         scene = blocks_xml().replace(
             "<worldbody>",

@@ -53,6 +53,14 @@ appearance resets, replay, and restoration; reloading a cached model does not
 apply the clearance adjustment again. Camera clearance uses each incoming
 model's own mounts, including changed replacement XML. Calibration records use
 weak references so discarded models are not retained.
+Model caches call `env.copy_model(model)` to preserve the original camera mounts
+across template copies; copying a calibrated model outside that API does not
+carry its calibration record.
+
+Native MuJoCo rendering uses the sampled matte/satin/gloss material parameters.
+The current Blender material conversion replaces those finish parameters with
+fixed shader settings. Blender preserves the sampled textures and colors, but
+does not reproduce the recorded finish variation.
 
 Applying a saved spelling `RandomizationState` through the bound randomizer
 first calls `initialize_randomization()` to reset transient physics, including
@@ -77,8 +85,10 @@ textures in that shared-model renderer are not implemented here.
 
 ## CPU validation and preview
 
-Use an environment with the project's declared MuJoCo, NumPy, Gymnasium, and
-ImageIO dependencies. The preview uses Pillow, supplied by ImageIO, for labels.
+The simulator and CPU tests use the declared MuJoCo, NumPy, and Gymnasium
+dependencies. MuJoCo's PNG texture loader decodes the bundled glyph atlas.
+The optional preview uses Pillow, supplied by the root project's ImageIO
+dependency, for images and labels.
 
 ```bash
 CUDA_VISIBLE_DEVICES='' python -m unittest \

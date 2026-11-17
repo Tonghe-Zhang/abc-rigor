@@ -9,7 +9,7 @@ from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
-import imageio.v3 as iio
+import mujoco
 import numpy as np
 
 LETTERS = string.ascii_uppercase
@@ -156,7 +156,17 @@ def glyph_masks() -> dict[str, np.ndarray]:
     The bundled atlas and OBJ UVs supply letter shapes and orientation. No
     system font, downloaded font, original face panel or wood pixel is reused.
     """
-    atlas = iio.imread(BLOCK_ASSETS / "texture.png")
+    spec = mujoco.MjSpec()
+    spec.add_texture(
+        name="glyph_atlas",
+        type=mujoco.mjtTexture.mjTEXTURE_2D,
+        file=str(BLOCK_ASSETS / "texture.png"),
+        nchannel=3,
+        hflip=False,
+        vflip=False,
+    )
+    model = spec.compile()
+    atlas = model.tex_data.reshape(int(model.tex_height[0]), int(model.tex_width[0]), 3)
     masks = {}
     for letter in LETTERS:
         _, _, _, bounds = _mesh(letter)

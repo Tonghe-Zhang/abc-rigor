@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from collections import OrderedDict
 from typing import Any
 
@@ -357,7 +356,7 @@ class MugVariantRandomizer(SceneRandomizer):
         if cache is None:
             self._compiled_scene_model_cache = OrderedDict()
             cache = self._compiled_scene_model_cache
-        cache[cache_key] = copy.deepcopy(self._env_ref.model)
+        cache[cache_key] = self._env_ref.copy_model(self._env_ref.model)
         cache.move_to_end(cache_key)
         while len(cache) > self._scene_model_cache_size:
             cache.popitem(last=False)
