@@ -71,7 +71,7 @@ class TaskProgressRuntime(TaskRuntime, Protocol):
         data: mujoco.MjData,
         *,
         randomization: Any = None,
-        episode: Any = None,
+        episode: Any,
     ) -> None:
         """Start prompts from the same prepared definition as the progress source."""
 

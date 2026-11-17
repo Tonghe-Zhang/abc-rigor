@@ -90,14 +90,16 @@ class TaskEvaluator(Protocol):
 class EpisodeTaskEvaluator(TaskEvaluator, Protocol):
     """Prepare and consume one task-owned episode definition.
 
-    Preparation is read-only and runs before replay changes model, data or
-    episode history. The environment passes its opaque result to both
+    Preparation is read-only and runs before reset/replay changes data or
+    episode history. A ``None`` state requests the compiled initial episode,
+    which may be rejected when the task requires sampled/recorded metadata.
+    The environment passes its opaque result to both
     ``configure_episode`` and the runtime's ``after_reset(..., episode=...)``.
     A runtime can use this source for progress without exposing reward scores.
     """
 
-    def prepare_randomization(self, model: Any, state: Any) -> Any:
-        """Validate the recording and return its initial episode definition."""
+    def prepare_randomization(self, model: Any, state: Any | None) -> Any:
+        """Validate a recording or compiled initial state and return its definition."""
 
     def configure_episode(self, model: Any, episode: Any) -> None:
         """Bind the validated definition after restoring the initial scene."""

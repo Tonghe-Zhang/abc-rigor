@@ -22,6 +22,15 @@ Each active object's recorded label identifies the requested object. Ordered
 targets must repeat that label consistently with their body, joint, and source
 drawer; replay rejects contradictory labels before changing the running episode.
 
+A fresh `reset(randomize=False)` prepares the compiled initial episode before
+clearing dynamics, RNG state or runtime history. The native compiled fallback
+has one target and is available only when it satisfies the task's fixed
+constraints. A task fixing two targets must first sample an episode or replay a
+recording; it cannot silently initialize a one-target task. Sampling defaults
+remain distinct from fixed constraints. Reset, replay and compiled-state
+inspection use the same definition preparer, and the runtime receives that
+validated definition without constructing a separate fallback.
+
 ## Reward and prompt sequence
 
 Let `C` be the number of ordered targets already deposited in the goal bin and
@@ -30,6 +39,10 @@ Let `C` be the number of ordered targets already deposited in the goal bin and
 of the next uncompleted target. Completion gives `B=1`. Both target count and
 current-target selection are updated before calculating proximity; a deposited
 target cannot simultaneously earn completion and current-target credit.
+Goal containment uses the complete bin-to-site transform, including the site's
+local orientation and center. These model constants are cached on binding, so
+rotated nonsquare regions use the same qpos-only observation path. The XY
+proximity score remains measured from the transformed world-space goal center.
 
 The training task returns `0.75 * B + drawer_bonus` until completion, then exactly
 `1`. Opening each previously unopened drawer adds `0.05`, with at most `0.20`
@@ -51,7 +64,7 @@ One drawer progress source advances runtime prompts on every native physics
 tick. When reward evaluation is configured, that evaluator is the same source;
 the environment observes it once and shares the result. Score queries read the
 last observed result without advancing history again. Native scoring can inspect
-the compiled initial state before reset; shaped scoring requires its sampled
+a task-compatible compiled initial state before reset; shaped scoring requires its sampled
 episode metadata. Ordered deposit progress remains latched, including
 transient bin entries, as in the existing sequence semantics. Reward-history
 replay must start from reset and provide chronological physics observations.

@@ -227,6 +227,159 @@ class DrawerCustomSpecTest(unittest.TestCase):
                             )
                         self.assertEqual(evaluate.call_count, expected_calls)
 
+    def test_fresh_fixed_count_rejects_before_state_changes_then_accepts_recordings(
+        self,
+    ):
+        for scoring in (None, "multi_drawer_target_in_bin"):
+            for enabled in (False, True):
+                with self.subTest(scoring=scoring, initial_sampler=enabled):
+                    task = SimTaskSpec(
+                        name="fixed_two_preview",
+                        env_task="multi_drawer_search",
+                        prompt="find two targets",
+                        evaluator_name=scoring,
+                        reset_constraints=(("target_count", 2),),
+                    )
+                    env = self.make_env(task, enabled)
+                    env.np_random = np.random.default_rng(89)
+                    env.data.qvel[:] = 0.3
+                    env.data.ctrl[:] = 0.2
+                    env.data.time = 12
+                    env.cur_step = 7
+
+                    def observer(model, data):
+                        return None
+
+                    env._physics_observer = observer
+                    physical = {
+                        name: getattr(env.data, name).copy()
+                        for name in (
+                            "qpos",
+                            "qvel",
+                            "ctrl",
+                            "qacc_warmstart",
+                            "xfrc_applied",
+                            "qfrc_applied",
+                        )
+                    }
+                    rng = copy.deepcopy(env.np_random.bit_generator.state)
+                    runtime = env.task_runtime_debug_state()
+                    model, data = env.model, env.data
+                    source, controller = env._step_evaluator, env._task_runtime
+                    sampler = getattr(env, "_task_randomizer", None)
+                    attempts = [
+                        lambda: env.reset(seed=123, randomize=False),
+                        lambda: env.finalize_randomization(None, restorer=None),
+                    ]
+                    if scoring is not None:
+                        attempts.extend(
+                            [
+                                env.evaluate_task,
+                                lambda: source.evaluate_qpos_batch(env.data.qpos[None]),
+                            ]
+                        )
+                    for attempt in attempts:
+                        with self.assertRaisesRegex(
+                            ValueError, "requires target_count=2"
+                        ):
+                            attempt()
+                        for name, values in physical.items():
+                            np.testing.assert_array_equal(
+                                getattr(env.data, name), values
+                            )
+                        self.assertEqual(env.data.time, 12)
+                        self.assertEqual(env.cur_step, 7)
+                        self.assertEqual(env.np_random.bit_generator.state, rng)
+                        self.assertEqual(env.task_runtime_debug_state(), runtime)
+                        self.assertEqual(env.prompt, task.prompt)
+                        self.assertIs(env.model, model)
+                        self.assertIs(env.data, data)
+                        self.assertIs(env._step_evaluator, source)
+                        self.assertIs(env._task_runtime, controller)
+                        self.assertIs(env._physics_observer, observer)
+                        self.assertIsNone(source._episode)
+                        self.assertIsNone(env._last_randomization)
+                        self.assertIsNone(env._episode_restorer)
+                        self.assertIsNone(env._step_task_eval)
+                        self.assertIs(getattr(env, "_task_randomizer", None), sampler)
+                        np.testing.assert_array_equal(
+                            source._completed_target_count, [0]
+                        )
+
+                    _, info = env.reset(seed=6)
+                    record = json.loads(json.dumps(info["randomization"].to_dict()))
+                    initial = env.data.qpos.copy()
+                    self.assertEqual(env.task_runtime_debug_state()["target_count"], 2)
+                    self.deposit(env, record["metadata"]["target_sequence"][0])
+                    env.advance_physics(1)
+                    self.assertEqual(
+                        env.task_runtime_debug_state()["completed_target_count"], 1
+                    )
+                    env.reset(randomize=False)
+                    np.testing.assert_array_equal(env.data.qpos, initial)
+                    self.assertEqual(
+                        env.task_runtime_debug_state()["completed_target_count"], 0
+                    )
+                    owner = env._episode_restorer
+                    env.reset(seed=0)
+                    owner.apply(
+                        env.model, env.data, RandomizationState.from_dict(record)
+                    )
+                    np.testing.assert_array_equal(env.data.qpos, initial)
+                    self.assertEqual(env.task_runtime_debug_state()["target_count"], 2)
+                    self.assertEqual(
+                        env.task_runtime_debug_state()["completed_target_count"], 0
+                    )
+
+    def test_compatible_compiled_episode_uses_native_single_target(self):
+        for scoring in (None, "multi_drawer_target_in_bin"):
+            for fixed_count in (False, True):
+                for enabled in (False, True):
+                    with self.subTest(
+                        scoring=scoring,
+                        fixed_count=fixed_count,
+                        initial_sampler=enabled,
+                    ):
+                        task = SimTaskSpec(
+                            name="compatible_preview",
+                            env_task="multi_drawer_search",
+                            prompt="find the target",
+                            evaluator_name=scoring,
+                            reset_request=(("target_count", 2),)
+                            if not fixed_count
+                            else (),
+                            reset_constraints=(("target_count", 1),)
+                            if fixed_count
+                            else (),
+                        )
+                        env = self.make_env(task, enabled)
+                        if scoring is not None:
+                            self.assertEqual(
+                                env.evaluate_task().metrics["target_count"][0], 1
+                            )
+                        _, info = env.reset(seed=12, randomize=False)
+                        self.assertNotIn("randomization", info)
+                        self.assertIsNone(env._last_randomization)
+                        self.assertIsNone(env._episode_restorer)
+                        self.assertEqual(
+                            env.task_runtime_debug_state()["target_count"], 1
+                        )
+                        self.assertEqual(env.prompt, "find the target object")
+                        self.deposit(env, {"joint": "drawer_search_target_joint"})
+                        env.advance_physics(1)
+                        self.assertEqual(env.prompt, "finished")
+                        self.assertTrue(env.task_runtime_debug_state()["complete"])
+                        if scoring is None:
+                            self.assertIsNone(env.evaluate_task())
+                        else:
+                            self.assertEqual(env.evaluate_task().scalar_reward(), 1)
+                            self.assertTrue(env.evaluate_task().scalar_success())
+                        env.reset(randomize=False)
+                        self.assertEqual(env.prompt, "find the target object")
+                        self.assertEqual(
+                            env.task_runtime_debug_state()["completed_target_count"], 0
+                        )
+
     def test_incompatible_reward_source_rejects_as_a_configuration_error(self):
         class NoDrawerProgressEvaluator:
             def __init__(self, *, model, spec):
@@ -268,51 +421,86 @@ class DrawerCustomSpecTest(unittest.TestCase):
         self.assertIsNone(env._episode_restorer)
         self.assertFalse(hasattr(env, "_task_randomizer"))
 
-    def test_native_template_unscored_task_assembles_and_advances_prompts(self):
-        task = SimTaskSpec(
-            name="drawer_preview",
-            env_task="multi_drawer_search",
-            prompt="find the target",
-        )
-        for enabled in (True, False):
-            with self.subTest(initial_sampler=enabled):
-                env = abc_sim.make_env(
-                    task,
-                    enable_task_randomizer=enabled,
-                    render_cameras=False,
-                    camera_height=4,
-                    camera_width=4,
-                )
-                try:
-                    template_id = mujoco.mj_name2id(
-                        env.model, mujoco.mjtObj.mjOBJ_BODY, "drawer_body"
+    def test_native_template_fixed_task_rejects_fallback_then_assembles(self):
+        for scoring in (None, "multi_drawer_target_in_bin"):
+            task = SimTaskSpec(
+                name="drawer_preview",
+                env_task="multi_drawer_search",
+                prompt="find the target",
+                evaluator_name=scoring,
+                reset_constraints=(("target_count", 2),),
+            )
+            for enabled in (True, False):
+                with self.subTest(scoring=scoring, initial_sampler=enabled):
+                    env = abc_sim.make_env(
+                        task,
+                        enable_task_randomizer=enabled,
+                        render_cameras=False,
+                        camera_height=4,
+                        camera_width=4,
                     )
-                    self.assertEqual(template_id >= 0, not enabled)
-                    _, info = env.reset(
-                        seed=6, options={"randomization": {"target_count": 2}}
-                    )
-                    self.assertEqual(
-                        mujoco.mj_name2id(
+                    try:
+                        template_id = mujoco.mj_name2id(
                             env.model, mujoco.mjtObj.mjOBJ_BODY, "drawer_body"
-                        ),
-                        -1,
-                    )
-                    first, second = info["randomization"].metadata["target_sequence"]
-                    self.assertEqual(env.prompt, f"find the {first['label']}")
-                    self.deposit(env, first)
-                    env.advance_physics(1)
-                    self.assertEqual(
-                        env.task_runtime_debug_state()["completed_target_count"], 1
-                    )
-                    self.assertEqual(
-                        env.get_obs()["prompt"], f"find the {second['label']}"
-                    )
-                    self.assertIsNone(env.evaluate_task())
-                    self.assertIsNone(env._task_evaluator)
-                finally:
-                    env.close()
-                    del env
-                    gc.collect()
+                        )
+                        self.assertEqual(template_id >= 0, not enabled)
+                        model, data, source = (
+                            env.model,
+                            env.data,
+                            env._step_evaluator,
+                        )
+                        env.np_random = np.random.default_rng(89)
+                        rng = copy.deepcopy(env.np_random.bit_generator.state)
+                        initial_qpos = env.data.qpos.copy()
+                        env.data.time = 12
+                        with self.assertRaisesRegex(
+                            ValueError, "requires target_count=2"
+                        ):
+                            env.reset(seed=123, randomize=False)
+                        self.assertIs(env.model, model)
+                        self.assertIs(env.data, data)
+                        self.assertIs(env._step_evaluator, source)
+                        self.assertEqual(env.np_random.bit_generator.state, rng)
+                        self.assertEqual(env.data.time, 12)
+                        np.testing.assert_array_equal(env.data.qpos, initial_qpos)
+                        self.assertIsNone(env._last_randomization)
+                        self.assertIsNone(env._episode_restorer)
+                        self.assertEqual(hasattr(env, "_task_randomizer"), enabled)
+
+                        _, info = env.reset(seed=6)
+                        self.assertEqual(
+                            mujoco.mj_name2id(
+                                env.model, mujoco.mjtObj.mjOBJ_BODY, "drawer_body"
+                            ),
+                            -1,
+                        )
+                        first, second = info["randomization"].metadata[
+                            "target_sequence"
+                        ]
+                        self.assertEqual(env.prompt, f"find the {first['label']}")
+                        self.deposit(env, first)
+                        env.advance_physics(1)
+                        self.assertEqual(
+                            env.task_runtime_debug_state()["completed_target_count"],
+                            1,
+                        )
+                        self.assertEqual(
+                            env.get_obs()["prompt"], f"find the {second['label']}"
+                        )
+                        if scoring is None:
+                            self.assertIsNone(env.evaluate_task())
+                            self.assertIsNone(env._task_evaluator)
+                        else:
+                            self.assertEqual(
+                                env.evaluate_task().metrics["completed_target_count"][
+                                    0
+                                ],
+                                1,
+                            )
+                    finally:
+                        env.close()
+                        del env
+                        gc.collect()
 
 
 if __name__ == "__main__":

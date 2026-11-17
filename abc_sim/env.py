@@ -473,9 +473,11 @@ class MuJoCoYAMEnv(gym.Env):
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
-            if randomize and randomizer is not None:
-                randomizer = randomizer.clone()
-                randomizer.bind_env(self)
+        sampling = randomize and randomizer is not None
+        episode = None if sampling else self.prepare_randomization(None)
+        if sampling and getattr(self, "_task_randomizer", None) is None:
+            randomizer = randomizer.clone()
+            randomizer.bind_env(self)
         if randomizer is not None:
             prepare_reset = getattr(randomizer, "prepare_reset", None)
             if prepare_reset is not None:
@@ -501,10 +503,12 @@ class MuJoCoYAMEnv(gym.Env):
             self._last_randomization.metadata["physics_profile"] = (
                 self.physics_profile_metadata()
             )
+            episode = self.prepare_randomization(self._last_randomization)
 
         self.finalize_randomization(
             self._last_randomization,
             restorer=randomizer if self._last_randomization is not None else None,
+            episode=episode,
             keep_arm_state=(options or {}).get("keep_arm_state", False),
         )
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
@@ -529,8 +533,8 @@ class MuJoCoYAMEnv(gym.Env):
         self._set_robot_qpos(robot_qpos)
         mujoco.mj_forward(self.model, self.data)
 
-    def prepare_randomization(self, state: RandomizationState) -> Any:
-        """Validate and prepare task-owned episode data before replay mutation."""
+    def prepare_randomization(self, state: RandomizationState | None) -> Any:
+        """Validate a recorded or compiled initial episode before mutation."""
         if isinstance(self._step_evaluator, EpisodeTaskEvaluator):
             return self._step_evaluator.prepare_randomization(self.model, state)
         return None
@@ -558,9 +562,9 @@ class MuJoCoYAMEnv(gym.Env):
                 "Episode state requires a restorer bound to this environment."
             )
         self._validate_physics_observation_cadence()
-        self._physics_observer = None
-        if episode is None and state is not None:
+        if episode is None:
             episode = self.prepare_randomization(state)
+        self._physics_observer = None
         self._last_randomization = state
         if state is not None:
             prompt = state.metadata.get("prompt")

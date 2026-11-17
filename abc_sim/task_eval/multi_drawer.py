@@ -49,6 +49,10 @@ class MultiDrawerSearchProgress:
     ) -> None:
         self.model = model
         self.spec = spec
+        self._initial_target_joint_name = target_joint_name
+        self._goal_bin_joint_name = goal_bin_joint_name
+        self._goal_site_name = goal_site_name
+        self._episode: DrawerEpisode | None = None
         self._target_qpos_addrs = [
             self._resolve_free_joint_qpos_addr(model, target_joint_name)
         ]
@@ -56,10 +60,11 @@ class MultiDrawerSearchProgress:
             model,
             goal_bin_joint_name,
         )
-        self._goal_local_center, self._goal_half_size = self._resolve_goal_site(
-            model,
-            goal_site_name,
-        )
+        (
+            self._goal_local_center,
+            self._rot_bin_from_goal,
+            self._goal_half_size,
+        ) = self._resolve_goal_site(model, goal_site_name)
         self.reset(nworld=1)
 
     def configure_from_randomization(
@@ -71,7 +76,20 @@ class MultiDrawerSearchProgress:
 
     def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
         """Validate the effective sequence before changing episode or physics state."""
-        episode = DrawerEpisode.from_metadata(randomization.metadata)
+        if randomization is None:
+            joint_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_JOINT, self._initial_target_joint_name
+            )
+            self._resolve_free_joint_qpos_addr(model, self._initial_target_joint_name)
+            metadata = {
+                "target_joint": self._initial_target_joint_name,
+                "target_body": mujoco.mj_id2name(
+                    model, mujoco.mjtObj.mjOBJ_BODY, model.jnt_bodyid[joint_id]
+                ),
+            }
+        else:
+            metadata = randomization.metadata
+        episode = DrawerEpisode.from_metadata(metadata)
         self.spec.resolve_reset_request({"target_count": len(episode.targets)})
         for target in episode.targets:
             self._resolve_free_joint_qpos_addr(model, target.joint)
@@ -99,16 +117,18 @@ class MultiDrawerSearchProgress:
             self.model = model
             self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
                 model,
-                "drawer_search_goal_bin_joint",
+                self._goal_bin_joint_name,
             )
-            self._goal_local_center, self._goal_half_size = self._resolve_goal_site(
-                model,
-                "drawer_search_goal_region",
-            )
+            (
+                self._goal_local_center,
+                self._rot_bin_from_goal,
+                self._goal_half_size,
+            ) = self._resolve_goal_site(model, self._goal_site_name)
         self._target_qpos_addrs = [
             self._resolve_free_joint_qpos_addr(self.model, joint_name)
             for joint_name in (target.joint for target in episode.targets)
         ]
+        self._episode = episode
         self.reset(nworld=self._nworld)
 
     def reset(self, *, nworld: int = 1) -> None:
@@ -129,7 +149,7 @@ class MultiDrawerSearchProgress:
     def _resolve_goal_site(
         model: mujoco.MjModel,
         goal_site_name: str,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         site_id = mujoco.mj_name2id(
             model,
             mujoco.mjtObj.mjOBJ_SITE,
@@ -139,10 +159,15 @@ class MultiDrawerSearchProgress:
             raise ValueError(f"Site {goal_site_name!r} not found in model")
         return (
             np.asarray(model.site_pos[site_id], dtype=np.float32).copy(),
+            _quat_to_rotmat_batch(model.site_quat[site_id][None])[0],
             np.asarray(model.site_size[site_id], dtype=np.float32).copy(),
         )
 
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
+        if self._episode is None:
+            self.configure_episode(
+                self.model, self.prepare_randomization(self.model, None)
+            )
         qpos_batch = np.asarray(qpos_batch, dtype=np.float32)
         if qpos_batch.ndim != 2 or qpos_batch.shape[1] != self.model.nq:
             raise ValueError(
@@ -167,7 +192,12 @@ class MultiDrawerSearchProgress:
             np.swapaxes(rot_world_from_bin, 1, 2),
             rel_world,
         )
-        delta = np.abs(rel_bin - self._goal_local_center[None, None, :])
+        rel_goal = np.einsum(
+            "ij,btj->bti",
+            self._rot_bin_from_goal.T,
+            rel_bin - self._goal_local_center[None, None, :],
+        )
+        delta = np.abs(rel_goal)
         targets_in_bin = np.all(
             delta <= self._goal_half_size[None, None, :],
             axis=2,
@@ -264,6 +294,10 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         super().__init__(**kwargs)
 
     def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
+        if randomization is None:
+            raise RuntimeError(
+                "Shaped drawer evaluation requires reset randomization metadata."
+            )
         episode = super().prepare_randomization(model, randomization)
         if not episode.drawers or any(target.drawer not in episode.drawers for target in episode.targets):
             raise ValueError("Each target must identify an active source drawer.")

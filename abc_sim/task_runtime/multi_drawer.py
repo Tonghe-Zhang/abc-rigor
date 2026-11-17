@@ -53,14 +53,10 @@ class MultiDrawerSearchRuntime:
         data: mujoco.MjData,
         *,
         randomization: Any = None,
-        episode: DrawerEpisode | None = None,
+        episode: DrawerEpisode,
     ) -> None:
-        """Load the reset's sampled target sequence."""
+        """Load the shared source's validated initial target sequence."""
 
-        if episode is None:
-            episode = DrawerEpisode.from_metadata(
-                {} if randomization is None else randomization.metadata
-            )
         self._targets = [
             {"body": target.body, "joint": target.joint, "label": target.label}
             for target in episode.targets
