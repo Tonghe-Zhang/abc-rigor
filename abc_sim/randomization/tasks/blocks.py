@@ -40,12 +40,31 @@ class BlocksRandomizer(SceneRandomizer):
         for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     ]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._appearance_active = False
+        self._appearance_model: mujoco.MjModel | None = None
+
     def _get_size_perturbations(self) -> list[ScalePerturbRange]:
         return []
 
+    def prepare_reset(
+        self, *, request: Any | None = None, randomize: bool = True
+    ) -> None:
+        """Restore native visuals when the requested task has no appearance."""
+        appearance_requested = (
+            isinstance(request, dict) and request.get("randomize_appearance") is True
+        )
+        if appearance_requested and not randomize:
+            raise ValueError(
+                "Appearance tasks require a randomized reset or saved-state replay."
+            )
+        if not appearance_requested:
+            self._restore_visuals(None)
+
     def _restore_visuals(self, appearance: dict | None) -> None:
         """Reload complete textures before creating any camera backend."""
-        if appearance is None and not getattr(self, "_appearance_active", False):
+        if appearance is None and not self._appearance_active:
             return
         if self._env_ref is None:
             raise RuntimeError(
@@ -60,7 +79,7 @@ class BlocksRandomizer(SceneRandomizer):
                 )
             )
         else:
-            if not hasattr(self, "_appearance_model"):
+            if self._appearance_model is None:
                 xml = appearance_xml(self._base_scene_xml_string)
                 self._appearance_model = mujoco.MjModel.from_xml_string(
                     _resolve_scene_xml_paths(xml, self._base_scene_xml_dir)
@@ -72,6 +91,12 @@ class BlocksRandomizer(SceneRandomizer):
 
     def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
         """Replay realized materials and poses without resampling."""
+        self._apply_scene(model, data, state)
+        if self._env_ref is not None:
+            self._env_ref.finalize_randomization(state)
+
+    def _apply_scene(self, model: Any, data: Any, state: RandomizationState) -> None:
+        """Restore the model and poses before episode finalization."""
         self._restore_visuals(state.metadata.get("block_appearance"))
         if self._env_ref is not None:
             model, data = self._env_ref.model, self._env_ref.data
@@ -114,8 +139,8 @@ class BlocksRandomizer(SceneRandomizer):
             state.metadata.update(goal.to_metadata())
         if appearance is not None:
             state.metadata["block_appearance"] = appearance
-        if appearance is not None or getattr(self, "_appearance_active", False):
-            self.apply(model, data, state)
+        if appearance is not None or self._appearance_active:
+            self._apply_scene(model, data, state)
         return state
 
 

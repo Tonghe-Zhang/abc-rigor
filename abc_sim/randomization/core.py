@@ -378,6 +378,12 @@ class SceneRandomizer:
             self._base_scene_xml_dir = _Path(env._scene_xml).parent
             self._base_scene_xml_transformed = False
 
+    def prepare_reset(
+        self, *, request: Any | None = None, randomize: bool = True
+    ) -> None:
+        """Optional hook for task-owned model state before placement sampling."""
+        return None
+
     def randomize(
         self,
         model: Any,

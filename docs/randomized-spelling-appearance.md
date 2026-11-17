@@ -47,8 +47,21 @@ resampling. A single compiled appearance template is reused; its compact
 per-block textures replace the old shared atlas. Each reset fills the complete
 texture/material buffers before rebuilding the camera backend, ensuring both
 CPU and GPU camera providers receive the current materials. Switching back to
-a legacy task restores its original scene. No generated texture files are
-needed for replay; the recorded parameters and bundled glyph assets suffice.
+a legacy task restores its original scene with either `randomize=True` or
+`randomize=False`. Constructor wrist-camera FOV and clearance positions survive
+appearance resets, replay, and restoration; reloading a cached model does not
+apply the clearance adjustment again.
+
+Applying a saved spelling `RandomizationState` through the bound randomizer
+also calls the environment's `finalize_randomization(state)` operation. The
+restored initial scene therefore has the recorded goal, prompt, metadata and
+an initialized evaluator and can immediately be scored or stepped. Normal
+reset uses the same finalization operation. This starts a new episode; it does
+not reconstruct history-dependent rewards from an arbitrary mid-episode qpos
+snapshot. A fresh appearance task needs a randomized reset or a saved-state
+replay; `reset(randomize=False)` alone cannot supply its goal or appearance.
+No generated texture files are needed for replay; the recorded parameters and
+bundled glyph assets suffice.
 
 Use independent environments for these tasks. `BatchedWarpYAMEnv` shares texture
 buffers across worlds and therefore rejects appearance-randomized resets before
@@ -73,4 +86,8 @@ sampled face/body tiles for the same letters across all three material families,
 plus every cleaned glyph. Matte/gloss differences require lighting in a 3D
 renderer; the RGB sheet only displays their recorded labels. CPU tests verify
 physical parameter equality, seed independence, metadata replay, glyph
-extraction, contrast, and legacy restoration. No GPU rendering is required.
+extraction, contrast, and legacy restoration. A separate CPU check samples the
+original and generated compiled meshes through their UVs on both letter faces
+for asymmetric glyphs; it checks orientation without relying on a texture-buffer
+row-reversal assertion. These checks do not establish 3D lighting or GPU renderer
+qualification. No GPU rendering is required.

@@ -166,8 +166,6 @@ def make_env(
     Returns:
         Configured MuJoCoYAMEnv instance.
     """
-    import mujoco
-
     from abc_sim.config import get_i2rt_sim_config
     from abc_sim.env import MuJoCoYAMEnv
     from abc_sim.task_registry import (
@@ -230,6 +228,7 @@ def make_env(
             camera_gpu_id=camera_gpu_id,
             prompt=prompt,
             chunk_dim=chunk_dim,
+            wrist_fov=wrist_fov,
             scene_xml=None,
             **physics_kwargs,
         )
@@ -283,6 +282,7 @@ def make_env(
             camera_gpu_id=camera_gpu_id,
             prompt=prompt,
             chunk_dim=chunk_dim,
+            wrist_fov=wrist_fov,
             scene_xml=scene_xml_path,
             **physics_kwargs,
         )
@@ -293,19 +293,6 @@ def make_env(
     env._scene_xml_transform_options = scene_xml_transform_options
     if scene_xml_string is not None:
         env._scene_xml_string = scene_xml_string
-
-    if wrist_fov != 58.0:
-        import math
-
-        # Wider FOV causes the frustum edges to clip into the gripper geometry.
-        tan_baseline = math.tan(math.radians(58.0 / 2))
-        tan_new = math.tan(math.radians(wrist_fov / 2))
-        clearance_offset = max(0.0, (tan_new - tan_baseline) / tan_baseline) * 0.025
-        for cam_name in ("left", "right"):
-            cam_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_CAMERA, cam_name)
-            if cam_id >= 0:
-                env.model.cam_fovy[cam_id] = wrist_fov
-                env.model.cam_pos[cam_id][1] -= clearance_offset
 
     base_randomizer = get_task_randomizer(env_task) if enable_task_randomizer else None
     if base_randomizer is not None:
