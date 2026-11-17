@@ -370,6 +370,29 @@ class LegoBlocksResetRequest(SortingResetRequest):
             )
 
 
+@dataclass(frozen=True)
+class MultiDrawerSearchResetRequest:
+    """Optional exact target count for the drawer search sequence."""
+
+    target_count: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.target_count is not None and (
+            type(self.target_count) is not int or not 1 <= self.target_count <= 4
+        ):
+            raise ValueError("target_count must be an integer between 1 and 4.")
+
+    @classmethod
+    def from_value(cls, value: Any | None) -> MultiDrawerSearchResetRequest:
+        if value is None:
+            return cls()
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, dict):
+            raise TypeError("Drawer reset request must be a dict or MultiDrawerSearchResetRequest.")
+        return cls(**value)
+
+
 class _SweepPlacementFailure(RuntimeError):
     """Internal signal that one sweep placement attempt should be retried."""
 

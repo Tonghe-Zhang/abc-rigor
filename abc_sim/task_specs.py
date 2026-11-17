@@ -228,6 +228,14 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         ),
     ),
     SimTaskSpec(
+        name="multi_drawer_search_2_shaped",
+        env_task="multi_drawer_search",
+        prompt="find the target object hidden in one of the drawers and place it in the bin",
+        description="Training variant with two ordered targets and episode-unique drawer-opening credit; the caller controls the horizon.",
+        evaluator_name="multi_drawer_search_shaped_v1",
+        reset_request=(("target_count", 2),),
+    ),
+    SimTaskSpec(
         name="put_markers_in_top_drawer",
         env_task="drawer",
         prompt="put the markers in the top drawer",

@@ -5,34 +5,21 @@ from __future__ import annotations
 from typing import Any
 
 import mujoco
-import numpy as np
+from abc_sim.task_eval.base import TaskEvalResult
 
 
 class MultiDrawerSearchRuntime:
     """Advance through prompted objects as they are placed in the goal bin."""
 
     def __init__(self) -> None:
-        self._goal_site_id = -1
-        self._target_body_ids: list[int] = []
         self._targets: list[dict[str, str]] = []
         self._current_index = 0
         self._display_prompt = "find the target object"
         self._state = "waiting_for_target"
 
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
-        """Refresh model indices after a scene reload."""
+        """The prompt sequence holds no compiled-model indices."""
 
-        self._goal_site_id = int(
-            mujoco.mj_name2id(
-                model,
-                mujoco.mjtObj.mjOBJ_SITE,
-                "drawer_search_goal_region",
-            )
-        )
-        self._target_body_ids = [
-            int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, target["body"]))
-            for target in self._targets
-        ]
 
     def after_reset(
         self,
@@ -62,8 +49,14 @@ class MultiDrawerSearchRuntime:
             for target in raw_targets
             if isinstance(target, dict) and target.get("body") and target.get("label")
         ]
+        if not self._targets:
+            self._targets = [{
+                "body": "drawer_search_target",
+                "joint": "drawer_search_target_joint",
+                "label": "target object",
+            }]
         self._current_index = 0
-        self._state = "waiting_for_target" if self._targets else "finished"
+        self._state = "waiting_for_target"
         self.bind(model, data)
         self._update_prompt()
 
@@ -71,13 +64,13 @@ class MultiDrawerSearchRuntime:
         """No pre-step controls are needed."""
 
     def after_step(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
-        """Advance every target that has reached the bin."""
+        """Progress arrives through the environment's task-evaluation hook."""
 
-        while self._current_index < len(self._targets):
-            body_id = self._target_body_ids[self._current_index]
-            if body_id < 0 or not self._body_is_in_goal(model, data, body_id):
-                break
-            self._current_index += 1
+    def on_task_evaluation(self, result: TaskEvalResult) -> None:
+        """Use the evaluator's deposit counter as the prompt sequence authority."""
+        if result.num_worlds != 1 or int(result.metrics["target_count"][0]) != len(self._targets):
+            raise ValueError("Runtime and evaluator target sequences must match.")
+        self._current_index = int(result.metrics["completed_target_count"][0])
         self._state = (
             "finished"
             if self._current_index >= len(self._targets)
@@ -108,24 +101,6 @@ class MultiDrawerSearchRuntime:
             "target_sequence": [dict(target) for target in self._targets],
             "complete": self._state == "finished",
         }
-
-    def _body_is_in_goal(
-        self,
-        model: mujoco.MjModel,
-        data: mujoco.MjData,
-        body_id: int,
-    ) -> bool:
-        if self._goal_site_id < 0:
-            return False
-        goal_center = np.asarray(data.site_xpos[self._goal_site_id], dtype=np.float64)
-        goal_rotation = np.asarray(
-            data.site_xmat[self._goal_site_id],
-            dtype=np.float64,
-        ).reshape(3, 3)
-        body_pos = np.asarray(data.xpos[body_id], dtype=np.float64)
-        local_pos = goal_rotation.T @ (body_pos - goal_center)
-        half_size = np.asarray(model.site_size[self._goal_site_id], dtype=np.float64)
-        return bool(np.all(np.abs(local_pos) <= half_size))
 
     def _update_prompt(self) -> None:
         if self._current_index >= len(self._targets):

@@ -9,6 +9,7 @@ __version__ = "0.1.0"
 
 if TYPE_CHECKING:
     from abc_sim.env import MuJoCoYAMEnv
+    from abc_sim.physics import PhysicsProfile
     from abc_sim.task_specs import SimTaskSpec
 
 
@@ -137,6 +138,7 @@ def make_env(
     enable_task_randomizer: bool = True,
     max_episode_steps: int | None = None,
     terminate_on_success: bool = False,
+    physics_profile: str | PhysicsProfile | None = None,
     **kwargs,
 ) -> "MuJoCoYAMEnv":
     """Create a MuJoCo YAM bimanual environment.
@@ -161,6 +163,8 @@ def make_env(
             ``step`` returns ``truncated=True``.
         terminate_on_success: Whether ``step`` should return ``terminated=True``
             when the task evaluator reports success.
+        physics_profile: Optional named or explicit contact profile, applied to
+            every compiled model before simulation and rendering are initialized.
         **kwargs: Additional kwargs passed to MuJoCoYAMEnv.
 
     Returns:
@@ -175,6 +179,8 @@ def make_env(
         list_scene_task_names,
         resolve_task,
     )
+
+    kwargs["physics_profile"] = physics_profile
 
     if scene_xml is not None and scene_xml_string is not None:
         raise ValueError("scene_xml and scene_xml_string are mutually exclusive")

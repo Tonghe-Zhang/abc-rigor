@@ -15,6 +15,8 @@ from abc_sim.task_specs import SimTaskSpec
 class MultiDrawerSearchTargetInBinEvaluator:
     """Score success when the sampled target drawer object is placed in the goal bin."""
 
+    requires_step_updates = True
+
     def __init__(
         self,
         *,
@@ -137,16 +139,8 @@ class MultiDrawerSearchTargetInBinEvaluator:
             axis=2,
         )
 
-        active_indices = self._completed_target_count.copy()
-        active_target_in_bin = np.zeros((qpos_batch.shape[0],), dtype=bool)
         target_count = len(self._target_qpos_addrs)
         for world_index in range(qpos_batch.shape[0]):
-            current_index = int(active_indices[world_index])
-            if current_index < target_count:
-                active_target_in_bin[world_index] = targets_in_bin[
-                    world_index,
-                    current_index,
-                ]
             while (
                 self._completed_target_count[world_index] < target_count
                 and targets_in_bin[
@@ -159,7 +153,10 @@ class MultiDrawerSearchTargetInBinEvaluator:
         success = self._completed_target_count >= target_count
         self._ever_success |= success
 
-        position_indices = np.minimum(active_indices, target_count - 1)
+        position_indices = np.minimum(self._completed_target_count, target_count - 1)
+        active_target_in_bin = targets_in_bin[
+            np.arange(qpos_batch.shape[0]), position_indices
+        ]
         target_pos = target_positions[
             np.arange(qpos_batch.shape[0]),
             position_indices,
@@ -209,5 +206,87 @@ class MultiDrawerSearchTargetInBinEvaluator:
                     dtype=np.int32,
                 ),
                 "ever_success": self._ever_success.copy(),
+            },
+        )
+
+
+class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
+    """Track unique drawer openings and ordered retrievals on every physics tick.
+
+    A drawer is open at half of its joint's available travel (0.108 m in the
+    standard scene). All first openings in one observation use the target and
+    opening history from before that observation. Replay must supply the same
+    chronological observations; a final qpos snapshot cannot recover history.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._drawer_qpos_addrs: list[int] = []
+        self._drawer_open_thresholds = np.empty(0)
+        self._target_drawer_indices: list[int] = []
+        super().__init__(**kwargs)
+
+    def configure_from_randomization(
+        self, model: mujoco.MjModel, randomization: Any
+    ) -> None:
+        super().configure_from_randomization(model, randomization)
+        metadata = randomization.metadata
+        drawers = metadata["active_drawers"]
+        joints = metadata["drawer_joints"]
+        if len(drawers) != len(joints) or len(set(drawers)) != len(drawers):
+            raise ValueError("Drawer names and joints must identify each active drawer once.")
+        joint_ids = []
+        for name in joints:
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_SLIDE:
+                raise ValueError(f"Drawer joint {name!r} must be a sliding joint.")
+            if not model.jnt_limited[joint_id] or model.jnt_range[joint_id, 0] != 0:
+                raise ValueError(f"Drawer joint {name!r} must have a zero-based travel limit.")
+            joint_ids.append(joint_id)
+        self._drawer_qpos_addrs = [int(model.jnt_qposadr[j]) for j in joint_ids]
+        self._drawer_open_thresholds = 0.5 * model.jnt_range[joint_ids, 1]
+        self._target_drawer_indices = [
+            drawers.index(target["drawer"]) for target in metadata["target_sequence"]
+        ]
+        if len(self._target_drawer_indices) != len(self._target_qpos_addrs):
+            raise ValueError("Each target must identify its source drawer.")
+        self.reset(nworld=self._nworld)
+
+    def reset(self, *, nworld: int = 1) -> None:
+        super().reset(nworld=nworld)
+        self._opened_drawers = np.zeros((nworld, len(self._drawer_qpos_addrs)), dtype=bool)
+        self._credited_openings = np.zeros(nworld, dtype=np.int32)
+
+    def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
+        if not self._target_drawer_indices:
+            raise RuntimeError("Shaped drawer evaluation requires reset randomization metadata.")
+        qpos_batch = np.asarray(qpos_batch)
+        if qpos_batch.ndim != 2 or qpos_batch.shape[1] != self.model.nq:
+            raise ValueError(f"Expected qpos batch shape (B, {self.model.nq}).")
+        if qpos_batch.shape[0] != self._nworld:
+            self.reset(nworld=qpos_batch.shape[0])
+        target_count = len(self._target_drawer_indices)
+        active = self._completed_target_count < target_count
+        indices = np.minimum(self._completed_target_count, target_count - 1)
+        target_drawers = np.asarray(self._target_drawer_indices)[indices]
+        eligible = active & ~self._opened_drawers[np.arange(self._nworld), target_drawers]
+        opened = qpos_batch[:, self._drawer_qpos_addrs] >= self._drawer_open_thresholds
+        first_openings = opened & ~self._opened_drawers
+        self._credited_openings = np.minimum(
+            4, self._credited_openings + eligible * first_openings.sum(axis=1)
+        )
+        self._opened_drawers |= opened
+        result = super().evaluate_qpos_batch(qpos_batch)
+        bonus = 0.05 * self._credited_openings
+        reward = np.where(result.success, 1.0, 0.75 * result.reward + bonus)
+        return TaskEvalResult(
+            reward=reward,
+            success=result.success,
+            metrics={
+                **result.metrics,
+                "retrieval_reward": result.reward,
+                "drawer_opening_bonus": bonus,
+                "credited_drawer_openings": self._credited_openings.copy(),
+                "opened_drawer_count": self._opened_drawers.sum(axis=1),
+                "opened_drawers": self._opened_drawers.copy(),
             },
         )

@@ -210,6 +210,9 @@ The replay modes (pose playback vs physics re-simulation) are described in the
 
 ## Evaluation
 
+Opt-in drawer training rewards and reproducible low-friction conditions are
+documented in [training drawer and physics profiles](docs/training-drawer-and-physics.md).
+
 `eval_policy.py` evaluates a checkpoint on the `abc_sim/` task catalogue: one
 you trained yourself (`cache/finetune_checkpoints/last.pt`) or a released one:
 

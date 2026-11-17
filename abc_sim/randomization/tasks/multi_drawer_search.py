@@ -20,6 +20,7 @@ from ..core import (
     _resolve_scene_xml_paths,
     _scaled_mesh_attr,
 )
+from ..requests import MultiDrawerSearchResetRequest
 from .count_box import _COUNT_BOX_ARM_QPOS, _count_box_apply_scene_transforms
 from .grab_clutter import _grab_clutter_scaled_float_attr
 
@@ -748,7 +749,9 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         self._base_scene_xml_transformed = True
         self._full_scene_loaded = True
 
-    def _sample_selections(self, rng: np.random.Generator) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def _sample_selections(
+        self, rng: np.random.Generator, *, target_count: int | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         count_min, count_max = _MULTI_DRAWER_SEARCH_STACK_COUNT_RANGE
         stack_count = int(rng.integers(count_min, count_max + 1))
         sampled_stack_ids = {
@@ -826,7 +829,10 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
             _MULTI_DRAWER_SEARCH_TARGET_COUNT_RANGE[1],
             len(selections),
         )
-        target_count = int(rng.integers(target_count_min, target_count_max + 1))
+        if target_count is None:
+            target_count = int(rng.integers(target_count_min, target_count_max + 1))
+        elif target_count > len(selections):
+            raise ValueError("Requested target count exceeds available drawer objects.")
         target_indices = rng.choice(
             np.arange(len(selections), dtype=np.int64),
             size=target_count,
@@ -891,12 +897,15 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
         seed: int | None = None,
         request: Any | None = None,
     ) -> RandomizationState:
+        reset_request = MultiDrawerSearchResetRequest.from_value(request)
         self._ensure_full_scene_loaded()
         if self._env_ref is not None:
             model = self._env_ref.model
             data = self._env_ref.data
         rng = np.random.default_rng(seed)
-        selections, target = self._sample_selections(rng)
+        selections, target = self._sample_selections(
+            rng, target_count=reset_request.target_count
+        )
         goal_bin_side = "left" if int(rng.integers(0, 2)) == 0 else "right"
         goal_bin_pose = {
             "pos": [

@@ -16,6 +16,7 @@ import numpy as np
 from gymnasium import spaces
 
 from abc_sim.config import RobotSystemConfig
+from abc_sim.physics import PhysicsProfile, apply_physics_profile, resolve_physics_profile
 from abc_sim.rendering.live import LiveRenderBackend, create_live_camera_provider
 from abc_sim.task_eval import (
     PhysicsObservedTaskEvaluator,
@@ -106,6 +107,7 @@ class MuJoCoYAMEnv(gym.Env):
         max_episode_steps: int | None = None,
         terminate_on_success: bool = False,
         wrist_fov: float = 58.0,
+        physics_profile: str | PhysicsProfile | None = None,
     ):
         super().__init__()
         self.config = config
@@ -124,6 +126,7 @@ class MuJoCoYAMEnv(gym.Env):
             mujoco.MjModel, np.ndarray
         ] = weakref.WeakKeyDictionary()
         self._physics_dt = physics_dt
+        self.physics_profile = resolve_physics_profile(physics_profile)
         self._control_decimation = control_decimation
         self._scene_xml = Path(scene_xml) if scene_xml else _DEFAULT_SCENE_XML
         if max_episode_steps is not None and max_episode_steps < 1:
@@ -232,6 +235,7 @@ class MuJoCoYAMEnv(gym.Env):
         self._bind_model(model)
 
     def _bind_model(self, model: mujoco.MjModel) -> None:
+        apply_physics_profile(model, self.physics_profile)
         self.model = model
         self._step_task_eval = None
         self.model.opt.timestep = self._physics_dt
@@ -420,7 +424,7 @@ class MuJoCoYAMEnv(gym.Env):
             )
 
         self.finalize_randomization(self._last_randomization)
-        info: dict[str, Any] = {}
+        info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
         if self._last_randomization is not None:
             info["randomization"] = self._last_randomization
         return self.get_obs(), info
@@ -499,6 +503,10 @@ class MuJoCoYAMEnv(gym.Env):
         self._sync_prompt_from_task_runtime()
 
         self.cur_step = 0
+        if self._last_randomization is not None:
+            self._last_randomization.metadata["physics_profile"] = (
+                self.physics_profile_metadata()
+            )
 
     def step(self, action: np.ndarray, *, render_obs: bool = True):
         """Apply one 14D policy-space action.
@@ -628,7 +636,12 @@ class MuJoCoYAMEnv(gym.Env):
             "qpos": np.asarray(self.data.qpos, dtype=np.float32).copy(),
             "qvel": np.asarray(self.data.qvel, dtype=np.float32).copy(),
             "time": np.float32(self.data.time),
+            "physics_profile": self.physics_profile_metadata(),
         }
+
+    def physics_profile_metadata(self) -> dict[str, Any] | None:
+        """Return the physics condition to store alongside scene XML and state."""
+        return None if self.physics_profile is None else self.physics_profile.to_dict()
 
     def close(self):
         self._close_camera_backend()

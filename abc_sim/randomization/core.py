@@ -12,6 +12,8 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from abc_sim.physics import PhysicsProfile, apply_physics_profile
+
 logger = logging.getLogger(__name__)
 
 
@@ -438,12 +440,22 @@ class SceneRandomizer:
 
     def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
         """Restore a previously saved state without sampling (for replay)."""
+        if "physics_profile" in state.metadata:
+            metadata = state.metadata["physics_profile"]
+            profile = None if metadata is None else PhysicsProfile.from_dict(metadata)
+            if self._env_ref is not None and self._env_ref.physics_profile != profile:
+                raise ValueError(
+                    "Replay physics profile differs from the environment. "
+                    "Construct the replay environment with the recorded physics_profile."
+                )
         self._current_scale_states = dict(state.scale_states)
         if state.scale_states:
             self._reload_scene_for_scale_states(state.scale_states)
             if self._env_ref is not None:
                 model = self._env_ref.model
                 data = self._env_ref.data
+        if "physics_profile" in state.metadata:
+            apply_physics_profile(model, profile)
         self._apply_states(model, data, state.object_states)
         mujoco.mj_forward(model, data)
 
