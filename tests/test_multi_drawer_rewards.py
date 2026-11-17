@@ -47,6 +47,7 @@ class DrawerRewardsTest(unittest.TestCase):
         self.model = _model()
         self.data = mujoco.MjData(self.model)
         self.metadata = {
+            "target_count": 2,
             "active_drawers": [f"d{i}" for i in range(6)],
             "drawer_joints": [f"drawer{i}" for i in range(6)],
             "target_sequence": [
@@ -306,6 +307,30 @@ class DrawerRewardsTest(unittest.TestCase):
             self.evaluator.configure_from_randomization(
                 self.model, SimpleNamespace(metadata=metadata)
             )
+
+    def test_replay_task_preflight_precedes_transient_reset(self):
+        env = self.make_env()
+        env.reset(seed=4)
+        env.data.time = 12
+        env.data.qvel[:] = 0.3
+        randomizer = SceneRandomizer()
+        randomizer.bind_env(env)
+        for count in (3, None):
+            with self.subTest(count=count):
+                metadata = copy.deepcopy(self.metadata)
+                if count is None:
+                    del metadata["target_count"]
+                else:
+                    metadata["target_count"] = count
+                state = RandomizationState(seed=0, object_states={}, metadata=metadata)
+                with mock.patch.object(
+                    env, "initialize_randomization", wraps=env.initialize_randomization
+                ) as initialize:
+                    with self.assertRaises(ValueError):
+                        randomizer.apply(env.model, env.data, state)
+                    initialize.assert_not_called()
+                self.assertEqual(env.data.time, 12)
+                np.testing.assert_array_equal(env.data.qvel, 0.3)
 
     def test_native_sampler_default_and_explicit_count(self):
         randomizer = MultiDrawerSearchRandomizer()

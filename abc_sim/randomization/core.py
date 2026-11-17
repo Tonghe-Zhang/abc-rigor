@@ -459,7 +459,12 @@ class SceneRandomizer:
                 "Replay physics profile differs from the environment. "
                 "Construct the replay environment with the recorded physics_profile."
             )
+        if self._env_ref is not None and self._env_ref._task_spec is not None:
+            self._env_ref._task_spec.validate_replay_metadata(state.metadata)
         apply_physics_profile(model, profile)
+        if self._env_ref is not None:
+            self._env_ref.initialize_randomization()
+            model, data = self._env_ref.model, self._env_ref.data
         restored = self._restore_scene(model, data, state)
         if self._env_ref is not None:
             self._env_ref.finalize_randomization(restored)

@@ -11,7 +11,9 @@ This cap is an experiment setting, not a task success condition.
 The training task's two-target count is a fixed constraint. Empty caller
 randomization options retain it; an explicit incompatible count is rejected
 before reset mutates the environment. Native task options remain configurable.
-The variant has a distinct prompt alias, preserving native prompt lookup.
+Saved replay metadata must identify the same fixed count and is validated before
+replay mutates the environment. The variant has a distinct prompt alias,
+preserving native prompt lookup.
 
 ## Reward and prompt sequence
 
@@ -102,7 +104,10 @@ Warp copies. This is the shared final replay entry point: task implementations
 override `_restore_scene`, which runs only after physics validation. Rejection
 precedes model reloads, randomizer selections, and data changes. A recording
 without profile metadata means native physics and is rejected by a bound
-low-friction environment. Standalone callers must supply a freshly constructed
+low-friction environment. Bound replay then initializes fresh dynamics and the
+default arm pose, restores recorded object poses, and finalizes episode state.
+Recordings contain initial scene randomization, not mid-episode robot state.
+Standalone callers must supply a freshly constructed
 model with the recording's native coefficients before profile application.
 Replay adapters outside this package must pass the recorded profile
 when constructing their environments. Pin task ID, evaluator ID, profile

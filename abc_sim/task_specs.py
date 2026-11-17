@@ -63,6 +63,17 @@ class SimTaskSpec:
             resolved[key] = required
         return resolved
 
+    def validate_replay_metadata(self, metadata: Mapping[str, Any]) -> None:
+        """Require recordings to identify every fixed reset condition."""
+        values = {}
+        for key, _ in self.reset_constraints:
+            if key not in metadata or metadata[key] is None:
+                raise ValueError(
+                    f"Recording for task {self.name!r} must identify {key!r}."
+                )
+            values[key] = metadata[key]
+        self.resolve_reset_request(values)
+
 
 def _normalize_key(value: str) -> str:
     text = value.strip().lower()
