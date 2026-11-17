@@ -75,7 +75,13 @@ class TaskEvalResult:
 
 
 class TaskEvaluator(Protocol):
-    """Task evaluator with an explicit qpos scoring entry point."""
+    """Task evaluator with an explicit qpos scoring entry point.
+
+    A task may expose ``prepare_randomization(model, state)`` to validate an
+    initial episode without mutation and return an opaque definition. The
+    environment passes that same definition to ``configure_episode`` and the
+    runtime's ``after_reset(..., episode=...)`` after restoring the scene.
+    """
 
     spec: SimTaskSpec
 

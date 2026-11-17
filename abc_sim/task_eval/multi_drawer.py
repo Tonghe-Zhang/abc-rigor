@@ -7,6 +7,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from abc_sim.multi_drawer_episode import DrawerEpisode
 from abc_sim.task_eval.base import TaskEvalResult
 from abc_sim.task_eval.bottles import _quat_to_rotmat_batch
 from abc_sim.task_specs import SimTaskSpec
@@ -46,22 +47,22 @@ class MultiDrawerSearchTargetInBinEvaluator:
         model: mujoco.MjModel,
         randomization: Any,
     ) -> None:
-        raw_sequence = randomization.metadata.get("target_sequence", [])
-        target_joint_names = [
-            str(target["joint"])
-            for target in raw_sequence
-            if isinstance(target, dict) and target.get("joint")
-        ]
-        if not target_joint_names:
-            target_joint_names = [
-                str(
-                    randomization.metadata.get(
-                        "target_joint",
-                        "drawer_search_target_joint",
-                    )
-                )
-            ]
-        self.spec.resolve_reset_request({"target_count": len(target_joint_names)})
+        self.configure_episode(model, self.prepare_randomization(model, randomization))
+
+    def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
+        """Validate the effective sequence before changing episode or physics state."""
+        episode = DrawerEpisode.from_metadata(randomization.metadata)
+        self.spec.resolve_reset_request({"target_count": len(episode.targets)})
+        for target in episode.targets:
+            self._resolve_free_joint_qpos_addr(model, target.joint)
+            body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, target.body)
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, target.joint)
+            if body_id < 0 or model.jnt_bodyid[joint_id] != body_id:
+                raise ValueError("Target body and free joint must identify the same object.")
+        return episode
+
+    def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
+        """Install the same validated episode definition used by the runtime."""
         if model is not self.model:
             self.model = model
             self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
@@ -74,7 +75,7 @@ class MultiDrawerSearchTargetInBinEvaluator:
             )
         self._target_qpos_addrs = [
             self._resolve_free_joint_qpos_addr(self.model, joint_name)
-            for joint_name in target_joint_names
+            for joint_name in (target.joint for target in episode.targets)
         ]
         self.reset(nworld=self._nworld)
 
@@ -226,30 +227,31 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         self._target_drawer_indices: list[int] = []
         super().__init__(**kwargs)
 
-    def configure_from_randomization(
-        self, model: mujoco.MjModel, randomization: Any
-    ) -> None:
-        super().configure_from_randomization(model, randomization)
-        metadata = randomization.metadata
-        drawers = metadata["active_drawers"]
-        joints = metadata["drawer_joints"]
-        if len(drawers) != len(joints) or len(set(drawers)) != len(drawers):
-            raise ValueError("Drawer names and joints must identify each active drawer once.")
+    def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
+        episode = super().prepare_randomization(model, randomization)
+        if not episode.drawers or any(target.drawer not in episode.drawers for target in episode.targets):
+            raise ValueError("Each target must identify an active source drawer.")
+        self._drawer_joint_ids(model, episode)
+        return episode
+
+    @staticmethod
+    def _drawer_joint_ids(model: mujoco.MjModel, episode: DrawerEpisode) -> list[int]:
         joint_ids = []
-        for name in joints:
+        for name in episode.drawer_joints:
             joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
             if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_SLIDE:
                 raise ValueError(f"Drawer joint {name!r} must be a sliding joint.")
             if not model.jnt_limited[joint_id] or model.jnt_range[joint_id, 0] != 0:
                 raise ValueError(f"Drawer joint {name!r} must have a zero-based travel limit.")
             joint_ids.append(joint_id)
+        return joint_ids
+
+    def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
+        super().configure_episode(model, episode)
+        joint_ids = self._drawer_joint_ids(model, episode)
         self._drawer_qpos_addrs = [int(model.jnt_qposadr[j]) for j in joint_ids]
         self._drawer_open_thresholds = 0.5 * model.jnt_range[joint_ids, 1]
-        self._target_drawer_indices = [
-            drawers.index(target["drawer"]) for target in metadata["target_sequence"]
-        ]
-        if len(self._target_drawer_indices) != len(self._target_qpos_addrs):
-            raise ValueError("Each target must identify its source drawer.")
+        self._target_drawer_indices = [episode.drawers.index(target.drawer) for target in episode.targets]
         self.reset(nworld=self._nworld)
 
     def reset(self, *, nworld: int = 1) -> None:

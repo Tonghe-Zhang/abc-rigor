@@ -12,9 +12,10 @@ class TaskRuntime(Protocol):
 
     A runtime may implement ``on_task_evaluation(result)`` to consume the
     environment's initial and physics-step scores before its ``after_step`` hook.
-    ``resolve_reset_randomization(state)`` may provide the effective episode
-    definition before both runtime and evaluator initialization; a task that
-    retains its goal on nonrandomized reset uses this hook to keep them aligned.
+    ``retained_randomization()`` may return a complete initial scene to restore
+    through the randomizer on nonrandomized reset. When an evaluator implements
+    ``prepare_randomization(model, state)``, the environment passes its validated
+    definition to ``after_reset(..., episode=...)`` and ``configure_episode``.
     """
 
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:

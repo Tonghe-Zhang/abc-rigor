@@ -444,7 +444,10 @@ class SceneRandomizer:
         self._raise_sampling_failure(seed)
 
     @final
-    def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
+    def apply(
+        self, model: Any, data: Any, state: RandomizationState, *,
+        keep_arm_state: bool = False,
+    ) -> None:
         """Validate physics, restore the scene, and start a fresh replay episode.
 
         Recordings without profile metadata use native physics. A bound
@@ -461,13 +464,21 @@ class SceneRandomizer:
             )
         if self._env_ref is not None and self._env_ref._task_spec is not None:
             self._env_ref._task_spec.validate_replay_metadata(state.metadata)
+        episode = (
+            self._env_ref.prepare_randomization(state)
+            if self._env_ref is not None else None
+        )
+        self._validate_scene(model, state)
         apply_physics_profile(model, profile)
         if self._env_ref is not None:
-            self._env_ref.initialize_randomization()
+            self._env_ref.initialize_randomization(keep_arm_state=keep_arm_state)
             model, data = self._env_ref.model, self._env_ref.data
         restored = self._restore_scene(model, data, state)
         if self._env_ref is not None:
-            self._env_ref.finalize_randomization(restored)
+            self._env_ref.finalize_randomization(restored, episode=episode)
+
+    def _validate_scene(self, model: Any, state: RandomizationState) -> None:
+        """Validate task-owned restoration fields without changing model or state."""
 
     def _restore_scene(
         self, model: Any, data: Any, state: RandomizationState

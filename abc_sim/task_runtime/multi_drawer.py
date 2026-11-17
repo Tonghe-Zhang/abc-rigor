@@ -6,6 +6,7 @@ import copy
 from typing import Any
 
 import mujoco
+from abc_sim.multi_drawer_episode import DrawerEpisode
 from abc_sim.task_eval.base import TaskEvalResult
 
 
@@ -22,15 +23,9 @@ class MultiDrawerSearchRuntime:
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """The prompt sequence holds no compiled-model indices."""
 
-    def resolve_reset_randomization(self, randomization: Any) -> Any:
-        """Preserve the current drawer goal when resetting without resampling.
-
-        The environment passes this same episode definition to the runtime and
-        evaluator. Counters and opening history are still reset for each episode.
-        """
-        if randomization is not None:
-            self._episode_randomization = copy.deepcopy(randomization)
-        return self._episode_randomization
+    def retained_randomization(self) -> Any:
+        """Return the physical initial scene to restore on nonrandomized reset."""
+        return copy.deepcopy(self._episode_randomization)
 
     def after_reset(
         self,
@@ -38,34 +33,19 @@ class MultiDrawerSearchRuntime:
         data: mujoco.MjData,
         *,
         randomization: Any = None,
+        episode: DrawerEpisode | None = None,
     ) -> None:
         """Load the reset's sampled target sequence."""
 
-        metadata = getattr(randomization, "metadata", {})
-        raw_targets = metadata.get("target_sequence", []) if isinstance(metadata, dict) else []
-        if not raw_targets and isinstance(metadata, dict) and metadata.get("target_body"):
-            raw_targets = [
-                {
-                    "body": metadata["target_body"],
-                    "joint": metadata.get("target_joint", ""),
-                    "label": metadata.get("target_label", "target object"),
-                }
-            ]
+        if episode is None:
+            episode = DrawerEpisode.from_metadata(
+                {} if randomization is None else randomization.metadata
+            )
         self._targets = [
-            {
-                "body": str(target["body"]),
-                "joint": str(target.get("joint", "")),
-                "label": str(target["label"]),
-            }
-            for target in raw_targets
-            if isinstance(target, dict) and target.get("body") and target.get("label")
+            {"body": target.body, "joint": target.joint, "label": target.label}
+            for target in episode.targets
         ]
-        if not self._targets:
-            self._targets = [{
-                "body": "drawer_search_target",
-                "joint": "drawer_search_target_joint",
-                "label": "target object",
-            }]
+        self._episode_randomization = copy.deepcopy(randomization)
         self._current_index = 0
         self._state = "waiting_for_target"
         self.bind(model, data)

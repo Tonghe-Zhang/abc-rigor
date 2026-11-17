@@ -88,13 +88,18 @@ class DrawerRewardsTest(unittest.TestCase):
             env = MuJoCoYAMEnv(RobotSystemConfig(), render_cameras=False)
         env.get_init_q = lambda: np.zeros(0)
         env.set_task(task)
-        env._task_randomizer = SimpleNamespace(
-            randomize=lambda *args, **kwargs: RandomizationState(
-                seed=kwargs["seed"] or 0,
-                object_states={},
-                metadata=copy.deepcopy(self.metadata),
-            )
-        )
+        metadata = self.metadata
+
+        class FixtureRandomizer(SceneRandomizer):
+            def randomize(self, model, data, seed=None, request=None):
+                return RandomizationState(
+                    seed=seed or 0,
+                    object_states={},
+                    metadata=copy.deepcopy(metadata),
+                )
+
+        env._task_randomizer = FixtureRandomizer()
+        env._task_randomizer.bind_env(env)
         return env
 
     def deposit(self, joint):
@@ -303,7 +308,7 @@ class DrawerRewardsTest(unittest.TestCase):
     def test_shaped_replay_rejects_conflicting_target_count(self):
         metadata = copy.deepcopy(self.metadata)
         metadata["target_sequence"] = metadata["target_sequence"][:1]
-        with self.assertRaisesRegex(ValueError, "requires target_count=2"):
+        with self.assertRaisesRegex(ValueError, "target sequence length"):
             self.evaluator.configure_from_randomization(
                 self.model, SimpleNamespace(metadata=metadata)
             )

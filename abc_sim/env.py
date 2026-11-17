@@ -403,6 +403,18 @@ class MuJoCoYAMEnv(gym.Env):
             randomization_request = self._task_spec.resolve_reset_request(
                 randomization_request
             )
+        retained = None
+        if not randomize and self._task_runtime is not None:
+            retained_state = getattr(self._task_runtime, "retained_randomization", None)
+            if retained_state is not None:
+                retained = retained_state()
+        if retained is not None:
+            self._task_randomizer.apply(
+                self.model, self.data, retained,
+                keep_arm_state=(options or {}).get("keep_arm_state", False),
+            )
+            super().reset(seed=seed)
+            return self.get_obs(), {"physics_profile": self.physics_profile_metadata()}
         self._validate_physics_observation_cadence()
         self._physics_observer = None
         super().reset(seed=seed)
@@ -454,7 +466,14 @@ class MuJoCoYAMEnv(gym.Env):
         self._set_qpos_from_state(arm_state)
         mujoco.mj_forward(self.model, self.data)
 
-    def finalize_randomization(self, state: RandomizationState | None) -> None:
+    def prepare_randomization(self, state: RandomizationState) -> Any:
+        """Validate and prepare task-owned episode data before replay mutation."""
+        prepare = getattr(self._task_evaluator, "prepare_randomization", None)
+        return None if prepare is None else prepare(self.model, state)
+
+    def finalize_randomization(
+        self, state: RandomizationState | None, *, episode: Any = None
+    ) -> None:
         """Bind a restored initial scene to its episode metadata and evaluator.
 
         The model and object poses must already be restored. This starts fresh
@@ -463,36 +482,35 @@ class MuJoCoYAMEnv(gym.Env):
         """
         self._validate_physics_observation_cadence()
         self._physics_observer = None
+        if episode is None and state is not None:
+            episode = self.prepare_randomization(state)
         self._last_randomization = state
-        episode_state = state
-        if self._task_runtime is not None:
-            resolve_episode = getattr(
-                self._task_runtime, "resolve_reset_randomization", None
-            )
-            if resolve_episode is not None:
-                episode_state = resolve_episode(state)
         if state is not None:
             prompt = state.metadata.get("prompt")
             if prompt is not None:
                 self.prompt = str(prompt)
         if self._task_runtime is not None:
+            episode_kwargs = {} if episode is None else {"episode": episode}
             self._task_runtime.after_reset(
                 self.model,
                 self.data,
-                randomization=episode_state,
+                randomization=state,
+                **episode_kwargs,
             )
 
         self._reset_camera_backend()
         self._step_task_eval = None
         if self._task_evaluator is not None:
             self._task_evaluator.reset(nworld=1)
-            if episode_state is not None and hasattr(
+            if episode is not None:
+                self._task_evaluator.configure_episode(self.model, episode)
+            elif state is not None and hasattr(
                 self._task_evaluator,
                 "configure_from_randomization",
             ):
                 self._task_evaluator.configure_from_randomization(
                     self.model,
-                    episode_state,
+                    state,
                 )
             if self._last_randomization is not None and hasattr(
                 self._task_evaluator, "set_active_trash_joints"

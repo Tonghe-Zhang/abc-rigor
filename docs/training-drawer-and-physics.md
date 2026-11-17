@@ -14,6 +14,10 @@ before reset mutates the environment. Native task options remain configurable.
 Saved replay metadata must identify the same fixed count and is validated before
 replay mutates the environment. The variant has a distinct prompt alias,
 preserving native prompt lookup.
+The declared count must match the actual ordered sequence; malformed, repeated,
+or inconsistently associated targets are rejected before replay changes the
+running episode. Explicit native counts 1–4 sample enough objects to satisfy the
+request. The no-count native sampling distribution and RNG order are unchanged.
 
 ## Reward and prompt sequence
 
@@ -48,13 +52,19 @@ A final qpos snapshot or a 30 Hz video does not contain enough information to
 reconstruct unique openings or transient deposits. Batched MJWarp environments
 already reject drawer tasks because they require a per-step Python runtime.
 
-Nonrandomized resets preserve the current drawer goal sequence while clearing
-deposit and opening history. Runtime prompts and scoring are initialized from
-that same episode definition. The first shaped episode requires a randomized
+Nonrandomized resets restore the current episode's recorded initial physical
+scene while clearing deposit and opening history. This includes stack poses,
+active-object collision masks, object/bin positions, and inactive placements;
+compiled defaults are not the retained episode. Runtime prompts and scoring
+consume the same validated target definition. The first shaped episode requires a randomized
 reset or recorded-state replay so target-to-drawer metadata is available.
 Fresh replay binds its recorded sequence before scoring; it does not recover
 mid-episode history from positions alone. Drawer scoring reads qpos and cached
 model constants, so physics-rate observation does not add position refreshes.
+Recorded drawer replay restores those same model fields after any intervening
+episode or into a fresh environment. Serialized stack identifiers are normalized
+on ingestion. Replay uses the shared scene-restoration path used by sampling and
+retained reset; it does not depend on a previous episode's object selection.
 
 ## Friction profile
 
