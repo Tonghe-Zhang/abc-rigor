@@ -31,8 +31,8 @@ def main() -> None:
     started = time.monotonic()
     sheet = Image.new("RGB", (1240, 1050), "white")
     draw = ImageDraw.Draw(sheet)
-    heading = ImageFont.load_default(size=23)
-    small = ImageFont.load_default(size=14)
+    heading = ImageFont.load_default()
+    small = heading
     draw.text(
         (20, 12),
         "Seeded spelling materials: actual generated RGB tiles",

@@ -90,7 +90,10 @@ class BlocksRandomizer(SceneRandomizer):
         self._appearance_active = appearance is not None
 
     def apply(self, model: Any, data: Any, state: RandomizationState) -> None:
-        """Replay realized materials and poses without resampling."""
+        """Replay an initial object scene with fresh physics and arms at init_q."""
+        if self._env_ref is not None:
+            self._env_ref.initialize_randomization()
+            model, data = self._env_ref.model, self._env_ref.data
         self._apply_scene(model, data, state)
         if self._env_ref is not None:
             self._env_ref.finalize_randomization(state)

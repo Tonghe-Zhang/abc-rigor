@@ -1,9 +1,12 @@
 """Seeded materials, replay, visual-only changes and legacy spelling behavior."""
 
+import gc
 import json
 import unittest
+import weakref
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import mujoco
 import numpy as np
@@ -332,6 +335,118 @@ class AppearanceSceneTests(unittest.TestCase):
         _, _, _, _, step_info = env.step(env.get_state(), render_obs=False)
         self.assertEqual(step_info["episode_step"], 1)
 
+    def test_initial_replay_after_stepping_repeats_the_first_action(self):
+        env = make_env(task="spell_cat", render_cameras=False)
+        self.addCleanup(env.close)
+        for task in ("spell_cat", "spell_random_3_appearance"):
+            with self.subTest(task=task):
+                env.set_task(task)
+                _, info = env.reset(seed=31)
+                saved = info["randomization"]
+                initial_qpos = env.data.qpos.copy()
+                initial_qvel = env.data.qvel.copy()
+                initial_ctrl = env.data.ctrl.copy()
+                action = env.get_state()
+                action[0] += 0.1
+                env.step(action, render_obs=False)
+                first_qpos = env.data.qpos.copy()
+                first_qvel = env.data.qvel.copy()
+                first_time = env.data.time
+                self.assertGreater(first_time, 0)
+                self.assertTrue(np.any(first_qvel))
+                self.assertFalse(np.array_equal(env.data.ctrl, initial_ctrl))
+                for _ in range(2):
+                    env._task_randomizer.apply(env.model, env.data, saved)
+                    np.testing.assert_array_equal(env.data.qpos, initial_qpos)
+                    np.testing.assert_array_equal(env.data.qvel, initial_qvel)
+                    np.testing.assert_array_equal(env.data.ctrl, initial_ctrl)
+                    self.assertEqual(env.data.time, 0)
+                    self.assertEqual(env.cur_step, 0)
+                    env.step(action, render_obs=False)
+                    np.testing.assert_array_equal(env.data.qpos, first_qpos)
+                    np.testing.assert_array_equal(env.data.qvel, first_qvel)
+                    self.assertEqual(env.data.time, first_time)
+
+    def test_camera_provider_receives_materials_before_reset_and_closes_on_reload(self):
+        events = []
+        snapshots = []
+
+        class RecordingProvider:
+            def __init__(self, *, model, camera_names, height, width, **kwargs):
+                self.index = len(snapshots)
+                self.names = camera_names
+                self.shape = (height, width, 3)
+                offsets = np.linspace(0, model.tex_data.size - 1, 257, dtype=int)
+                snapshots.append(
+                    {
+                        "textures": model.tex_data[offsets].copy(),
+                        "shininess": model.mat_shininess.copy(),
+                        "fov": model.cam_fovy.copy(),
+                        "positions": model.cam_pos.copy(),
+                    }
+                )
+                events.append(("create", self.index))
+
+            def reset(self):
+                events.append(("reset", self.index))
+
+            def frames_for_step(self, step, time):
+                events.append(("frame", self.index))
+                return {
+                    name: np.zeros(self.shape, dtype=np.uint8) for name in self.names
+                }
+
+            def close(self):
+                events.append(("close", self.index))
+
+        with patch(
+            "abc_sim.env.create_live_camera_provider", side_effect=RecordingProvider
+        ):
+            env = make_env(
+                task="spell_random_3_appearance",
+                camera_backend="mjwarp",
+                camera_height=4,
+                camera_width=4,
+                wrist_fov=90,
+            )
+            self.addCleanup(env.close)
+            _, info = env.reset(seed=31)
+            saved = info["randomization"]
+            env.reset(seed=976)
+            self.assertFalse(
+                np.array_equal(snapshots[1]["textures"], snapshots[2]["textures"])
+            )
+            env._task_randomizer.apply(env.model, env.data, saved)
+            env.get_obs()
+            env.set_task("spell_cat")
+            env.reset(randomize=False)
+            env.close()
+        for before, after in ((0, 4), (1, 3)):
+            for key in snapshots[before]:
+                np.testing.assert_array_equal(
+                    snapshots[before][key], snapshots[after][key]
+                )
+        for snapshot in snapshots:
+            np.testing.assert_array_equal(snapshot["fov"], snapshots[0]["fov"])
+            np.testing.assert_array_equal(
+                snapshot["positions"], snapshots[0]["positions"]
+            )
+        self.assertEqual(
+            events,
+            [("create", 0)]
+            + [
+                event
+                for index in range(1, 5)
+                for event in (
+                    ("close", index - 1),
+                    ("create", index),
+                    ("reset", index),
+                    ("frame", index),
+                )
+            ]
+            + [("close", 4)],
+        )
+
     def test_legacy_visual_restoration_is_independent_of_pose_sampling(self):
         env = make_env(task="spell_cat", render_cameras=False)
         self.addCleanup(env.close)
@@ -401,6 +516,56 @@ class CameraModelBindingTests(unittest.TestCase):
             env.reload_from_model(env.model)
             np.testing.assert_array_equal(env.model.cam_fovy[camera_ids], fov)
             np.testing.assert_array_equal(env.model.cam_pos[camera_ids], positions)
+
+    def test_replacement_xml_keeps_its_mounts_without_retaining_discarded_models(self):
+        scene = blocks_xml().replace(
+            "<worldbody>",
+            '<worldbody><camera name="left" pos=".1 .2 .3" fovy="58"/>',
+        )
+        env = make_env(
+            task="spell_cat",
+            scene_xml_string=scene,
+            render_cameras=False,
+            wrist_fov=72,
+        )
+        self.addCleanup(env.close)
+        original_position = env.model.camera("left").pos.copy()
+        old_model = weakref.ref(env.model)
+        env.reload_from_xml(scene.replace('pos=".1 .2 .3"', 'pos=".7 .8 .9"'))
+        expected_position = original_position + 0.6
+        np.testing.assert_allclose(
+            env.model.camera("left").pos, expected_position, rtol=0, atol=1e-15
+        )
+        for _ in range(3):
+            env.reload_from_model(env.model)
+            np.testing.assert_allclose(
+                env.model.camera("left").pos, expected_position, rtol=0, atol=1e-15
+            )
+            self.assertEqual(env.model.camera("left").fovy[0], 72)
+        gc.collect()
+        self.assertIsNone(old_model())
+        self.assertEqual(len(env._wrist_camera_positions), 1)
+
+    def test_reset_arm_policy_is_explicit_and_preserves_only_requested_pose(self):
+        env = make_env(
+            task="spell_cat",
+            scene_xml_string=blocks_xml(),
+            render_cameras=False,
+        )
+        self.addCleanup(env.close)
+        env.reset(seed=31)
+        initial = env._get_reset_arm_state()
+        action = env.get_state()
+        action[0] += 0.1
+        env.step(action, render_obs=False)
+        carried = env._get_reset_arm_state()
+        env.reset(seed=31, options={"keep_arm_state": True})
+        np.testing.assert_array_equal(env._get_reset_arm_state(), carried)
+        self.assertEqual(env.data.time, 0)
+        np.testing.assert_array_equal(env.data.qvel, 0)
+        np.testing.assert_array_equal(env.data.ctrl, 0)
+        env.reset(seed=31)
+        np.testing.assert_array_equal(env._get_reset_arm_state(), initial)
 
 
 if __name__ == "__main__":

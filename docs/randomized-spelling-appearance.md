@@ -50,16 +50,23 @@ CPU and GPU camera providers receive the current materials. Switching back to
 a legacy task restores its original scene with either `randomize=True` or
 `randomize=False`. Constructor wrist-camera FOV and clearance positions survive
 appearance resets, replay, and restoration; reloading a cached model does not
-apply the clearance adjustment again.
+apply the clearance adjustment again. Camera clearance uses each incoming
+model's own mounts, including changed replacement XML. Calibration records use
+weak references so discarded models are not retained.
 
 Applying a saved spelling `RandomizationState` through the bound randomizer
-also calls the environment's `finalize_randomization(state)` operation. The
-restored initial scene therefore has the recorded goal, prompt, metadata and
-an initialized evaluator and can immediately be scored or stepped. Normal
-reset uses the same finalization operation. This starts a new episode; it does
-not reconstruct history-dependent rewards from an arbitrary mid-episode qpos
-snapshot. A fresh appearance task needs a randomized reset or a saved-state
-replay; `reset(randomize=False)` alone cannot supply its goal or appearance.
+first calls `initialize_randomization()` to reset transient physics, including
+velocities, controls and simulation time, and start arms at configured `init_q`.
+The saved state records object poses, not robot poses. After restoring materials
+and object poses, `finalize_randomization(state)` binds the recorded goal,
+prompt, metadata and a fresh evaluator. Replaying after stepping therefore
+starts the same initial scene and can immediately be scored or stepped.
+Normal reset shares both operations and retains its explicit
+`options={"keep_arm_state": True}` option to carry the current arm pose.
+Initial replay does not reconstruct history-dependent rewards from an arbitrary
+mid-episode qpos snapshot. A fresh appearance task needs a randomized reset or
+a saved-state replay; `reset(randomize=False)` alone cannot supply its goal or
+appearance.
 No generated texture files are needed for replay; the recorded parameters and
 bundled glyph assets suffice.
 
@@ -86,7 +93,11 @@ sampled face/body tiles for the same letters across all three material families,
 plus every cleaned glyph. Matte/gloss differences require lighting in a 3D
 renderer; the RGB sheet only displays their recorded labels. CPU tests verify
 physical parameter equality, seed independence, metadata replay, glyph
-extraction, contrast, and legacy restoration. A separate CPU check samples the
+extraction, contrast, and legacy restoration. Replaying after real physics
+steps checks fresh dynamics and exact repeated first-action motion for native
+and randomized appearances. A recording camera-provider double checks material
+and calibration delivery, replacement cleanup, and reset ordering without
+rendering. A separate CPU check samples the
 original and generated compiled meshes through their UVs on both letter faces
 for asymmetric glyphs; it checks orientation without relying on a texture-buffer
 row-reversal assertion. These checks do not establish 3D lighting or GPU renderer
