@@ -33,7 +33,7 @@ from abc_sim.task_runtime import make_task_runtime
 from abc_sim.task_specs import SimTaskSpec, maybe_get_task_spec
 
 if TYPE_CHECKING:
-    from abc_sim.randomization.core import RandomizationState
+    from abc_sim.randomization.core import RandomizationState, SceneRandomizer
 
 # Backwards-compatible aliases for older imports.
 _SCENE_XMLS = dict(SCENE_XMLS)
@@ -150,8 +150,9 @@ class MuJoCoYAMEnv(gym.Env):
         self._task_runtime = None
         self._arm_state_initialized = False
 
-        # Populated by reset() when randomize=True; readable by callers.
+        # Set by sampling or bound replay of an initial episode.
         self._last_randomization: Any = None
+        self._episode_restorer: SceneRandomizer | None = None
 
         self.camera_names = list(config.cameras.keys())
         self.robot_names = list(config.robots.keys())
@@ -409,7 +410,10 @@ class MuJoCoYAMEnv(gym.Env):
             if retained_state is not None:
                 retained = retained_state()
         if retained is not None:
-            self._task_randomizer.apply(
+            restorer = self._episode_restorer
+            if restorer is None or restorer._env_ref is not self:
+                raise RuntimeError("Retained episode requires its bound scene restorer.")
+            restorer.apply(
                 self.model, self.data, retained,
                 keep_arm_state=(options or {}).get("keep_arm_state", False),
             )
@@ -421,6 +425,10 @@ class MuJoCoYAMEnv(gym.Env):
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
+            if randomize and randomizer is not None:
+                randomizer = randomizer.clone()
+                randomizer.bind_env(self)
+                self._task_randomizer = randomizer
         if randomizer is not None:
             prepare_reset = getattr(randomizer, "prepare_reset", None)
             if prepare_reset is not None:
@@ -443,7 +451,10 @@ class MuJoCoYAMEnv(gym.Env):
                 self.physics_profile_metadata()
             )
 
-        self.finalize_randomization(self._last_randomization)
+        self.finalize_randomization(
+            self._last_randomization,
+            restorer=randomizer if self._last_randomization is not None else None,
+        )
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
         if self._last_randomization is not None:
             info["randomization"] = self._last_randomization
@@ -472,14 +483,24 @@ class MuJoCoYAMEnv(gym.Env):
         return None if prepare is None else prepare(self.model, state)
 
     def finalize_randomization(
-        self, state: RandomizationState | None, *, episode: Any = None
+        self,
+        state: RandomizationState | None,
+        *,
+        restorer: SceneRandomizer | None,
+        episode: Any = None,
     ) -> None:
         """Bind a restored initial scene to its episode metadata and evaluator.
 
         The model and object poses must already be restored. This starts fresh
         runtime/evaluator history and resets the episode step count; it does not
-        restore the history of a partially completed trajectory.
+        restore the history of a partially completed trajectory. A recorded
+        scene keeps its bound restorer for subsequent retained resets,
+        independently of the optional sampling randomizer.
         """
+        if state is not None and (restorer is None or restorer._env_ref is not self):
+            raise ValueError(
+                "Episode state requires a restorer bound to this environment."
+            )
         self._validate_physics_observation_cadence()
         self._physics_observer = None
         if episode is None and state is not None:
@@ -536,6 +557,7 @@ class MuJoCoYAMEnv(gym.Env):
         self._sync_prompt_from_task_runtime()
 
         self.cur_step = 0
+        self._episode_restorer = restorer if state is not None else None
 
     def step(self, action: np.ndarray, *, render_obs: bool = True):
         """Apply one 14D policy-space action.

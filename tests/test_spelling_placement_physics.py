@@ -4,14 +4,13 @@ import string
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 import mujoco
 import numpy as np
 
 from abc_sim import make_env
 from abc_sim.batched_env import BatchedWarpYAMEnv
-from abc_sim.randomization.core import RandomizationState
+from abc_sim.randomization.core import RandomizationState, SceneRandomizer
 from abc_sim.spelling_goal import SpellingGoal
 from abc_sim.spelling_placement import FreePlacementSpellingCfg, SpellingTableSupport
 from abc_sim.task_specs import SimTaskSpec
@@ -132,16 +131,21 @@ class NativeSpellingTests(unittest.TestCase):
         )
         self.addCleanup(self.env.close)
         self.requests = []
+        requests = self.requests
 
-        def randomize(model, data, *, seed, request):
-            self.requests.append(request)
-            return RandomizationState(
-                seed,
-                {},
-                metadata=SpellingGoal("AB" if seed == 37 else "XY", seed).to_metadata(),
-            )
+        class FixtureRandomizer(SceneRandomizer):
+            def randomize(self, model, data, seed=None, request=None):
+                requests.append(request)
+                return RandomizationState(
+                    seed,
+                    {},
+                    metadata=SpellingGoal(
+                        "AB" if seed == 37 else "XY", seed
+                    ).to_metadata(),
+                )
 
-        self.env._task_randomizer = SimpleNamespace(randomize=randomize)
+        self.env._task_randomizer = FixtureRandomizer()
+        self.env._task_randomizer.bind_env(self.env)
         self.env.reset(seed=37)
         self.model, self.data = self.env.model, self.env.data
 

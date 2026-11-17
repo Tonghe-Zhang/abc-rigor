@@ -475,7 +475,7 @@ class SceneRandomizer:
             model, data = self._env_ref.model, self._env_ref.data
         restored = self._restore_scene(model, data, state)
         if self._env_ref is not None:
-            self._env_ref.finalize_randomization(restored, episode=episode)
+            self._env_ref.finalize_randomization(restored, restorer=self, episode=episode)
 
     def _validate_scene(self, model: Any, state: RandomizationState) -> None:
         """Validate task-owned restoration fields without changing model or state."""

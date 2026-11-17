@@ -65,6 +65,10 @@ Recorded drawer replay restores those same model fields after any intervening
 episode or into a fresh environment. Serialized stack identifiers are normalized
 on ingestion. Replay uses the shared scene-restoration path used by sampling and
 retained reset; it does not depend on a previous episode's object selection.
+Successful bound replay records the restorer that owns this initial scene.
+Retained resets use that restorer independently of the sampling randomizer, so
+full-XML replay environments may keep `enable_task_randomizer=False`. A rejected
+replay leaves the previous restorer in place.
 
 ## Friction profile
 

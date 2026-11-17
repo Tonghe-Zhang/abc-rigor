@@ -293,6 +293,7 @@ class BallTrayTest(unittest.TestCase):
             self.addCleanup(env.close)
             env.set_task("ball_tray_balancing")
             env._task_randomizer = BallTrayBalancingRandomizer()
+            env._task_randomizer.bind_env(env)
             evaluate = BallTrayBalancingEvaluator.evaluate_model_data
             # This scene has no robot joints; reset the task objects normally.
             with (

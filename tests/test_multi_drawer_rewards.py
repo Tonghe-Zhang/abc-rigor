@@ -156,6 +156,30 @@ class DrawerRewardsTest(unittest.TestCase):
         self.assertAlmostEqual(self.open(1).metrics["drawer_opening_bonus"][0], 0.10)
         self.assertAlmostEqual(self.open(5).metrics["drawer_opening_bonus"][0], 0.15)
 
+    def test_simultaneous_deposit_and_opening_use_previous_target_eligibility(self):
+        for opened_source, expected_bonus, expected_reward in (
+            (5, 0.10, 0.475),  # Eligible first target, ineligible next target.
+            (4, 0.05, 0.425),  # Ineligible first target, eligible next target.
+        ):
+            with self.subTest(opened_source=opened_source):
+                self.data.qpos[:] = self.model.qpos0
+                self.evaluator.reset()
+                self.assertAlmostEqual(self.open(opened_source).reward[0], 0.05)
+                target = self.model.joint("drawer_search_target_joint").qposadr[0]
+                self.data.qpos[target : target + 3] = 0
+                self.data.qpos[self.model.joint("drawer0").qposadr[0]] = 0.15
+                result = self.score()
+                self.assertEqual(result.metrics["completed_target_count"][0], 1)
+                self.assertEqual(result.metrics["opened_drawer_count"][0], 2)
+                self.assertAlmostEqual(
+                    result.metrics["drawer_opening_bonus"][0], expected_bonus
+                )
+                self.assertAlmostEqual(result.reward[0], expected_reward)
+                # The next observation uses the newly selected target.
+                result = self.open(1)
+                self.assertAlmostEqual(result.metrics["drawer_opening_bonus"][0], 0.10)
+                self.assertAlmostEqual(result.reward[0], 0.475)
+
     def test_chronological_replay_reconstructs_episode_history(self):
         states, expected = [], []
         for mutation in (
@@ -240,11 +264,33 @@ class DrawerRewardsTest(unittest.TestCase):
         randomizer.bind_env(env)
         env.data.qpos[:] = env.model.qpos0
         randomizer.apply(env.model, env.data, state)
+        self.assertIs(env._episode_restorer, randomizer)
         self.assertEqual(env.prompt, "find the lemon")
         self.assertEqual(env._step_task_eval.metrics["drawer_opening_bonus"][0], 0)
         self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 0)
         env.reset(randomize=False)
         self.assertEqual(env.prompt, "find the lemon")
+
+    def test_registry_sampler_is_cloned_and_bound_for_retained_reset(self):
+        env = self.make_env()
+        prototype = type(env._task_randomizer)()
+        del env._task_randomizer
+        with mock.patch("abc_sim.env.get_task_randomizer", return_value=prototype):
+            env.reset(seed=4)
+        self.assertIsNone(prototype._env_ref)
+        self.assertIsNot(env._episode_restorer, prototype)
+        self.assertIs(env._episode_restorer._env_ref, env)
+        self.assertIs(env._episode_restorer, env._task_randomizer)
+        sampler = env._task_randomizer
+        env.data.qpos[env.model.joint("drawer_search_target_joint").qposadr[0]] = 0
+        env.advance_physics(1)
+        env.reset(randomize=False)
+        self.assertEqual(env.prompt, "find the apple")
+        self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 0)
+        self.assertEqual(env._step_task_eval.reward[0], 0)
+        env.reset(seed=5)
+        self.assertIs(env._task_randomizer, sampler)
+        self.assertIs(env._episode_restorer, sampler)
 
     def test_named_task_dispatch_preserves_exact_count_for_empty_and_typed_options(
         self,
