@@ -420,19 +420,20 @@ class MuJoCoYAMEnv(gym.Env):
             super().reset(seed=seed)
             return self.get_obs(), {"physics_profile": self.physics_profile_metadata()}
         self._validate_physics_observation_cadence()
-        self._physics_observer = None
-        super().reset(seed=seed)
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
             if randomize and randomizer is not None:
                 randomizer = randomizer.clone()
                 randomizer.bind_env(self)
-                self._task_randomizer = randomizer
         if randomizer is not None:
             prepare_reset = getattr(randomizer, "prepare_reset", None)
             if prepare_reset is not None:
                 prepare_reset(request=randomization_request, randomize=randomize)
+        if randomize and randomizer is not None:
+            self._task_randomizer = randomizer
+        self._physics_observer = None
+        super().reset(seed=seed)
         self.initialize_randomization(
             keep_arm_state=(options or {}).get("keep_arm_state", False)
         )

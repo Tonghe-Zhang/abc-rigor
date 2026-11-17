@@ -54,8 +54,6 @@ def _env(task="multi_drawer_search_2_shaped"):
     env.set_task(task)
     randomizer = drawer.MultiDrawerSearchRandomizer()
     randomizer.bind_env(env)
-    # This fixture already contains the full native body/joint inventory.
-    randomizer._full_scene_loaded = True
     env._task_randomizer = randomizer
     return env
 
@@ -76,6 +74,22 @@ class DrawerSceneTest(unittest.TestCase):
     def assert_physical_equal(self, env, expected):
         for key, actual in _physical(env).items():
             np.testing.assert_array_equal(actual, expected[key], err_msg=key)
+
+    def assert_fresh_episode(self, env, expected, record):
+        self.assert_physical_equal(env, expected)
+        self.assertEqual(env.data.time, 0)
+        self.assertEqual(env.cur_step, 0)
+        self.assertEqual(
+            env.prompt, f"find the {record['metadata']['target_sequence'][0]['label']}"
+        )
+        self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 0)
+        self.assertEqual(env._step_task_eval.reward[0], 0)
+        if env._task_spec.name.endswith("_shaped"):
+            self.assertEqual(env._step_task_eval.metrics["opened_drawer_count"][0], 0)
+            self.assertEqual(env._step_task_eval.metrics["drawer_opening_bonus"][0], 0)
+        self.assertEqual(
+            json.loads(json.dumps(env._last_randomization.to_dict())), record
+        )
 
     def test_serialized_cross_episode_and_fresh_replay(self):
         for task in ("multi_drawer_search", "multi_drawer_search_2_shaped"):
@@ -150,7 +164,7 @@ class DrawerSceneTest(unittest.TestCase):
                             env._step_task_eval.metrics["drawer_opening_bonus"][0], 0
                         )
 
-    def test_full_xml_bound_replay_retains_physical_scene_without_sampler(self):
+    def test_template_and_full_xml_episode_lifecycle_with_optional_sampler(self):
         for task, profile in (
             ("multi_drawer_search", None),
             ("multi_drawer_search_2_shaped", "round2_low_friction_v1"),
@@ -167,80 +181,203 @@ class DrawerSceneTest(unittest.TestCase):
                         json.loads(json.dumps(info["randomization"].to_dict()))
                     )
                     initial = _physical(producer)
+                    record = copy.deepcopy(saved.to_dict())
                     scene_xml = producer._scene_xml_string
                     self.assertIsNotNone(scene_xml)
+                    _, next_info = producer.reset(
+                        seed=0, options={"randomization": {"target_count": 2}}
+                    )
+                    next_initial = _physical(producer)
+                    next_record = json.loads(
+                        json.dumps(next_info["randomization"].to_dict())
+                    )
                 finally:
                     producer.close()
                     del producer
                     gc.collect()
 
-                env = abc_sim.make_env(
-                    task,
-                    scene_xml_string=scene_xml,
-                    enable_task_randomizer=False,
-                    render_cameras=False,
-                    physics_profile=profile,
-                )
-                restorer = drawer.MultiDrawerSearchRandomizer()
-                try:
-                    self.assertFalse(hasattr(env, "_task_randomizer"))
-                    restorer.bind_env(env)
-                    restorer.apply(env.model, env.data, saved)
-                    self.assert_physical_equal(env, initial)
-                    record = copy.deepcopy(saved.to_dict())
-                    target = saved.metadata["target_sequence"][0]
-                    target_address = env.model.joint(target["joint"]).qposadr[0]
-                    env.data.qpos[target_address : target_address + 3] = (
-                        env._step_task_eval.metrics["goal_bin_center"][0]
-                    )
-                    drawer_joint = saved.metadata["drawer_joints"][0]
-                    env.data.qpos[env.model.joint(drawer_joint).qposadr[0]] = 0.15
-                    env.advance_physics(1)
-                    self.assertEqual(
-                        env.task_runtime_debug_state()["completed_target_count"], 1
-                    )
-                    if task.endswith("_shaped"):
-                        self.assertEqual(
-                            env._step_task_eval.metrics["opened_drawer_count"][0], 1
+                for scene_kind, enabled, entry in (
+                    ("template", False, "randomized"),
+                    ("template", True, "randomized"),
+                    ("assembled", False, "randomized"),
+                    ("assembled", True, "randomized"),
+                    ("assembled", False, "replay"),
+                    ("assembled", True, "replay"),
+                ):
+                    with self.subTest(scene=scene_kind, sampler=enabled, entry=entry):
+                        env = abc_sim.make_env(
+                            task,
+                            scene_xml_string=scene_xml
+                            if scene_kind == "assembled"
+                            else None,
+                            enable_task_randomizer=enabled,
+                            render_cameras=False,
+                            physics_profile=profile,
                         )
-                    env.cur_step = 7
+                        restorer = drawer.MultiDrawerSearchRandomizer()
+                        model = rejected = None
+                        try:
+                            if entry == "randomized":
+                                env.reset(
+                                    seed=6,
+                                    options={"randomization": {"target_count": 2}},
+                                )
+                                self.assert_fresh_episode(env, initial, record)
+                            restorer.bind_env(env)
+                            restorer.apply(env.model, env.data, saved)
+                            model = env.model
+                            self.assert_fresh_episode(env, initial, record)
+                            has_sampler = enabled or entry == "randomized"
+                            self.assertEqual(
+                                hasattr(env, "_task_randomizer"), has_sampler
+                            )
+                            for operation, keep in (
+                                ("replay", True),
+                                ("retained", True),
+                                ("replay", False),
+                                ("retained", False),
+                            ):
+                                with self.subTest(
+                                    operation=operation, keep_arm_state=keep
+                                ):
+                                    target = saved.metadata["target_sequence"][0]
+                                    address = env.model.joint(target["joint"]).qposadr[
+                                        0
+                                    ]
+                                    env.data.qpos[address : address + 3] = (
+                                        env._step_task_eval.metrics["goal_bin_center"][
+                                            0
+                                        ]
+                                    )
+                                    joint = saved.metadata["drawer_joints"][0]
+                                    env.data.qpos[env.model.joint(joint).qposadr[0]] = (
+                                        0.15
+                                    )
+                                    env.advance_physics(1)
+                                    self.assertEqual(
+                                        env.task_runtime_debug_state()[
+                                            "completed_target_count"
+                                        ],
+                                        1,
+                                    )
+                                    if task.endswith("_shaped"):
+                                        self.assertEqual(
+                                            env._step_task_eval.metrics[
+                                                "opened_drawer_count"
+                                            ][0],
+                                            1,
+                                        )
+                                    moved = np.full(14, 0.25)
+                                    moved[env._gripper_indices] = (
+                                        np.array([0.25, 0.75], dtype=np.float32)
+                                        * 0.0475
+                                    )
+                                    self.assertFalse(
+                                        np.array_equal(
+                                            moved, initial["qpos"][env._qpos_indices]
+                                        )
+                                    )
+                                    env.data.qpos[env._qpos_indices] = moved
+                                    env.data.qvel[:] = 0.3
+                                    env.data.ctrl[:] = 0.2
+                                    env.data.time = 12
+                                    env.cur_step = 7
+                                    if operation == "replay":
+                                        restorer.apply(
+                                            env.model,
+                                            env.data,
+                                            saved,
+                                            keep_arm_state=keep,
+                                        )
+                                    else:
+                                        _, info = env.reset(
+                                            randomize=False,
+                                            options={"keep_arm_state": keep},
+                                        )
+                                        self.assertNotIn("randomization", info)
+                                    expected = {
+                                        key: value.copy()
+                                        for key, value in initial.items()
+                                    }
+                                    if keep:
+                                        expected["qpos"][env._qpos_indices] = moved
+                                    self.assert_fresh_episode(env, expected, record)
+                                    self.assertIs(env._episode_restorer, restorer)
+                                    self.assertIs(env.model, model)
+                                    self.assertEqual(
+                                        hasattr(env, "_task_randomizer"), has_sampler
+                                    )
 
-                    _, info = env.reset(randomize=False)
-                    self.assertNotIn("randomization", info)
-                    self.assertFalse(hasattr(env, "_task_randomizer"))
-                    self.assert_physical_equal(env, initial)
-                    self.assertEqual(env.data.time, 0)
-                    self.assertEqual(env.cur_step, 0)
-                    self.assertEqual(env.prompt, f"find the {target['label']}")
-                    self.assertEqual(
-                        env.task_runtime_debug_state()["completed_target_count"], 0
-                    )
-                    self.assertEqual(env._step_task_eval.reward[0], 0)
-                    if task.endswith("_shaped"):
-                        self.assertEqual(
-                            env._step_task_eval.metrics["opened_drawer_count"][0], 0
-                        )
-                        self.assertEqual(
-                            env._step_task_eval.metrics["drawer_opening_bonus"][0], 0
-                        )
-                    self.assertEqual(env._last_randomization.to_dict(), record)
-                    self.assertEqual(saved.to_dict(), record)
-                    self.assertIs(env._episode_restorer, restorer)
-                    rejected = drawer.MultiDrawerSearchRandomizer()
-                    rejected.bind_env(env)
-                    bad = copy.deepcopy(saved)
-                    bad.metadata["target_sequence"].pop()
-                    with self.assertRaises(ValueError):
-                        rejected.apply(env.model, env.data, bad)
-                    self.assertIs(env._episode_restorer, restorer)
-                    env.reset(randomize=False)
-                    self.assert_physical_equal(env, initial)
-                    self.assertFalse(hasattr(env, "_task_randomizer"))
-                    del rejected
-                finally:
-                    env.close()
-                    del restorer, env
-                    gc.collect()
+                            rejected = drawer.MultiDrawerSearchRandomizer()
+                            rejected.bind_env(env)
+                            bad = copy.deepcopy(saved)
+                            bad.metadata["target_sequence"].pop()
+                            with self.assertRaises(ValueError):
+                                rejected.apply(env.model, env.data, bad)
+                            self.assertIs(env._episode_restorer, restorer)
+                            env.reset(
+                                seed=0, options={"randomization": {"target_count": 2}}
+                            )
+                            self.assert_fresh_episode(env, next_initial, next_record)
+                            self.assertIs(env._episode_restorer, env._task_randomizer)
+                            env.data.qvel[:] = 0.3
+                            env.data.time = 12
+                            env.reset(randomize=False)
+                            self.assert_fresh_episode(env, next_initial, next_record)
+                            env.reset(
+                                seed=6, options={"randomization": {"target_count": 2}}
+                            )
+                            self.assert_fresh_episode(env, initial, record)
+                            self.assertIs(env.model, model)
+                            self.assertEqual(saved.to_dict(), record)
+                        finally:
+                            env.close()
+                            del env, restorer, rejected, model
+                            gc.collect()
+
+    def test_invalid_bound_scene_rejects_reset_before_episode_mutation(self):
+        env = _env()
+        env.reset(seed=6)
+        state = env._last_randomization
+        target = state.metadata["target_sequence"][0]
+        address = env.model.joint(target["joint"]).qposadr[0]
+        env.data.qpos[address : address + 3] = env._step_task_eval.metrics[
+            "goal_bin_center"
+        ][0]
+        env.advance_physics(1)
+        joint = env.model.joint(state.metadata["drawer_joints"][0]).id
+        env.model.jnt_type[joint] = mujoco.mjtJoint.mjJNT_HINGE
+        env.data.qvel[:] = 0.3
+        env.data.ctrl[:] = 0.2
+        env.data.time = 12
+        env.cur_step = 7
+        del env._task_randomizer
+        physical = _physical(env)
+        model, data = env.model, env.data
+        runtime = env.task_runtime_debug_state()
+        prompt = env.prompt
+        evaluation = env._step_task_eval
+        owner = env._episode_restorer
+        rng = copy.deepcopy(env.np_random.bit_generator.state)
+        with self.assertRaisesRegex(ValueError, "slide joint"):
+            env.reset(seed=0)
+        self.assertIs(env.model, model)
+        self.assertIs(env.data, data)
+        self.assert_physical_equal(env, physical)
+        self.assertEqual(env.data.time, 12)
+        self.assertEqual(env.cur_step, 7)
+        self.assertEqual(env.prompt, prompt)
+        self.assertEqual(env.task_runtime_debug_state(), runtime)
+        self.assertEqual(env.np_random.bit_generator.state, rng)
+        self.assertIs(env._step_task_eval, evaluation)
+        self.assertIs(env._last_randomization, state)
+        self.assertIs(env._episode_restorer, owner)
+        self.assertFalse(hasattr(env, "_task_randomizer"))
+        env.model.jnt_type[joint] = mujoco.mjtJoint.mjJNT_SLIDE
+        env.reset(seed=0)
+        self.assertIs(env.model, model)
+        self.assertEqual(env.task_runtime_debug_state()["completed_target_count"], 0)
+        self.assertIs(env._episode_restorer, env._task_randomizer)
 
     def test_invalid_effective_sequence_rejects_before_any_episode_mutation(self):
         env = _env()
@@ -313,7 +450,6 @@ class DrawerSceneTest(unittest.TestCase):
                     env._task_evaluator._credited_openings, credited
                 )
                 self.assertEqual(env._task_randomizer._current_scale_states, {})
-                self.assertTrue(env._task_randomizer._full_scene_loaded)
                 self.assertEqual(bad.to_dict(), bad_record)
 
     def test_all_explicit_counts_and_unchanged_native_seed_sequence(self):

@@ -52,6 +52,21 @@ A final qpos snapshot or a 30 Hz video does not contain enough information to
 reconstruct unique openings or transient deposits. Batched MJWarp environments
 already reject drawer tasks because they require a per-step Python runtime.
 
+These rewards are persistent progress **scores**, not increments. `step` returns
+the current score; `step_chunk` returns the last action's score. Neither method
+aggregates an episode return. An episodic RL caller can assign the final observed
+score once, or explicitly track and assign the maximum observed score. These are
+different objectives because current-target proximity can decrease. The
+environment does not select either convention for the caller.
+
+Summed discounted scores need separate timing and terminal treatment. With
+`terminate_on_success=True`, waiting at a score of `0.575` for one action before
+completing gives `0.575 + gamma`, exceeding immediate completion's `1` when
+`gamma > 0.425`. This incentive is conditional on that summed-return objective
+and early termination. The default is `terminate_on_success=False`; callers can
+retain completed scenes through their fixed horizon. Record the chosen score
+aggregation, horizon, and termination settings with the training objective.
+
 Nonrandomized resets restore the current episode's recorded initial physical
 scene while clearing deposit and opening history. This includes stack poses,
 active-object collision masks, object/bin positions, and inactive placements;
@@ -69,6 +84,21 @@ Successful bound replay records the restorer that owns this initial scene.
 Retained resets use that restorer independently of the sampling randomizer, so
 full-XML replay environments may keep `enable_task_randomizer=False`. A rejected
 replay leaves the previous restorer in place.
+
+Drawer scene readiness follows the bound model's inventory. Complete assembled
+scenes are validated and reused; native templates are assembled before sampling.
+Incomplete or mixed assembled inventories are rejected before reset clears
+dynamics or retained episode state. This applies to direct full-XML construction
+and to randomized resets after replay. `enable_task_randomizer=False` skips
+initial sampler attachment; an explicit randomized reset can initialize a sampler
+and subsequent resets reuse it. When starting with a native template and sampling
+disabled, perform a randomized reset before applying a full-scene recording.
+Bound drawer replay expects that assembled inventory.
+
+Explicit replay with `keep_arm_state=True`, or retained reset with
+`options={"keep_arm_state": True}`, carries the current arm and gripper pose.
+The default restores configured arm initialization. Both choices clear
+velocities, controls, time, step count, and chronological drawer history.
 
 ## Friction profile
 
