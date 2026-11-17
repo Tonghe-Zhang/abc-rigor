@@ -36,7 +36,7 @@ def main() -> None:
 
     spec = abc_sim.get_task_spec(args.task)
     env = abc_sim.make_env(
-        task=spec.env_task,
+        task=spec.name,
         prompt=spec.prompt,
         chunk_dim=args.chunk_dim,
         render_cameras=args.render_cameras,
