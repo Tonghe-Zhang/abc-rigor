@@ -393,7 +393,7 @@ def make_batched_env(
     With ``randomize_background=True`` every world shows its own background, redrawn on
     every ``reset``: the render context holds ``min(num_worlds, background_pool_size)``
     texture sets (world ``w`` uses set ``w % n_sets``) at ``background_slot_scale``
-    resolution (0.5: about 7 MB of GPU texture per set).
+    resolution (0.5: about 8 MB of GPU texture per set).
     """
     from abc_sim.batched_env import BatchedWarpYAMEnv
 

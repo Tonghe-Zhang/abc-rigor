@@ -16,6 +16,7 @@ from abc_sim.background import (
     apply_background_xml,
     background_material_ids,
     background_rng,
+    background_texture_ids,
     has_background_slots,
     resolve_asset_dir,
     slot_sizes,
@@ -300,6 +301,32 @@ class RenderSwapTest(unittest.TestCase):
             fresh.update_scene(env.data, camera="top")
             np.testing.assert_array_equal(live.transpose(1, 2, 0), fresh.render())
             self.assertGreater(np.abs(live.astype(int) - before.astype(int)).mean(), 1.0)
+            fresh.close()
+            env.close()
+
+    def test_failed_reset_does_not_leave_a_stale_render(self):
+        from unittest import mock
+
+        import abc_sim
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_package(Path(tmp))
+            env = abc_sim.make_env(task="spell_cat", camera_height=60, camera_width=80,
+                                   randomize_background=True, background_seed=0, background_variation_asset_dir=str(root))
+            env.reset(seed=0)
+            with mock.patch.object(env, "finalize_randomization", side_effect=RuntimeError("forced")), \
+                    self.assertRaises(RuntimeError):
+                env.reset(seed=1)  # draws a new background, then fails before showing it
+            obs, info = env.reset(seed=2, randomize=False)
+            fresh = mujoco.Renderer(env.model, 60, 80)
+            fresh.update_scene(env.data, camera="top")
+            np.testing.assert_array_equal(obs["images"]["top"].transpose(1, 2, 0), fresh.render())
+            self.assertEqual(info["background"], env.background_info)
+            # the model shows exactly the reported draw
+            shown = env._background.library.slot_images(env._background.state)["wall_far"]
+            tid = background_texture_ids(env.model)["wall_far"]
+            adr, n = int(env.model.tex_adr[tid]), shown.size
+            np.testing.assert_array_equal(env.model.tex_data[adr:adr + n], shown.reshape(-1))
             fresh.close()
             env.close()
 

@@ -96,6 +96,7 @@ class MuJoCoYAMEnv(gym.Env):
     """
 
     _background: BackgroundController | None = None  # class default: disabled
+    _background_pending = False  # a draw not yet uploaded to the live renderer
 
     def __init__(
         self,
@@ -266,6 +267,7 @@ class MuJoCoYAMEnv(gym.Env):
         apply_physics_profile(model, self.physics_profile)
         if self._background is not None:
             self._background.apply(model)  # pixels only: before any renderer uploads textures
+            self._background_pending = False  # the renderers created below upload the current draw
         self.model = model
         self._step_task_eval = None
         self.model.opt.timestep = self._physics_dt
@@ -431,8 +433,14 @@ class MuJoCoYAMEnv(gym.Env):
         if self._background is None:
             raise RuntimeError("Backgrounds are disabled: create the env with randomize_background=True.")
         self._background.draw(background_id)
-        self._refresh_background_textures(self._background.apply(self.model))
+        self._background_pending = True
+        self._show_pending_background()
         return self._background.info()
+
+    def _show_pending_background(self) -> None:
+        if self._background_pending:
+            self._refresh_background_textures(self._background.apply(self.model))
+            self._background_pending = False
 
     @property
     def background_info(self) -> dict[str, Any] | None:
@@ -541,17 +549,18 @@ class MuJoCoYAMEnv(gym.Env):
             info = {"physics_profile": self.physics_profile_metadata()}
             if self._background is not None:
                 if (options or {}).get("background_id") is not None:
-                    self.set_background(options["background_id"])
+                    self._background.draw(options["background_id"])
+                    self._background_pending = True
+                self._show_pending_background()
                 info["background"] = self._background.info()
             return self.get_obs(), info
         self._validate_physics_observation_cadence()
-        background_model = None
         if self._background is not None:
             pinned = (options or {}).get("background_id")
             if (
                 pinned is not None or (randomize and self._background.config.resample == "episode")
             ) and self._background.next_episode(pinned):
-                background_model = self.model  # redrawn: shown once the scene is final
+                self._background_pending = True  # shown once the scene is final (a reload binds it itself)
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
@@ -593,8 +602,7 @@ class MuJoCoYAMEnv(gym.Env):
             episode=episode,
             keep_arm_state=(options or {}).get("keep_arm_state", False),
         )
-        if background_model is self.model:  # no reload in this reset (a reload binds the new draw itself)
-            self._refresh_background_textures(self._background.apply(self.model))
+        self._show_pending_background()
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
         if self._last_randomization is not None:
             info["randomization"] = self._last_randomization
