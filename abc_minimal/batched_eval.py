@@ -36,6 +36,7 @@ EMPTY_EVAL = {"reward": 0.0, "success": False, "ever_success": False}
 
 
 def make_batched_env(config: SimEvalConfig) -> BatchedWarpYAMEnv:
+    from abc_minimal.eval_policy import background_kwargs
     from abc_minimal.sim_env import task_spec
 
     spec = task_spec(config.task)
@@ -52,6 +53,7 @@ def make_batched_env(config: SimEvalConfig) -> BatchedWarpYAMEnv:
         camera_height=config.camera_height,
         camera_width=config.camera_width,
         camera_gpu_id=config.gpu_id,
+        **background_kwargs(config),
     )
 
 

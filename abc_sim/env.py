@@ -16,6 +16,7 @@ import mujoco
 import numpy as np
 from gymnasium import spaces
 
+from abc_sim.background import BackgroundConfig, BackgroundController
 from abc_sim.config import RobotSystemConfig
 from abc_sim.physics import PhysicsProfile, apply_physics_profile, resolve_physics_profile
 from abc_sim.rendering.live import LiveRenderBackend, create_live_camera_provider
@@ -94,6 +95,8 @@ class MuJoCoYAMEnv(gym.Env):
     [left_j1..6, left_grip, right_j1..6, right_grip].
     """
 
+    _background: BackgroundController | None = None  # class default: disabled
+
     def __init__(
         self,
         config: RobotSystemConfig,
@@ -111,8 +114,11 @@ class MuJoCoYAMEnv(gym.Env):
         terminate_on_success: bool = False,
         wrist_fov: float = 58.0,
         physics_profile: str | PhysicsProfile | None = None,
+        background: BackgroundConfig | None = None,
     ):
         super().__init__()
+        # Opt-in visual background variations (abc_sim.background); None keeps the scene unchanged.
+        self._background = BackgroundController(background) if background is not None else None
         self.config = config
         self.chunk_dim = chunk_dim
         self._prompt_override = prompt
@@ -229,15 +235,29 @@ class MuJoCoYAMEnv(gym.Env):
     def setup_model(self):
         if self._scene_xml_string is not None:
             model = self._compile_scene_xml(self._scene_xml_string)
+        elif self._background is not None:
+            model = self._compile_scene_xml(
+                self._scene_xml.read_text(), base_dir=self._scene_xml.parent
+            )
         else:
             model = mujoco.MjModel.from_xml_path(str(self._scene_xml))
         self._bind_model(model)
 
-    @staticmethod
-    def _compile_scene_xml(xml_string: str) -> mujoco.MjModel:
+    def background_xml(self, xml_string: str) -> str:
+        """The scene XML with background texture slots when backgrounds are enabled, else unchanged."""
+        if self._background is None:
+            return xml_string
+        return self._background.xml(xml_string)
+
+    def _compile_scene_xml(
+        self, xml_string: str, *, base_dir: str | Path | None = None
+    ) -> mujoco.MjModel:
         """Compile a candidate with asset paths relative to the bundled models."""
+        background = getattr(self, "_background", None)
+        if background is not None:
+            xml_string = background.xml(xml_string)
         prev_cwd = os.getcwd()
-        os.chdir(Path(__file__).parent / "models")
+        os.chdir(base_dir or Path(__file__).parent / "models")
         try:
             return mujoco.MjModel.from_xml_string(xml_string)
         finally:
@@ -245,6 +265,9 @@ class MuJoCoYAMEnv(gym.Env):
 
     def _bind_model(self, model: mujoco.MjModel) -> None:
         apply_physics_profile(model, self.physics_profile)
+        background = getattr(self, "_background", None)
+        if background is not None:
+            background.apply(model)  # pixels only: before any renderer uploads textures
         self.model = model
         self._step_task_eval = None
         self.model.opt.timestep = self._physics_dt
@@ -378,6 +401,53 @@ class MuJoCoYAMEnv(gym.Env):
         )
         self._step_task_eval = None
 
+    def _refresh_background_textures(self, texture_ids: list[int]) -> None:
+        """Upload rewritten background textures to the live renderer."""
+        if not texture_ids or not self._render_cameras_flag:
+            return
+        renderer = getattr(self, "renderer", None)
+        ctx = getattr(renderer, "_mjr_context", None)
+        gl = getattr(renderer, "_gl_context", None)
+        if renderer is not None and ctx is not None:
+            if gl is not None:
+                gl.make_current()
+            for tid in texture_ids:
+                mujoco.mjr_uploadTexture(self.model, ctx, tid)
+            return
+        # Other backends copy textures when they are created: rebuild the camera backend.
+        self._close_camera_backend()
+        if self._camera_backend == "mujoco":
+            self.renderer = mujoco.Renderer(
+                self.model, height=self._camera_height, width=self._camera_width
+            )
+        else:
+            self._camera_provider = create_live_camera_provider(
+                model=self.model,
+                data=self.data,
+                backend=self._camera_backend,
+                width=self._camera_width,
+                height=self._camera_height,
+                gpu_id=self._camera_gpu_id,
+                camera_names=tuple(self.camera_names),
+            )
+
+    def set_background(self, background_id: int | None = None) -> dict[str, Any] | None:
+        """Draw a background from the background stream (or pin ``background_id``) and show it."""
+        if self._background is None:
+            raise RuntimeError("Backgrounds are disabled: create the env with randomize_background=True.")
+        self._background.draw(background_id)
+        self._refresh_background_textures(self._background.apply(self.model))
+        return self._background.info()
+
+    def _next_episode_background(self, background_id: int | None) -> None:
+        if self._background.next_episode(background_id):
+            self._refresh_background_textures(self._background.apply(self.model))
+
+    @property
+    def background_info(self) -> dict[str, Any] | None:
+        """The current background draw (id, wallpaper and table instance), or None when disabled."""
+        return None if self._background is None else self._background.info()
+
     def _reset_camera_backend(self) -> None:
         if self._camera_provider is not None:
             self._camera_provider.reset()
@@ -477,6 +547,13 @@ class MuJoCoYAMEnv(gym.Env):
             super().reset(seed=seed)
             return self.get_obs(), {"physics_profile": self.physics_profile_metadata()}
         self._validate_physics_observation_cadence()
+        if self._background is not None:
+            pinned = (options or {}).get("background_id")
+            if pinned is not None or (
+                randomize
+                and (self._background.config.resample == "episode" or self._background.state is None)
+            ):
+                self._next_episode_background(pinned)
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
@@ -521,6 +598,8 @@ class MuJoCoYAMEnv(gym.Env):
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
         if self._last_randomization is not None:
             info["randomization"] = self._last_randomization
+        if self._background is not None:
+            info["background"] = self._background.info()
         return self.get_obs(), info
 
     def initialize_randomization(self, *, keep_arm_state: bool = False) -> None:

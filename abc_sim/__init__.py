@@ -124,6 +124,34 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def background_config(
+    *,
+    randomize_background: bool = False,
+    background_seed: int | None = None,
+    background_id: int | None = None,
+    background_variation_asset_dir: str | Path | None = None,
+    background_resample: str = "episode",
+):
+    """``BackgroundConfig`` for the ``make_env`` background options, or None when disabled."""
+    if not randomize_background:
+        if background_id is not None or background_seed is not None:
+            raise ValueError("background_id / background_seed need randomize_background=True")
+        return None
+    if not background_variation_asset_dir:
+        raise ValueError(
+            "randomize_background=True needs background_variation_asset_dir "
+            "(a background package directory or s3:// URI)"
+        )
+    from abc_sim.background import BackgroundConfig
+
+    return BackgroundConfig(
+        asset_dir=str(background_variation_asset_dir),
+        seed=background_seed,
+        background_id=background_id,
+        resample=background_resample,
+    )
+
+
 def make_env(
     task: str | SimTaskSpec = "bottles",
     render_cameras: bool = True,
@@ -139,6 +167,11 @@ def make_env(
     max_episode_steps: int | None = None,
     terminate_on_success: bool = False,
     physics_profile: str | PhysicsProfile | None = None,
+    randomize_background: bool = False,
+    background_seed: int | None = None,
+    background_id: int | None = None,
+    background_variation_asset_dir: str | Path | None = None,
+    background_resample: str = "episode",
     **kwargs,
 ) -> "MuJoCoYAMEnv":
     """Create a MuJoCo YAM bimanual environment.
@@ -166,6 +199,20 @@ def make_env(
             when the task evaluator reports success.
         physics_profile: Optional named or explicit contact profile, applied to
             every compiled model before simulation and rendering are initialized.
+        randomize_background: Opt-in (default off). Replace the walls' and table's
+            appearance with real wallpaper x table surface textures from the package in
+            ``background_variation_asset_dir``. Visual only: collision geometry, objects
+            and task physics are unchanged. See docs/background-variations.md.
+        background_seed: Seed of the background stream, independent of the task /
+            episode ``seed`` passed to ``reset``. ``None`` uses OS entropy. Give parallel
+            workers distinct values (e.g. base + rank).
+        background_id: Pin one combination in ``[0, n_combinations)``
+            (``wallpaper_index * n_table_types + table_index``, sorted names).
+        background_variation_asset_dir: Background package directory, local path or
+            ``s3://`` URI (downloaded once per machine). Required with
+            ``randomize_background``.
+        background_resample: ``"episode"`` (default) draws a new background on every
+            randomized reset; ``"env"`` keeps the first draw.
         **kwargs: Additional kwargs passed to MuJoCoYAMEnv.
 
     Returns:
@@ -182,6 +229,13 @@ def make_env(
     )
 
     kwargs["physics_profile"] = physics_profile
+    kwargs["background"] = background_config(
+        randomize_background=randomize_background,
+        background_seed=background_seed,
+        background_id=background_id,
+        background_variation_asset_dir=background_variation_asset_dir,
+        background_resample=background_resample,
+    )
 
     if scene_xml is not None and scene_xml_string is not None:
         raise ValueError("scene_xml and scene_xml_string are mutually exclusive")
@@ -330,6 +384,10 @@ def make_batched_env(
     """
     from abc_sim.batched_env import BatchedWarpYAMEnv
 
+    if kwargs.get("randomize_background"):
+        # All worlds share one texture set in the batched renderer: one background per batched env.
+        # Vary it across batched envs / workers with distinct background_seed values.
+        kwargs["background_resample"] = "env"
     base_env = make_env(task=task, prompt=prompt, render_cameras=False, **kwargs)
     return BatchedWarpYAMEnv(
         base_env,
@@ -344,6 +402,7 @@ __all__ = [
     "MuJoCoYAMEnv",
     "make_env",
     "make_batched_env",
+    "background_config",
     "get_i2rt_sim_config",
     "get_i2rt_config",
     "RobotSystemConfig",

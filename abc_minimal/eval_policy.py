@@ -368,7 +368,20 @@ def _make_env(config: SimEvalConfig, camera_keys: tuple[str, ...]) -> SimTaskEnv
         prompt=config.prompt,
         camera_backend=config.camera_backend,
         gpu_id=config.gpu_id,
+        background=background_kwargs(config),
     )
+
+
+def background_kwargs(config: SimEvalConfig) -> dict[str, Any]:
+    """make_env background options from the eval config (empty when disabled)."""
+    if not config.randomize_background:
+        return {}
+    return {
+        "randomize_background": True,
+        "background_seed": config.background_seed,
+        "background_id": config.background_id,
+        "background_variation_asset_dir": config.background_variation_asset_dir,
+    }
 
 
 def resolved_physics(env: Any) -> dict[str, Any] | None:

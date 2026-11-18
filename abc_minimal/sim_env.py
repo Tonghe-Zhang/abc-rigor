@@ -45,6 +45,7 @@ class SimTaskEnv:
         prompt: str,
         camera_backend: str = "mjwarp",
         gpu_id: int | None = None,
+        background: dict[str, Any] | None = None,
     ):
         self.spec = task_spec(task)
         self.height = height
@@ -70,6 +71,7 @@ class SimTaskEnv:
             camera_gpu_id=gpu_id,
             camera_height=height,
             camera_width=width,
+            **(background or {}),
         )
 
     def reset(self, seed: int, options: dict[str, Any] | None = None) -> dict[str, Any]:

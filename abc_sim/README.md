@@ -154,6 +154,9 @@ Custom `SimTaskSpec` objects can also be passed directly to `make_env`. See
 [optional seeded spelling goals](../docs/seeded-spelling.md) for a configuration
 that samples two, three, or four distinct letters without adding catalogue tasks.
 
+`make_env(..., randomize_background=True, background_variation_asset_dir=...)` turns on
+[background variations](../docs/background-variations.md). This opt-in, appearance-only randomization puts real wallpaper and table surface textures on the walls and the table; objects and physics are unchanged. `background_seed` drives a background stream that is independent of the task seed, and `background_id` pins one wallpaper × table combination.
+
 ## Rewards and Success
 
 Custom tasks can opt into [conservative free-placement spelling](../docs/free-placement-spelling.md),

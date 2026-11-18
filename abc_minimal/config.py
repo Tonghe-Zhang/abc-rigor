@@ -289,6 +289,14 @@ class SimEvalConfig:
     video_every_n_actions: int = 1
     # None resolves to "sim " + the task's prompt from the abc_sim spec.
     prompt: str | None = None
+    # Opt-in background variations (visual only; see docs/background-variations.md).
+    randomize_background: bool = False
+    # Background stream seed, independent of `seed` (task/episode). None: OS entropy.
+    background_seed: int | None = None
+    # Pin one wallpaper x table combination in [0, n_combinations).
+    background_id: int | None = None
+    # Background package: local directory or s3:// URI. Required with randomize_background.
+    background_variation_asset_dir: str | None = None
 
     clip: ClipConfig = field(default_factory=ClipConfig)
     model: DiTConfig = field(default_factory=DiTConfig)
