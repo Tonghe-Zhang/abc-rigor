@@ -155,6 +155,7 @@ class BackgroundLibrary:
         if not self.wall_types or not self.table_types:
             raise ValueError(f"empty background package at {self.root}")
         self._cache: dict[tuple[str, str], np.ndarray] = {}
+        self._slots: dict[tuple[str, str], dict[str, np.ndarray]] = {}
 
     @property
     def n_combinations(self) -> int:
@@ -179,21 +180,32 @@ class BackgroundLibrary:
 
     # ---- pixels -------------------------------------------------------------------------------
     def slot_images(self, state: dict[str, Any]) -> dict[str, np.ndarray]:
-        """(H, W, 3) uint8 per slot, at the scene's true print scale."""
-        out = {}
+        """(H, W, 3) uint8 per slot, at the scene's true print scale (recent instances cached)."""
         S = _SCENE
-        for k in ("wall_far", "wall_left", "wall_right"):
-            span_u = (S["left_y"] - S["right_y"]) if k == "wall_far" else (S["far_x"] - S["near_x"])
-            out[k] = self._fit_wall(state["wallpaper_dir"], k, span_u, S["z1"] - S["z0"], _SLOTS[k])
-        out["table"] = self._tile_table(state["table_dir"], 2 * S["table_y"], S["table_x"][1] - S["table_x"][0], _SLOTS["table"])
-        return out
+        walls = self._slots.get(("w", state["wallpaper_dir"]))
+        if walls is None:
+            walls = {}
+            for k in ("wall_far", "wall_left", "wall_right"):
+                span_u = (S["left_y"] - S["right_y"]) if k == "wall_far" else (S["far_x"] - S["near_x"])
+                walls[k] = self._fit_wall(state["wallpaper_dir"], k, span_u, S["z1"] - S["z0"], _SLOTS[k])
+            self._remember(("w", state["wallpaper_dir"]), walls)
+        table = self._slots.get(("t", state["table_dir"]))
+        if table is None:
+            table = {"table": self._tile_table(state["table_dir"], 2 * S["table_y"], S["table_x"][1] - S["table_x"][0], _SLOTS["table"])}
+            self._remember(("t", state["table_dir"]), table)
+        return {**walls, **table}
+
+    def _remember(self, key, value) -> None:
+        if len(self._slots) >= 6:  # <= ~50 MB per process
+            self._slots.pop(next(iter(self._slots)))
+        self._slots[key] = value
 
     def _read(self, rel: str) -> np.ndarray:
         key = (rel, "")
         img = self._cache.get(key)
         if img is None:
             img = _read_rgb(self.root / rel)
-            if len(self._cache) > 64:
+            if len(self._cache) > 24:
                 self._cache.pop(next(iter(self._cache)))
             self._cache[key] = img
         return img
@@ -237,7 +249,7 @@ def _resize(img: np.ndarray, slot: tuple[int, int]) -> np.ndarray:
     try:
         from PIL import Image
 
-        return np.asarray(Image.fromarray(img).resize((W, H), Image.Resampling.LANCZOS), dtype=np.uint8)
+        return np.asarray(Image.fromarray(img).resize((W, H), Image.Resampling.BILINEAR, reducing_gap=2.0), dtype=np.uint8)
     except ImportError:  # nearest-neighbour fallback
         ys = (np.arange(H) * img.shape[0] / H).astype(int)
         xs = (np.arange(W) * img.shape[1] / W).astype(int)

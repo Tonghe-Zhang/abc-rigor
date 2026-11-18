@@ -175,7 +175,7 @@ def main():
     ap.add_argument("--background-variation-asset-dir", "--background_variation_asset_dir", required=True)
     ap.add_argument("--background-seed", "--background_seed", type=int, default=0, help="task i uses seed + i")
     ap.add_argument("--tasks", nargs="*", help="task names (default: the whole catalogue)")
-    ap.add_argument("--max-tasks", type=int, default=40, help="cap on simultaneously loaded tasks (CPU / memory)")
+    ap.add_argument("--max-tasks", "--max_tasks", type=int, default=40, help="cap on simultaneously loaded tasks (CPU / memory)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--width", type=int, default=640)
