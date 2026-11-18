@@ -10,7 +10,7 @@ name = "abc-sim"
 version = "0.1.0"
 description = "abc_sim: the MuJoCo YAM bimanual task simulator from the abc release."
 requires-python = ">=3.10"
-dependencies = ["mujoco>=3.8", "numpy"]
+dependencies = ["mujoco>=3.8", "numpy", "pillow"]
 
 [project.optional-dependencies]
 warp = ["mujoco-warp", "warp-lang"]

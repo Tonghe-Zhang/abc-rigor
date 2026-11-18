@@ -16,7 +16,7 @@ import mujoco
 import numpy as np
 from gymnasium import spaces
 
-from abc_sim.background import BackgroundConfig, BackgroundController
+from abc_sim.background import BackgroundConfig, BackgroundController, background_texture_ids
 from abc_sim.config import RobotSystemConfig
 from abc_sim.physics import PhysicsProfile, apply_physics_profile, resolve_physics_profile
 from abc_sim.rendering.live import LiveRenderBackend, create_live_camera_provider
@@ -253,9 +253,8 @@ class MuJoCoYAMEnv(gym.Env):
         self, xml_string: str, *, base_dir: str | Path | None = None
     ) -> mujoco.MjModel:
         """Compile a candidate with asset paths relative to the bundled models."""
-        background = getattr(self, "_background", None)
-        if background is not None:
-            xml_string = background.xml(xml_string)
+        if self._background is not None:
+            xml_string = self._background.xml(xml_string)
         prev_cwd = os.getcwd()
         os.chdir(base_dir or Path(__file__).parent / "models")
         try:
@@ -265,9 +264,8 @@ class MuJoCoYAMEnv(gym.Env):
 
     def _bind_model(self, model: mujoco.MjModel) -> None:
         apply_physics_profile(model, self.physics_profile)
-        background = getattr(self, "_background", None)
-        if background is not None:
-            background.apply(model)  # pixels only: before any renderer uploads textures
+        if self._background is not None:
+            self._background.apply(model)  # pixels only: before any renderer uploads textures
         self.model = model
         self._step_task_eval = None
         self.model.opt.timestep = self._physics_dt
@@ -286,17 +284,28 @@ class MuJoCoYAMEnv(gym.Env):
                     width=self._camera_width,
                 )
             else:
-                self._camera_provider = create_live_camera_provider(
-                    model=self.model,
-                    data=self.data,
-                    backend=self._camera_backend,
-                    width=self._camera_width,
-                    height=self._camera_height,
-                    gpu_id=self._camera_gpu_id,
-                    camera_names=tuple(self.camera_names),
-                )
+                self._create_camera_provider()
 
         self._build_index_maps()
+
+    def _create_camera_provider(self) -> None:
+        self._camera_provider = create_live_camera_provider(
+            model=self.model,
+            data=self.data,
+            backend=self._camera_backend,
+            width=self._camera_width,
+            height=self._camera_height,
+            gpu_id=self._camera_gpu_id,
+            camera_names=tuple(self.camera_names),
+        )
+        if self._background is not None and self._camera_backend == "mjwarp":
+            self._upload_mjwarp_background(list(background_texture_ids(self.model).values()))
+
+    def _upload_mjwarp_background(self, texture_ids: list[int]) -> None:
+        """MJWarp copies textures at context creation and ignores emission: upload with the wall gain."""
+        slot_of = {tid: k for k, tid in background_texture_ids(self.model).items()}
+        gains = {tid: self._background.mjwarp_gain(slot_of[tid]) for tid in texture_ids}
+        self._camera_provider.update_textures(self.model, texture_ids, gains)
 
     def _configure_model_cameras(self) -> None:
         """Apply constructor camera calibration before allocating renderers."""
@@ -405,31 +414,17 @@ class MuJoCoYAMEnv(gym.Env):
         """Upload rewritten background textures to the live renderer."""
         if not texture_ids or not self._render_cameras_flag:
             return
-        renderer = getattr(self, "renderer", None)
-        ctx = getattr(renderer, "_mjr_context", None)
-        gl = getattr(renderer, "_gl_context", None)
-        if renderer is not None and ctx is not None:
-            if gl is not None:
-                gl.make_current()
+        if self._camera_provider is None:  # CPU renderer: re-upload just these textures
+            self.renderer._gl_context.make_current()
             for tid in texture_ids:
-                mujoco.mjr_uploadTexture(self.model, ctx, tid)
+                mujoco.mjr_uploadTexture(self.model, self.renderer._mjr_context, tid)
+            return
+        if self._camera_backend == "mjwarp":  # swap the textures in the live render context
+            self._upload_mjwarp_background(texture_ids)
             return
         # Other backends copy textures when they are created: rebuild the camera backend.
         self._close_camera_backend()
-        if self._camera_backend == "mujoco":
-            self.renderer = mujoco.Renderer(
-                self.model, height=self._camera_height, width=self._camera_width
-            )
-        else:
-            self._camera_provider = create_live_camera_provider(
-                model=self.model,
-                data=self.data,
-                backend=self._camera_backend,
-                width=self._camera_width,
-                height=self._camera_height,
-                gpu_id=self._camera_gpu_id,
-                camera_names=tuple(self.camera_names),
-            )
+        self._create_camera_provider()
 
     def set_background(self, background_id: int | None = None) -> dict[str, Any] | None:
         """Draw a background from the background stream (or pin ``background_id``) and show it."""
@@ -438,10 +433,6 @@ class MuJoCoYAMEnv(gym.Env):
         self._background.draw(background_id)
         self._refresh_background_textures(self._background.apply(self.model))
         return self._background.info()
-
-    def _next_episode_background(self, background_id: int | None) -> None:
-        if self._background.next_episode(background_id):
-            self._refresh_background_textures(self._background.apply(self.model))
 
     @property
     def background_info(self) -> dict[str, Any] | None:
@@ -457,6 +448,8 @@ class MuJoCoYAMEnv(gym.Env):
             self._camera_provider.close()
             self._camera_provider = None
         if hasattr(self, "renderer"):
+            # mujoco.Renderer.close() deletes its GL objects in whichever context is current.
+            self.renderer._gl_context.make_current()
             self.renderer.close()
             del self.renderer
 
@@ -545,15 +538,20 @@ class MuJoCoYAMEnv(gym.Env):
                 keep_arm_state=(options or {}).get("keep_arm_state", False),
             )
             super().reset(seed=seed)
-            return self.get_obs(), {"physics_profile": self.physics_profile_metadata()}
+            info = {"physics_profile": self.physics_profile_metadata()}
+            if self._background is not None:
+                if (options or {}).get("background_id") is not None:
+                    self.set_background(options["background_id"])
+                info["background"] = self._background.info()
+            return self.get_obs(), info
         self._validate_physics_observation_cadence()
+        background_model = None
         if self._background is not None:
             pinned = (options or {}).get("background_id")
-            if pinned is not None or (
-                randomize
-                and (self._background.config.resample == "episode" or self._background.state is None)
-            ):
-                self._next_episode_background(pinned)
+            if (
+                pinned is not None or (randomize and self._background.config.resample == "episode")
+            ) and self._background.next_episode(pinned):
+                background_model = self.model  # redrawn: shown once the scene is final
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
@@ -595,6 +593,8 @@ class MuJoCoYAMEnv(gym.Env):
             episode=episode,
             keep_arm_state=(options or {}).get("keep_arm_state", False),
         )
+        if background_model is self.model:  # no reload in this reset (a reload binds the new draw itself)
+            self._refresh_background_textures(self._background.apply(self.model))
         info: dict[str, Any] = {"physics_profile": self.physics_profile_metadata()}
         if self._last_randomization is not None:
             info["randomization"] = self._last_randomization

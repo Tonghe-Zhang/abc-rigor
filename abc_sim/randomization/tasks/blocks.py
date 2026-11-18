@@ -81,9 +81,7 @@ class BlocksRandomizer(SceneRandomizer):
         else:
             if self._appearance_model is None:
                 xml = appearance_xml(self._base_scene_xml_string)
-                background_xml = getattr(env, "background_xml", None)
-                if background_xml is not None:  # unchanged unless backgrounds are enabled
-                    xml = background_xml(xml)
+                xml = env.background_xml(xml)  # unchanged unless backgrounds are enabled
                 self._appearance_model = mujoco.MjModel.from_xml_string(
                     _resolve_scene_xml_paths(xml, self._base_scene_xml_dir)
                 )

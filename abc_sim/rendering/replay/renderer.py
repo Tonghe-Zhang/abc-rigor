@@ -459,19 +459,24 @@ class RendererWrapper:
         else:
             raise ValueError(f"Unknown backend: {backend!r}")
 
-    def update_textures(self, images: dict[int, np.ndarray]) -> None:
-        """Replace textures (id -> (H, W, 3) uint8, same size as compiled) in the live MJWarp context."""
+    def update_textures(self, images: dict[int, np.ndarray], gains: dict[int, float] | None = None) -> None:
+        """Set textures (id -> (H, W, 3) uint8) in the live MJWarp context; ids past the end are appended.
+
+        ``gains`` scales a texture's colour (float textures are not clamped), e.g. to stand in for
+        material emission, which this renderer does not apply.
+        """
         if self._rc is None:
             raise NotImplementedError("in-place texture updates need the mjwarp backend")
         wp = self._wp
         registry = self._rc.textures_registry
-        for tid, img in images.items():
-            h, w = int(self.mjm.tex_height[tid]), int(self.mjm.tex_width[tid])
-            if img.shape[:2] != (h, w):
-                raise ValueError(f"texture {tid} is {w}x{h}, got {img.shape[1]}x{img.shape[0]}")
-            rgba = np.ones((h, w, 4), np.float32)
-            rgba[..., :3] = img[..., :3] * np.float32(1.0 / 255.0)
-            registry[tid] = wp.Texture2D(wp.array(rgba, dtype=float), filter_mode=wp.TextureFilterMode.LINEAR)
+        for tid, img in sorted(images.items()):
+            rgba = np.ones((*img.shape[:2], 4), np.float32)
+            rgba[..., :3] = img[..., :3] * np.float32((gains or {}).get(tid, 1.0) / 255.0)
+            texture = wp.Texture2D(wp.array(rgba, dtype=float), filter_mode=wp.TextureFilterMode.LINEAR)
+            if tid < len(registry):
+                registry[tid] = texture
+            else:
+                registry.append(texture)
         self._rc.textures = wp.array(registry, dtype=wp.Texture2D)
 
     def _configure_madrona_render_model(self) -> None:

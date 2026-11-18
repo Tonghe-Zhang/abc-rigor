@@ -23,20 +23,17 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import mujoco
 import numpy as np
+from PIL import Image
 
-# Texture slots: (width, height) at slot_scale 1. Fixed sizes make in-place swaps possible.
-_SLOTS = {
-    "wall_far": (1024, 1024),
-    "wall_left": (768, 1024),
-    "wall_right": (768, 1024),
-    "table": (1024, 512),
-}
+SLOTS = ("wall_far", "wall_left", "wall_right", "table")
+WALL_SLOTS = SLOTS[:3]
 _PREFIX = "abc_bg_"
 # Seed-sequence spawn key that separates the background stream from any task / episode stream.
 _STREAM_KEY = 0xB6_0001
@@ -46,7 +43,17 @@ _SCENE = {
     "near_x": 0.0, "z0": 0.75, "z1": 2.0,
     "table_x": (0.3025, 0.8975), "table_y": 0.65, "table_z": 0.7508,  # 0.8 mm above the table top
 }
-_DEFAULT_CACHE = Path(os.environ.get("ABC_SIM_CACHE_DIR", Path.home() / ".cache" / "abc_sim")) / "background_variations"
+# Physical extent (u, v) of each slot in metres.
+_SPANS = {
+    "wall_far": (_SCENE["left_y"] - _SCENE["right_y"], _SCENE["z1"] - _SCENE["z0"]),
+    "wall_left": (_SCENE["far_x"] - _SCENE["near_x"], _SCENE["z1"] - _SCENE["z0"]),
+    "wall_right": (_SCENE["far_x"] - _SCENE["near_x"], _SCENE["z1"] - _SCENE["z0"]),
+    "table": (2 * _SCENE["table_y"], _SCENE["table_x"][1] - _SCENE["table_x"][0]),
+}
+# MJWarp's renderer ignores material emission: a vertical wall only gets its ambient term
+# (0.5 * (0.4 * 0.5 + 0.1 * 0.5) = 0.125). Wall textures uploaded to it are scaled so they match
+# the emissive look of the CPU renderer.
+MJWARP_WALL_AMBIENT = 0.125
 
 
 @dataclass(frozen=True)
@@ -54,16 +61,14 @@ class BackgroundConfig:
     """Options for :func:`abc_sim.make_env`.
 
     Attributes:
-        asset_dir: package directory (local path, or an ``s3://`` URI downloaded once per machine into
-            ``$ABC_SIM_CACHE_DIR/background_variations``). Required when enabled.
+        asset_dir: package directory holding ``index.json`` (local path, or an ``s3://`` URI synced once
+            per machine with the AWS CLI into ``$ABC_SIM_CACHE_DIR/background_variations``).
         seed: seed of the background stream. ``None`` draws OS entropy (non-reproducible). Give every
             parallel worker its own value (e.g. ``base + rank``) for distinct, reproducible streams.
         background_id: pin one combination in ``[0, n_combinations)``; instances still vary per draw.
         resample: ``"episode"`` draws a new background on every randomized ``reset``; ``"env"`` keeps
             the first draw for the env's lifetime.
-        n_sets: texture sets compiled into the model. Set 0 is what the CPU env shows; batched MJWarp
-            envs point each world at its own set (``abc_sim.make_batched_env`` sets this).
-        slot_scale: texture slot resolution relative to the defaults (0.5 halves each side).
+        slot_scale: texture slot resolution relative to the package's own (0.5 halves each side).
     """
 
     asset_dir: str
@@ -72,55 +77,54 @@ class BackgroundConfig:
     resample: str = "episode"
     wall_emission: float = 0.85
     table_emission: float = 0.55
-    n_sets: int = 1
     slot_scale: float = 1.0
 
     def __post_init__(self):
         if self.resample not in ("episode", "env"):
             raise ValueError("resample must be 'episode' or 'env'")
-        if self.n_sets < 1:
-            raise ValueError("n_sets must be >= 1")
         if not 0 < self.slot_scale <= 1:
             raise ValueError("slot_scale must be in (0, 1]")
 
 
-def slot_sizes(scale: float = 1.0) -> dict[str, tuple[int, int]]:
-    return {k: (max(16, round(w * scale)), max(16, round(h * scale))) for k, (w, h) in _SLOTS.items()}
+def slot_sizes(texel_m: float = 0.0015, scale: float = 1.0) -> dict[str, tuple[int, int]]:
+    """(width, height) of every slot: the package's texel density over the slot's physical extent."""
+    return {k: (max(16, round(u / texel_m * scale)), max(16, round(v / texel_m * scale))) for k, (u, v) in _SPANS.items()}
 
 
-def texture_name(slot: str, set_index: int = 0) -> str:
-    """Name of a background texture: set 0 keeps the plain name its materials reference."""
-    return f"{_PREFIX}{slot}" if set_index == 0 else f"{_PREFIX}{set_index}_{slot}"
+def texture_name(slot: str) -> str:
+    return _PREFIX + slot
 
 
-def material_name(slot: str) -> str:
-    return f"{_PREFIX}{slot}"
+def _cache_dir() -> Path:
+    base = os.environ.get("ABC_SIM_CACHE_DIR") or Path.home() / ".cache" / "abc_sim"
+    return Path(base) / "background_variations"
 
 
 def resolve_asset_dir(asset_dir: str | os.PathLike) -> Path:
-    """Local package directory for ``asset_dir`` (downloads ``s3://`` URIs once, under a file lock)."""
+    """Local package directory for ``asset_dir`` (syncs ``s3://`` URIs once per machine, under a file lock)."""
     s = str(asset_dir)
     if not s.startswith("s3://"):
-        return _find_index_dir(Path(s).expanduser())
-    dst = _DEFAULT_CACHE / hashlib.sha1(s.rstrip("/").encode()).hexdigest()[:16]
-    done = dst / ".complete"
-    if done.exists():
-        return _find_index_dir(dst)
+        return _check_package(Path(s).expanduser())
+    dst = _cache_dir() / hashlib.sha1(s.rstrip("/").encode()).hexdigest()[:16]
+    if (dst / ".complete").exists():
+        return dst
     dst.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(dst.with_suffix(".lock")):
-        if not done.exists():
+        if not (dst / ".complete").exists():
+            if shutil.which("aws") is None:
+                raise RuntimeError(f"syncing {s} needs the AWS CLI on PATH (or pass a local package directory)")
             tmp = Path(tempfile.mkdtemp(prefix=dst.name + ".", dir=dst.parent))
             try:
-                _s3_download(s.rstrip("/") + "/", tmp)
-                _find_index_dir(tmp)
+                subprocess.run(["aws", "s3", "sync", "--only-show-errors", s.rstrip("/") + "/", str(tmp)], check=True)
+                _check_package(tmp)
+                (tmp / ".complete").write_text(s + "\n")
+                tmp.chmod(0o755)
                 if dst.exists():
                     shutil.rmtree(dst)
                 tmp.rename(dst)
-                done.write_text(s + "\n")
             finally:
-                if tmp.exists():
-                    shutil.rmtree(tmp, ignore_errors=True)
-    return _find_index_dir(dst)
+                shutil.rmtree(tmp, ignore_errors=True)
+    return dst
 
 
 @contextlib.contextmanager
@@ -135,38 +139,26 @@ def _file_lock(path: Path):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def _s3_download(uri: str, dst: Path) -> None:
-    if shutil.which("aws"):
-        subprocess.run(["aws", "s3", "sync", "--only-show-errors", "--exclude", "code/*", uri, str(dst)], check=True)
-        return
-    import boto3  # optional dependency, only for s3:// asset dirs without the AWS CLI
-
-    bucket, _, prefix = uri[len("s3://"):].partition("/")
-    s3 = boto3.client("s3")
-    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            rel = obj["Key"][len(prefix):]
-            if not rel or rel.endswith("/") or rel.startswith("code/"):
-                continue
-            out = dst / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
-            s3.download_file(bucket, obj["Key"], str(out))
+def _check_package(root: Path) -> Path:
+    if not (root / "index.json").exists():
+        raise FileNotFoundError(f"no background package (index.json) in {root}")
+    return root
 
 
-def _find_index_dir(root: Path) -> Path:
-    """The package root holds index.json; a parent with version subfolders resolves to the newest."""
-    if (root / "index.json").exists():
-        return root
-    subs = sorted(p for p in root.glob("*/index.json"))
-    if subs:
-        return subs[-1].parent
-    raise FileNotFoundError(f"no background package (index.json) under {root}")
+def _resize(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    if img.shape[1::-1] == size:
+        return img
+    return np.asarray(Image.fromarray(img).resize(size, Image.Resampling.BILINEAR, reducing_gap=2.0), dtype=np.uint8)
 
 
 class BackgroundLibrary:
-    """Combination index over a background package."""
+    """Combination index over a background package, with decoded / resampled image caches.
 
-    def __init__(self, asset_dir: str | os.PathLike):
+    ``slot_cache`` bounds how many instances' slot images are kept (each wallpaper instance is about
+    5 MB at slot_scale 1, a table instance about 1 MB); batched envs raise it to keep the whole package.
+    """
+
+    def __init__(self, asset_dir: str | os.PathLike, *, slot_cache: int = 4):
         self.root = resolve_asset_dir(asset_dir)
         ix = json.loads((self.root / "index.json").read_text())
         self.texel_m = float(ix.get("texel_m", 0.0015))
@@ -176,8 +168,8 @@ class BackgroundLibrary:
         self._tables = {t: ix["tables"][t]["instances"] for t in self.table_types}
         if not self.wall_types or not self.table_types:
             raise ValueError(f"empty background package at {self.root}")
-        self._cache: dict[tuple[str, str], np.ndarray] = {}
-        self._slots: dict[tuple, dict[str, np.ndarray]] = {}
+        self.slot_cache = slot_cache
+        self._slots: OrderedDict[tuple, dict[str, np.ndarray]] = OrderedDict()
 
     @property
     def n_combinations(self) -> int:
@@ -202,81 +194,48 @@ class BackgroundLibrary:
 
     # ---- pixels -------------------------------------------------------------------------------
     def slot_images(self, state: dict[str, Any], scale: float = 1.0) -> dict[str, np.ndarray]:
-        """(H, W, 3) uint8 per slot, at the scene's true print scale (recent instances cached)."""
-        S, sizes = _SCENE, slot_sizes(scale)
-        walls = self._slots.get(("w", state["wallpaper_dir"], scale))
-        if walls is None:
-            walls = {}
-            for k in ("wall_far", "wall_left", "wall_right"):
-                span_u = (S["left_y"] - S["right_y"]) if k == "wall_far" else (S["far_x"] - S["near_x"])
-                walls[k] = self._fit_wall(state["wallpaper_dir"], k, span_u, S["z1"] - S["z0"], sizes[k])
-            self._remember(("w", state["wallpaper_dir"], scale), walls)
-        table = self._slots.get(("t", state["table_dir"], scale))
-        if table is None:
-            span = (2 * S["table_y"], S["table_x"][1] - S["table_x"][0])
-            table = {"table": self._tile_table(state["table_dir"], *span, sizes["table"])}
-            self._remember(("t", state["table_dir"], scale), table)
+        """(H, W, 3) uint8 per slot at the print's true scale."""
+        sizes = slot_sizes(self.texel_m, scale)
+        walls = self._cached(("w", state["wallpaper_dir"], scale),
+                             lambda: {k: self._fit_wall(state["wallpaper_dir"], k, sizes[k]) for k in WALL_SLOTS})
+        table = self._cached(("t", state["table_dir"], scale), lambda: {"table": self._tile_table(state["table_dir"], sizes["table"])})
         return {**walls, **table}
 
-    def _remember(self, key, value) -> None:
-        if len(self._slots) >= 12:  # <= ~50 MB per process at slot_scale 1
-            self._slots.pop(next(iter(self._slots)))
-        self._slots[key] = value
+    def _cached(self, key, make):
+        value = self._slots.get(key)
+        if value is None:
+            value = self._slots[key] = make()
+            while len(self._slots) > self.slot_cache:
+                self._slots.popitem(last=False)
+        else:
+            self._slots.move_to_end(key)
+        return value
 
     def _read(self, rel: str) -> np.ndarray:
-        key = (rel, "")
-        img = self._cache.get(key)
-        if img is None:
-            img = _read_rgb(self.root / rel)
-            if len(self._cache) > 24:
-                self._cache.pop(next(iter(self._cache)))
-            self._cache[key] = img
-        return img
-
-    def _fit_wall(self, d: str, k: str, span_u: float, span_v: float, slot: tuple[int, int]) -> np.ndarray:
-        img = self._read(f"{d}/{k}.jpg")
-        w, h = max(2, round(span_u / self.texel_m)), max(2, round(span_v / self.texel_m))
-        H, W = img.shape[:2]
-        if H < h or W < w:  # extend the print beyond what the photo covers (mirror), true scale kept
-            img = np.pad(img, ((max(0, h - H), 0), (0, max(0, w - W)), (0, 0)), mode="symmetric")
-        H, W = img.shape[:2]
-        x0 = (W - w) // 2
-        if k == "wall_left":  # the far end of a side wall meets the far wall: keep that corner
-            x0 = W - w
-        elif k == "wall_right":
-            x0 = 0
-        crop = img[H - h:, x0:x0 + w]  # bottom row = table height
-        return _resize(crop, slot)
-
-    def _tile_table(self, d: str, span_u: float, span_v: float, slot: tuple[int, int]) -> np.ndarray:
-        tile = self._read(f"{d}/tile.jpg")
-        w, h = max(2, round(span_u / self.texel_m)), max(2, round(span_v / self.texel_m))
-        reps = (int(np.ceil(h / tile.shape[0])), int(np.ceil(w / tile.shape[1])))
-        return _resize(np.tile(tile, (reps[0], reps[1], 1))[:h, :w], slot)
-
-
-def _read_rgb(path: Path) -> np.ndarray:
-    try:
-        from PIL import Image
-
-        with Image.open(path) as im:
+        with Image.open(self.root / rel) as im:
             return np.asarray(im.convert("RGB"), dtype=np.uint8)
-    except ImportError:
-        import imageio.v3 as iio
 
-        return np.asarray(iio.imread(path))[..., :3].astype(np.uint8)
+    def _fit_wall(self, d: str, k: str, size: tuple[int, int]) -> np.ndarray:
+        img = self._read(f"{d}/{k}.jpg")
+        (span_u, span_v) = _SPANS[k]
+        w, h = max(2, round(span_u / self.texel_m)), max(2, round(span_v / self.texel_m))
+        H, W = img.shape[:2]
+        # Extend the print beyond what the photo covers by mirroring, at true scale. The bottom row is
+        # the table edge; a side wall keeps the corner it shares with the far wall.
+        pad_x = max(0, w - W)
+        left, right = (pad_x, 0) if k == "wall_left" else (0, pad_x)
+        if pad_x or H < h:
+            img = np.pad(img, ((max(0, h - H), 0), (left, right), (0, 0)), mode="symmetric")
+        H, W = img.shape[:2]
+        x0 = {"wall_left": W - w, "wall_right": 0}.get(k, (W - w) // 2)
+        return _resize(img[H - h:, x0:x0 + w], size)
 
-
-def _resize(img: np.ndarray, slot: tuple[int, int]) -> np.ndarray:
-    W, H = slot
-    try:
-        from PIL import Image
-
-        return np.asarray(Image.fromarray(img).resize((W, H), Image.Resampling.BILINEAR, reducing_gap=2.0), dtype=np.uint8)
-    except ImportError:  # nearest-neighbour fallback
-        ys = (np.arange(H) * img.shape[0] / H).astype(int)
-        xs = (np.arange(W) * img.shape[1] / W).astype(int)
-        return img[ys][:, xs]
+    def _tile_table(self, d: str, size: tuple[int, int]) -> np.ndarray:
+        tile = self._read(f"{d}/tile.jpg")
+        span_u, span_v = _SPANS["table"]
+        w, h = max(2, round(span_u / self.texel_m)), max(2, round(span_v / self.texel_m))
+        reps = (-(-h // tile.shape[0]), -(-w // tile.shape[1]))
+        return _resize(np.tile(tile, (*reps, 1))[:h, :w], size)
 
 
 def background_rng(seed: int | None) -> np.random.Generator:
@@ -289,23 +248,18 @@ def background_rng(seed: int | None) -> np.random.Generator:
 def apply_background_xml(
     xml: str,
     *,
+    sizes: dict[str, tuple[int, int]] | None = None,
     wall_emission: float = 0.85,
     table_emission: float = 0.55,
-    n_sets: int = 1,
-    slot_scale: float = 1.0,
 ) -> str:
-    """Add fixed-size background texture slots and visual-only quads to a standard YAM scene.
-
-    Set 0's textures carry the materials and quads; sets 1.. are extra texture slots that batched
-    renderers select per world through the materials' texture ids.
-    """
+    """Add fixed-size background texture slots and visual-only quads to a standard YAM scene."""
     root = ET.fromstring(xml)
-    if root.find(f".//texture[@name='{_PREFIX}wall_far']") is not None:
+    if root.find(f".//texture[@name='{texture_name('wall_far')}']") is not None:
         return xml  # already applied
-    asset = root.find("asset")
-    world = root.find("worldbody")
+    asset, world = root.find("asset"), root.find("worldbody")
     if asset is None or world is None:
         raise ValueError("Scene XML is missing <asset> or <worldbody>")
+    sizes = sizes or slot_sizes()
     S = _SCENE
     z0, z1, xf, xn, yl, yr = S["z0"], S["z1"], S["far_x"], S["near_x"], S["left_y"], S["right_y"]
     tx0, tx1, ty, tz = S["table_x"][0], S["table_x"][1], S["table_y"], S["table_z"]
@@ -316,11 +270,10 @@ def apply_background_xml(
         "wall_right": [[xf, yr, z1], [xn, yr, z1], [xn, yr, z0], [xf, yr, z0]],
         "table": [[tx1, ty, tz], [tx1, -ty, tz], [tx0, -ty, tz], [tx0, ty, tz]],
     }
-    for k, (w, h) in slot_sizes(slot_scale).items():
-        n = material_name(k)
-        for j in range(n_sets):
-            ET.SubElement(asset, "texture", name=texture_name(k, j), type="2d", builtin="flat", width=str(w),
-                          height=str(h), rgb1="0.95 0.93 0.96", rgb2="0.95 0.93 0.96")
+    for k in SLOTS:
+        n, (w, h) = texture_name(k), sizes[k]
+        ET.SubElement(asset, "texture", name=n, type="2d", builtin="flat", width=str(w), height=str(h),
+                      rgb1="0.95 0.93 0.96", rgb2="0.95 0.93 0.96")
         em = table_emission if k == "table" else wall_emission
         ET.SubElement(asset, "material", name=n, texture=n, emission=f"{em:g}", specular="0", shininess="0",
                       reflectance="0", rgba="1 1 1 1")
@@ -328,8 +281,6 @@ def apply_background_xml(
                       texcoord="0 0 1 0 1 1 0 1", face="0 2 1 0 3 2", inertia="shell")
         ET.SubElement(world, "geom", name=n, type="mesh", mesh=n, material=n, group="2",
                       contype="0", conaffinity="0", density="0", mass="0")
-    if hasattr(ET, "indent"):
-        ET.indent(root, space="  ")
     return ET.tostring(root, encoding="unicode")
 
 
@@ -337,39 +288,22 @@ def has_background_slots(model: mujoco.MjModel) -> bool:
     return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name("wall_far")) >= 0
 
 
-def background_texture_ids(model: mujoco.MjModel, set_index: int = 0) -> dict[str, int]:
-    """slot -> texture id of one set (missing slots omitted)."""
-    out = {}
-    for k in _SLOTS:
-        tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name(k, set_index))
-        if tid >= 0:
-            out[k] = tid
-    return out
+def background_texture_ids(model: mujoco.MjModel) -> dict[str, int]:
+    """slot -> texture id."""
+    return {k: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name(k)) for k in SLOTS}
 
 
 def background_material_ids(model: mujoco.MjModel) -> dict[str, int]:
-    out = {}
-    for k in _SLOTS:
-        mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, material_name(k))
-        if mid >= 0:
-            out[k] = mid
-    return out
+    """slot -> material id."""
+    return {k: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, texture_name(k)) for k in SLOTS}
 
 
-def write_background(model: mujoco.MjModel, images: dict[str, np.ndarray], set_index: int = 0) -> list[int]:
-    """Write slot images into ``model.tex_data`` (one set); returns the texture ids written."""
+def write_background(model: mujoco.MjModel, images: dict[str, np.ndarray]) -> list[int]:
+    """Write slot images into ``model.tex_data``; returns the texture ids written."""
     ids = []
-    for k, img in images.items():
-        tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name(k, set_index))
-        if tid < 0:
-            continue
-        w, h, c = int(model.tex_width[tid]), int(model.tex_height[tid]), int(model.tex_nchannel[tid])
-        if img.shape[:2] != (h, w):
-            img = _resize(img, (w, h))
-        if c == 4:
-            img = np.concatenate([img, np.full(img.shape[:2] + (1,), 255, np.uint8)], -1)
-        adr = int(model.tex_adr[tid])
-        model.tex_data[adr:adr + w * h * c] = img.reshape(-1)
+    for k, tid in background_texture_ids(model).items():
+        adr, n = int(model.tex_adr[tid]), int(model.tex_width[tid] * model.tex_height[tid] * model.tex_nchannel[tid])
+        model.tex_data[adr:adr + n] = images[k].reshape(-1)
         ids.append(tid)
     return ids
 
@@ -382,39 +316,32 @@ class BackgroundController:
         self.library = BackgroundLibrary(config.asset_dir)
         if config.background_id is not None:
             self.library.combination(config.background_id)  # validate early
+        self.sizes = slot_sizes(self.library.texel_m, config.slot_scale)
         self.rng = background_rng(config.seed)
-        self.state: dict[str, Any] | None = None
-        self._images: dict[str, np.ndarray] | None = None
-        self._unused = False  # a draw made before the first reset serves that reset
+        self.state, self._images = self._draw(None)
+        self._unused = True  # the construction-time draw serves the first reset
 
     def xml(self, xml: str) -> str:
         c = self.config
-        return apply_background_xml(xml, wall_emission=c.wall_emission, table_emission=c.table_emission,
-                                    n_sets=c.n_sets, slot_scale=c.slot_scale)
+        return apply_background_xml(xml, sizes=self.sizes, wall_emission=c.wall_emission, table_emission=c.table_emission)
+
+    def mjwarp_gain(self, slot: str) -> float:
+        """Texture scale for MJWarp uploads (its renderer ignores emission; see MJWARP_WALL_AMBIENT)."""
+        return self.config.wall_emission / MJWARP_WALL_AMBIENT if slot in WALL_SLOTS else 1.0
+
+    def _draw(self, background_id: int | None) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+        bid = self.config.background_id if background_id is None else background_id
+        state = self.library.draw(self.rng, bid)
+        return state, self.library.slot_images(state, self.config.slot_scale)
 
     def draw(self, background_id: int | None = None) -> dict[str, Any]:
-        bid = self.config.background_id if background_id is None else background_id
-        self.state = self.library.draw(self.rng, bid)
-        self._images = self.library.slot_images(self.state, self.config.slot_scale)
+        self.state, self._images = self._draw(background_id)
         self._unused = False
         return self.state
 
-    def draw_sets(self, n: int) -> list[tuple[dict[str, Any], dict[str, np.ndarray]]]:
+    def draw_sets(self, n: int, background_id: int | None = None) -> list[tuple[dict[str, Any], dict[str, np.ndarray]]]:
         """``n`` independent draws from the background stream (batched worlds), with their slot images."""
-        out = []
-        for _ in range(n):
-            state = self.library.draw(self.rng, self.config.background_id)
-            out.append((state, self.library.slot_images(state, self.config.slot_scale)))
-        return out
-
-    def library_draw(self, background_id: int) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
-        """One draw of a pinned combination (instances from the stream), with its slot images."""
-        state = self.library.draw(self.rng, background_id)
-        return state, self.library.slot_images(state, self.config.slot_scale)
-
-    @staticmethod
-    def info_of(state: dict[str, Any]) -> dict[str, Any]:
-        return {k: state[k] for k in ("background_id", "wallpaper", "table")}
+        return [self._draw(background_id) for _ in range(n)]
 
     def next_episode(self, background_id: int | None = None) -> bool:
         """Draw for a new episode; returns False when the pending construction-time draw is used."""
@@ -425,18 +352,22 @@ class BackgroundController:
         return True
 
     def apply(self, model: mujoco.MjModel) -> list[int]:
-        if self.state is None:
-            self.draw()
-            self._unused = True
-        return write_background(model, self._images) if has_background_slots(model) else []
+        """Write the current draw into ``model`` (every model compiled by a background env has the slots)."""
+        if not has_background_slots(model):
+            raise RuntimeError("model was compiled without background slots (compile it through MuJoCoYAMEnv)")
+        return write_background(model, self._images)
 
-    def info(self) -> dict[str, Any] | None:
-        if self.state is None:
-            return None
-        return {k: self.state[k] for k in ("background_id", "wallpaper", "table")}
+    @staticmethod
+    def info_of(state: dict[str, Any]) -> dict[str, Any]:
+        return {k: state[k] for k in ("background_id", "wallpaper", "table")}
+
+    def info(self) -> dict[str, Any]:
+        return self.info_of(self.state)
 
 
 __all__ = [
+    "MJWARP_WALL_AMBIENT",
+    "SLOTS",
     "BackgroundConfig",
     "BackgroundController",
     "BackgroundLibrary",
@@ -447,6 +378,5 @@ __all__ = [
     "has_background_slots",
     "resolve_asset_dir",
     "slot_sizes",
-    "texture_name",
     "write_background",
 ]

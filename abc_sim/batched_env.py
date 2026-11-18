@@ -98,6 +98,7 @@ class BatchedWarpYAMEnv:
         camera_height: int,
         camera_width: int,
         gpu_id: int | None = None,
+        background_pool_size: int = 64,
     ):
         if num_worlds < 1:
             raise ValueError(f"num_worlds must be >= 1, got {num_worlds}")
@@ -125,9 +126,12 @@ class BatchedWarpYAMEnv:
         self._runtime: WarpReplayRuntime | None = None
         self._renderer: RendererWrapper | None = None
         self._evaluator = None
-        # Background variations: the base model holds n_sets texture sets; world w shows set w % n_sets,
-        # every set is redrawn from the background stream on each reset.
+        # Background variations: world w shows texture set w % n_sets (set 0 in the model, the rest only
+        # in the render context); every set is redrawn from the background stream on each reset.
         self._background = base_env._background
+        self._background_sets = max(1, min(num_worlds, background_pool_size))
+        if self._background is not None:  # every reset redraws all sets: keep the package's slot images
+            self._background.library.slot_cache = 1 << 20
         self.background_info: list[dict[str, Any]] | None = None
 
     @property
@@ -204,29 +208,30 @@ class BatchedWarpYAMEnv:
         return self.get_obs()
 
     def _apply_backgrounds(self, background_id: int | None = None) -> None:
-        """Draw one background per texture set and point every world's background materials at its set."""
+        """Draw one background per texture set and point every world's background materials at its set.
+
+        Set 0 replaces the model's four background textures; further sets exist only in the render
+        context, appended after the model's textures.
+        """
         mjm = self._runtime.mjm
+        slots = background_texture_ids(mjm)
         materials = background_material_ids(mjm)
-        n_sets = self._background.config.n_sets
-        draws = (
-            self._background.draw_sets(n_sets)
-            if background_id is None
-            else [self._background.library_draw(background_id) for _ in range(n_sets)]
-        )
-        images, texids = {}, []
+        draws = self._background.draw_sets(self._background_sets, background_id)
+        images, gains, texids = {}, {}, []
         for j, (_, slot_images) in enumerate(draws):
-            ids = background_texture_ids(mjm, j)
+            ids = {k: tid if j == 0 else mjm.ntex + (j - 1) * len(slots) + i for i, (k, tid) in enumerate(slots.items())}
+            for k, tid in ids.items():
+                images[tid] = slot_images[k]
+                gains[tid] = self._background.mjwarp_gain(k)
             texids.append(ids)
-            images.update({ids[k]: img for k, img in slot_images.items() if k in ids})
-        self._renderer.update_textures(images)
+        self._renderer.update_textures(images, gains)
         mat_texid = np.repeat(mjm.mat_texid[None], self.num_worlds, axis=0)
         rgb = mujoco.mjtTextureRole.mjTEXROLE_RGB
         for world in range(self.num_worlds):
-            ids = texids[world % n_sets]
             for slot, mat in materials.items():
-                mat_texid[world, mat, rgb] = ids[slot]
+                mat_texid[world, mat, rgb] = texids[world % len(draws)][slot]
         self._runtime.set_mat_texid(mat_texid)
-        self.background_info = [self._background.info_of(draws[w % n_sets][0]) for w in range(self.num_worlds)]
+        self.background_info = [self._background.info_of(draws[w % len(draws)][0]) for w in range(self.num_worlds)]
 
     def _snapshot(self) -> dict[str, Any]:
         model, data = self.base_env.model, self.base_env.data

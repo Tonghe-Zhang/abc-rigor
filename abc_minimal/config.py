@@ -291,7 +291,7 @@ class SimEvalConfig:
     prompt: str | None = None
     # Opt-in background variations (visual only; see docs/background-variations.md).
     randomize_background: bool = False
-    # Background stream seed, independent of `seed` (task/episode). None: OS entropy.
+    # Background stream seed, independent of the task/episode stream. None: derived from `seed`.
     background_seed: int | None = None
     # Pin one wallpaper x table combination in [0, n_combinations).
     background_id: int | None = None

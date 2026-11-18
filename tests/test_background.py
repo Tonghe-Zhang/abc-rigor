@@ -18,6 +18,7 @@ from abc_sim.background import (
     background_rng,
     has_background_slots,
     resolve_asset_dir,
+    slot_sizes,
 )
 
 _ASSETS = Path(__file__).resolve().parents[1] / "abc_sim" / "models" / "assets"
@@ -75,11 +76,10 @@ class LibraryTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.lib.combination(-1)
 
-    def test_version_parent_resolves_to_newest_package(self):
-        make_package(Path(self.tmp.name) / "v2")
-        self.assertEqual(resolve_asset_dir(self.tmp.name), Path(self.tmp.name) / "v2")
+    def test_asset_dir_must_hold_the_package(self):
+        self.assertEqual(resolve_asset_dir(self.root), self.root)
         with self.assertRaises(FileNotFoundError):
-            resolve_asset_dir(Path(self.tmp.name) / "missing")
+            resolve_asset_dir(self.tmp.name)  # the parent of a package is not a package
 
     def test_background_stream_is_seeded_and_separate_from_plain_seeds(self):
         a = [int(background_rng(5).integers(1 << 30)) for _ in range(2)]
@@ -97,9 +97,10 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(len({d["wallpaper"] for d in draws}), 2)
 
     def test_slot_images_have_slot_sizes(self):
-        imgs = self.lib.slot_images(self.lib.draw(background_rng(0)))
-        self.assertEqual(imgs["wall_far"].shape, (1024, 1024, 3))
-        self.assertEqual(imgs["table"].shape, (512, 1024, 3))
+        for scale in (1.0, 0.5):
+            imgs = self.lib.slot_images(self.lib.draw(background_rng(0)), scale)
+            for k, (w, h) in slot_sizes(self.lib.texel_m, scale).items():
+                self.assertEqual(imgs[k].shape, (h, w, 3))
 
     def test_config_validation(self):
         with self.assertRaises(ValueError):
@@ -215,9 +216,6 @@ class EnvTest(unittest.TestCase):
         env.close(), fixed.close()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 def _have_warp() -> bool:
     try:
@@ -276,3 +274,35 @@ class BatchedTest(unittest.TestCase):
         bg.reset(seeds=[3, 4, 5], options={**self.OPTS, "background_id": 4})
         self.assertTrue(all(b["background_id"] == 4 for b in bg.background_info))
         plain.close(), bg.close()
+
+
+def _can_render() -> bool:
+    try:
+        mujoco.Renderer(mujoco.MjModel.from_xml_string("<mujoco/>"), 8, 8).close()
+    except Exception:  # noqa: BLE001 - no GL backend on this machine
+        return False
+    return True
+
+
+@unittest.skipUnless(_HAVE_SCENES and _can_render(), "needs sim assets and a MuJoCo GL backend")
+class RenderSwapTest(unittest.TestCase):
+    def test_in_place_swap_matches_a_fresh_renderer(self):
+        import abc_sim
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_package(Path(tmp))
+            env = abc_sim.make_env(task="put_plastic_bottles_in_bin", camera_height=60, camera_width=80,
+                                   randomize_background=True, background_seed=0, background_variation_asset_dir=str(root))
+            before = env.reset(seed=0)[0]["images"]["top"]
+            env.set_background((env.background_info["background_id"] + 1) % 6)
+            live = env.get_obs()["images"]["top"]
+            fresh = mujoco.Renderer(env.model, 60, 80)
+            fresh.update_scene(env.data, camera="top")
+            np.testing.assert_array_equal(live.transpose(1, 2, 0), fresh.render())
+            self.assertGreater(np.abs(live.astype(int) - before.astype(int)).mean(), 1.0)
+            fresh.close()
+            env.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

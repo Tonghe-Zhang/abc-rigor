@@ -67,10 +67,10 @@ The master switch, off by default.
 
 Where the background package lives. It is required when `randomize_background=True`; there is no built-in default location.
 
-- **Local directory:** used as is. It must contain `index.json`, or version subfolders (`v1/`, `v2/`, ...) that do, in which case the newest is used.
+- **Local directory:** used as is. It must be the package itself, the directory holding `index.json` (for example `.../background_variations/v1`).
 - **`s3://bucket/prefix` URI:** synced once per machine into `$ABC_SIM_CACHE_DIR/background_variations/<hash>/` (default `~/.cache/abc_sim/...`).
   - The sync runs under a file lock, so hundreds of workers on one node download one copy; the rest wait, then reuse it.
-  - It uses the AWS CLI when it is on `PATH`, otherwise `boto3`. Credentials come from the usual AWS environment.
+  - It needs the AWS CLI on `PATH` (`aws s3 sync`), with credentials from the usual AWS environment. The URI must point at the package itself, the prefix holding `index.json`.
   - A completed sync is marked with a `.complete` file. Delete that cache directory to force a fresh download.
 
 ### `background_seed`
@@ -81,7 +81,7 @@ Seed of the background stream. This random stream is used only to choose backgro
   - the same `background_seed` gives the same background sequence whatever task seeds you use;
   - the same task seed gives the same objects whatever `background_seed` you use.
   - So task and background randomness are fully decoupled.
-- `None` (default) draws OS entropy: every process gets a different, non-reproducible sequence.
+- `None` (default) draws OS entropy in `make_env`: every process gets a different, non-reproducible sequence. The eval CLI instead derives it from `--seed`, so evals stay reproducible; the stream is still separate from the task stream.
 - Episode `k` of an env uses draw `k` of its stream, which makes runs reproducible: same `background_seed`, same order of randomized resets → same backgrounds.
 
 ### `background_id`
@@ -101,7 +101,7 @@ When a new background is drawn:
 - **`"env"`:** the first draw is kept for the env's lifetime.
 
 In both modes:
-- Replay resets (`reset(randomize=False)`) keep the current background.
+- Replay resets (`reset(randomize=False)`) keep the current background (unless `options={"background_id": k}` is given), and still report it in `info["background"]`.
 - An explicit `options={"background_id": k}` always applies.
 - In `make_batched_env`, every world gets its own background and all of them are redrawn on every batched `reset`; see [batched envs](#rendering-backends-and-batched-envs).
 
@@ -154,16 +154,16 @@ for episode in range(n):
 
 - **Distinct, reproducible streams:** give each worker its own seed, `base + rank`. With `background_seed=None`, every worker draws OS entropy: distinct but not reproducible.
 - **Reproducibility:** the background sequence depends only on `background_seed` and the number of randomized resets, never on task seeds or worker scheduling.
-- **Cost:** a background swap is a texture write plus a texture re-upload, with no model recompilation. Measured on a CPU-only machine (software OSMesa GL): 80 ms median per reset, 25 ms when the instance images are cached. A hardware GL context uploads faster.
-- **Process memory:** at most about 6 recently used instances' slot images plus 24 decoded package images are kept, under about 100 MB.
-- **Model memory:** the four slots add about 9 MB of texture data per compiled model.
+- **Cost:** a background swap is a texture write plus a texture re-upload, with no model recompilation. On a CPU-only machine (software OSMesa GL, 224×168 cameras, `build_wood_block_tower`), `reset` + observation took 1419 ms median with backgrounds against 1354 ms without, so about +65 ms. A hardware GL context uploads faster.
+- **Memory:** the four slots add about 6 MB of texture data to each compiled model, and the few most recent instances' slot images are cached. The same run measured +40 MB RSS at construction, and +47 MB against +39 MB without backgrounds over 40 resets. Use `background_slot_scale=0.5` to quarter the texture memory on large CPU fleets.
 
 ## Rendering backends and batched envs
 
 | Backend | Per-episode swap |
 |---|---|
 | `camera_backend="mujoco"` (CPU) | In place: only the four background textures are re-uploaded. |
-| `mjwarp`, `madrona`, `blender` live providers | These copy textures when created, so a swap rebuilds the camera provider. That's correct but slower. Prefer `background_resample="env"` with many short episodes. |
+| `camera_backend="mjwarp"` | In place: the four textures are replaced in the live MJWarp render context (with the wall gain below). |
+| `madrona`, `blender` | These copy textures when created, so a swap rebuilds the camera provider. That's correct but slower. |
 | `make_batched_env` (MJWarp worlds) | Per world. See [Batched MJWarp envs](#batched-mjwarp-envs). |
 
 ### Batched MJWarp envs
@@ -177,32 +177,34 @@ env = abc_sim.make_batched_env(
     background_variation_asset_dir="/path/to/background_package",
     background_seed=1000 + rank,
     background_pool_size=64,     # texture sets in the model; world w uses set w % pool
-    background_slot_scale=0.5,   # batched cameras are low-res: half-size slots, about 12 MB GPU texture per set
+    background_slot_scale=0.5,   # batched cameras are low-res: half-size slots, about 8 MB GPU texture per set
 )
 obs = env.reset(seeds=episode_seeds)               # env.background_info: one dict per world
 obs = env.reset(seeds=episode_seeds, options={"background_id": 17})   # every world shows combination 17
 ```
 
-**How it works.** The model holds `min(num_worlds, background_pool_size)` texture sets. MJWarp's renderer reads each world's material texture ids (`mat_texid`) per world, so world `w`'s four background materials point at set `w % n_sets`. A reset draws one background per set and replaces just those textures in the live render context. Geometry, bodies and the physics model are untouched; trajectories are bit-identical with and without backgrounds (`tests/test_background.py::BatchedTest`).
+**How it works.** The render context holds `min(num_worlds, background_pool_size)` texture sets: set 0 in the model's four background textures, and the rest appended to the render context only, so the MuJoCo model stays small. MJWarp's renderer reads each world's material texture ids (`mat_texid`) per world, so world `w`'s four background materials point at set `w % n_sets`. A reset draws one background per set and replaces just those textures in the live render context; the decoded package is cached, so redraws don't re-read files. Geometry, bodies and the physics model are untouched; trajectories are bit-identical with and without backgrounds (`tests/test_background.py::BatchedTest`).
 
 | Parameter (`make_batched_env`) | Default | Meaning |
 |---|---|---|
 | `background_pool_size` | `64` | Maximum distinct backgrounds per batch. With more worlds than sets, world `w` shares set `w % n_sets`. Lower it to save GPU memory. |
-| `background_slot_scale` | `0.5` | Texture resolution relative to the CPU-env slots. 1.0 is about 50 MB per set. |
+| `background_slot_scale` | `0.5` | Texture resolution relative to the package's. 1.0 is about 33 MB of GPU texture per set (MJWarp stores float RGBA). |
 
 The other options (`background_seed`, `background_id`, `background_variation_asset_dir`) mean the same as for `make_env`.
 
-MJWarp's renderer does not apply material emission, so walls are lit only by the scene lights, exactly like the plain walls in that renderer: darker than in the CPU renderer. Tables are lit from above and look the same in both.
+MJWarp's renderer does not apply material emission: a vertical wall only gets its ambient term (0.125). Wall textures uploaded to MJWarp, whether batched or the `mjwarp` live backend, are therefore scaled by `wall_emission / 0.125`, so walls look as they do in the CPU renderer. Tables are lit from above and need no scaling.
 
-**Texture slots** (wall textures keep the print's true scale; the package is metric at 1.5 mm per texel, and the table tile repeats at its physical size):
+**Texture slots** are sized from the package's texel density over each surface, about 1.5 mm per pixel for the current package, so nothing is upsampled. Wall textures keep the print's true scale, and the table tile repeats at its physical size.
 
-| Slot | Size (px) |
+| Slot | Size at `background_slot_scale=1` (current package) |
 |---|---|
-| Far wall | 1024 × 1024 |
-| Side walls | 768 × 1024 each |
-| Table | 1024 × 512 |
+| Far wall | 856 × 833 |
+| Side walls | 595 × 833 each |
+| Table | 867 × 397 |
 
 **Lighting:** walls render with material emission 0.85 and the table with 0.55. This keeps the photographed colours while objects still cast shadows on the table. `BackgroundConfig(wall_emission=..., table_emission=...)` changes this when you construct `MuJoCoYAMEnv` yourself.
+
+**Other live backends** (`madrona`, `blender`) copy textures when they are created, so a per-episode swap rebuilds their camera provider. `mujoco` and `mjwarp` swap in place.
 
 ## Background package layout
 

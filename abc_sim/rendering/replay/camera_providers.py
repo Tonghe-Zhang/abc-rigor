@@ -111,6 +111,15 @@ class SimRenderCameraProvider(CameraProvider):
         self._last_frames = {name: frames[name] for name in self.camera_names if name in frames}
         return self._last_frames
 
+    def update_textures(self, model, texture_ids, gains=None) -> None:
+        """Re-read these textures from ``model.tex_data`` into the live render context."""
+        images = {}
+        for tid in texture_ids:
+            h, w, c = int(model.tex_height[tid]), int(model.tex_width[tid]), int(model.tex_nchannel[tid])
+            adr = int(model.tex_adr[tid])
+            images[tid] = model.tex_data[adr : adr + h * w * c].reshape(h, w, c)
+        self._renderer.update_textures(images, gains)
+
     def reset(self) -> None:
         self._runtime.reset_from_mujoco()
         self._needs_renderer_reset = True

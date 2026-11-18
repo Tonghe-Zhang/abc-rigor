@@ -373,12 +373,17 @@ def _make_env(config: SimEvalConfig, camera_keys: tuple[str, ...]) -> SimTaskEnv
 
 
 def background_kwargs(config: SimEvalConfig) -> dict[str, Any]:
-    """make_env background options from the eval config (empty when disabled)."""
-    if not config.randomize_background:
-        return {}
+    """make_env background options from the eval config (make_env validates them).
+
+    Without an explicit ``background_seed`` an enabled eval derives it from ``seed``, so evals stay
+    reproducible; the background stream is still independent of the task stream.
+    """
+    seed = config.background_seed
+    if config.randomize_background and seed is None:
+        seed = config.seed
     return {
-        "randomize_background": True,
-        "background_seed": config.background_seed,
+        "randomize_background": config.randomize_background,
+        "background_seed": seed,
         "background_id": config.background_id,
         "background_variation_asset_dir": config.background_variation_asset_dir,
     }
