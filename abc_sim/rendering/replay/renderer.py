@@ -128,6 +128,18 @@ class WarpReplayRuntime:
             pass
         self._closed = True
 
+    def set_mat_texid(self, mat_texid: np.ndarray) -> None:
+        """Per-world material texture ids, (nworld, nmat, mjNTEXROLE); the renderer indexes by world."""
+        mat_texid = np.ascontiguousarray(mat_texid, dtype=np.int32)
+        expected = (self.nworld, *self.mjm.mat_texid.shape)
+        if mat_texid.shape != expected:
+            raise ValueError(f"mat_texid must have shape {expected}, got {mat_texid.shape}")
+        field = self.m_warp.mat_texid
+        if field.shape == expected:
+            self._wp.copy(field, self._wp.from_numpy(mat_texid, dtype=field.dtype))
+        else:
+            self.m_warp.mat_texid = self._wp.array(mat_texid, dtype=field.dtype)
+
     def _copy_field(self, target, values: np.ndarray, *, dtype=None) -> None:
         self._wp.copy(target, self._wp.from_numpy(values, dtype=dtype))
 
@@ -346,6 +358,10 @@ class WarpReplayRuntime:
         """Advance every world by ``nstep`` substeps, replaying a captured CUDA graph."""
         if nstep < 1:
             raise ValueError(f"nstep must be >= 1, got {nstep}")
+        if not self.device.startswith("cuda"):  # graph capture is CUDA-only; CPU devices step directly
+            for _ in range(nstep):
+                self._mjw.step(self.m_warp, self.d_warp)
+            return
         graph = self._step_graphs.get(nstep)
         if graph is None:
             with self._wp.ScopedCapture() as capture:
@@ -442,6 +458,21 @@ class RendererWrapper:
             self._bg = None
         else:
             raise ValueError(f"Unknown backend: {backend!r}")
+
+    def update_textures(self, images: dict[int, np.ndarray]) -> None:
+        """Replace textures (id -> (H, W, 3) uint8, same size as compiled) in the live MJWarp context."""
+        if self._rc is None:
+            raise NotImplementedError("in-place texture updates need the mjwarp backend")
+        wp = self._wp
+        registry = self._rc.textures_registry
+        for tid, img in images.items():
+            h, w = int(self.mjm.tex_height[tid]), int(self.mjm.tex_width[tid])
+            if img.shape[:2] != (h, w):
+                raise ValueError(f"texture {tid} is {w}x{h}, got {img.shape[1]}x{img.shape[0]}")
+            rgba = np.ones((h, w, 4), np.float32)
+            rgba[..., :3] = img[..., :3] * np.float32(1.0 / 255.0)
+            registry[tid] = wp.Texture2D(wp.array(rgba, dtype=float), filter_mode=wp.TextureFilterMode.LINEAR)
+        self._rc.textures = wp.array(registry, dtype=wp.Texture2D)
 
     def _configure_madrona_render_model(self) -> None:
         """Madrona's CUDA raytracer is square-only; adapt rectangular requests."""

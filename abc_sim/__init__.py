@@ -131,6 +131,8 @@ def background_config(
     background_id: int | None = None,
     background_variation_asset_dir: str | Path | None = None,
     background_resample: str = "episode",
+    background_sets: int = 1,
+    background_slot_scale: float = 1.0,
 ):
     """``BackgroundConfig`` for the ``make_env`` background options, or None when disabled."""
     if not randomize_background:
@@ -149,6 +151,8 @@ def background_config(
         seed=background_seed,
         background_id=background_id,
         resample=background_resample,
+        n_sets=background_sets,
+        slot_scale=background_slot_scale,
     )
 
 
@@ -172,6 +176,8 @@ def make_env(
     background_id: int | None = None,
     background_variation_asset_dir: str | Path | None = None,
     background_resample: str = "episode",
+    background_sets: int = 1,
+    background_slot_scale: float = 1.0,
     **kwargs,
 ) -> "MuJoCoYAMEnv":
     """Create a MuJoCo YAM bimanual environment.
@@ -213,6 +219,8 @@ def make_env(
             ``randomize_background``.
         background_resample: ``"episode"`` (default) draws a new background on every
             randomized reset; ``"env"`` keeps the first draw.
+        background_sets, background_slot_scale: texture sets compiled into the model and
+            their resolution scale; ``make_batched_env`` sets these for per-world backgrounds.
         **kwargs: Additional kwargs passed to MuJoCoYAMEnv.
 
     Returns:
@@ -235,6 +243,8 @@ def make_env(
         background_id=background_id,
         background_variation_asset_dir=background_variation_asset_dir,
         background_resample=background_resample,
+        background_sets=background_sets,
+        background_slot_scale=background_slot_scale,
     )
 
     if scene_xml is not None and scene_xml_string is not None:
@@ -375,19 +385,27 @@ def make_batched_env(
     camera_height: int = 480,
     camera_width: int = 640,
     camera_gpu_id: int | None = None,
+    background_pool_size: int = 64,
+    background_slot_scale: float = 0.5,
     **kwargs,
 ):
     """Create ``num_worlds`` copies of a task scene stepped together in MJWarp.
 
     The CPU env built by :func:`make_env` still owns the task's randomizer and
     resets each world; physics and camera rendering run batched on the GPU.
+
+    With ``randomize_background=True`` every world shows its own background, redrawn on
+    every ``reset``: the model holds ``min(num_worlds, background_pool_size)`` texture
+    sets (world ``w`` uses set ``w % n_sets``) at ``background_slot_scale`` resolution
+    (0.5: about 12 MB of GPU texture per set).
     """
     from abc_sim.batched_env import BatchedWarpYAMEnv
 
     if kwargs.get("randomize_background"):
-        # All worlds share one texture set in the batched renderer: one background per batched env.
-        # Vary it across batched envs / workers with distinct background_seed values.
+        # The batched env draws all sets itself on reset; the base env's own per-reset draw is idle.
         kwargs["background_resample"] = "env"
+        kwargs["background_sets"] = max(1, min(int(num_worlds), int(background_pool_size)))
+        kwargs["background_slot_scale"] = background_slot_scale
     base_env = make_env(task=task, prompt=prompt, render_cameras=False, **kwargs)
     return BatchedWarpYAMEnv(
         base_env,

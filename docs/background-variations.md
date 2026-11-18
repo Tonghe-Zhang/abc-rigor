@@ -103,7 +103,7 @@ When a new background is drawn:
 In both modes:
 - Replay resets (`reset(randomize=False)`) keep the current background.
 - An explicit `options={"background_id": k}` always applies.
-- `make_batched_env` forces `"env"`; see [batched envs](#rendering-backends-and-batched-envs).
+- In `make_batched_env`, every world gets its own background and all of them are redrawn on every batched `reset`; see [batched envs](#rendering-backends-and-batched-envs).
 
 ## Per-episode API
 
@@ -164,7 +164,35 @@ for episode in range(n):
 |---|---|
 | `camera_backend="mujoco"` (CPU) | In place: only the four background textures are re-uploaded. |
 | `mjwarp`, `madrona`, `blender` live providers | These copy textures when created, so a swap rebuilds the camera provider. That's correct but slower. Prefer `background_resample="env"` with many short episodes. |
-| `make_batched_env` (MJWarp worlds) | All worlds of one batched env share one texture set, so a batched env shows one background, and `background_resample="env"` is forced. Get diversity across batched envs or workers with distinct `background_seed`. |
+| `make_batched_env` (MJWarp worlds) | Per world. See [Batched MJWarp envs](#batched-mjwarp-envs). |
+
+### Batched MJWarp envs
+
+Every world of a batched env shows its own background, and each `reset(seeds=...)` redraws all of them from the background stream.
+
+```python
+env = abc_sim.make_batched_env(
+    "sort_lego_blocks", num_worlds=64,
+    randomize_background=True,
+    background_variation_asset_dir="/path/to/background_package",
+    background_seed=1000 + rank,
+    background_pool_size=64,     # texture sets in the model; world w uses set w % pool
+    background_slot_scale=0.5,   # batched cameras are low-res: half-size slots, about 12 MB GPU texture per set
+)
+obs = env.reset(seeds=episode_seeds)               # env.background_info: one dict per world
+obs = env.reset(seeds=episode_seeds, options={"background_id": 17})   # every world shows combination 17
+```
+
+**How it works.** The model holds `min(num_worlds, background_pool_size)` texture sets. MJWarp's renderer reads each world's material texture ids (`mat_texid`) per world, so world `w`'s four background materials point at set `w % n_sets`. A reset draws one background per set and replaces just those textures in the live render context. Geometry, bodies and the physics model are untouched; trajectories are bit-identical with and without backgrounds (`tests/test_background.py::BatchedTest`).
+
+| Parameter (`make_batched_env`) | Default | Meaning |
+|---|---|---|
+| `background_pool_size` | `64` | Maximum distinct backgrounds per batch. With more worlds than sets, world `w` shares set `w % n_sets`. Lower it to save GPU memory. |
+| `background_slot_scale` | `0.5` | Texture resolution relative to the CPU-env slots. 1.0 is about 50 MB per set. |
+
+The other options (`background_seed`, `background_id`, `background_variation_asset_dir`) mean the same as for `make_env`.
+
+MJWarp's renderer does not apply material emission, so walls are lit only by the scene lights, exactly like the plain walls in that renderer: darker than in the CPU renderer. Tables are lit from above and look the same in both.
 
 **Texture slots** (wall textures keep the print's true scale; the package is metric at 1.5 mm per texel, and the table tile repeats at its physical size):
 

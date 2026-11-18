@@ -8,6 +8,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from abc_sim.background import background_material_ids, background_texture_ids
 from abc_sim.env import _GRIPPER_CTRL_MAX, MuJoCoYAMEnv, project_policy_state_batch
 from abc_sim.randomization.core import RandomizationSamplingError
 from abc_sim.rendering.replay.renderer import (
@@ -124,6 +125,10 @@ class BatchedWarpYAMEnv:
         self._runtime: WarpReplayRuntime | None = None
         self._renderer: RendererWrapper | None = None
         self._evaluator = None
+        # Background variations: the base model holds n_sets texture sets; world w shows set w % n_sets,
+        # every set is redrawn from the background stream on each reset.
+        self._background = base_env._background
+        self.background_info: list[dict[str, Any]] | None = None
 
     @property
     def model(self) -> mujoco.MjModel:
@@ -141,14 +146,17 @@ class BatchedWarpYAMEnv:
                 "Per-episode block textures require independent environments; "
                 "the batched renderer shares texture buffers across worlds."
             )
+        base_options = options
+        if options is not None and "background_id" in options:  # the batch draws its own backgrounds
+            base_options = {k: v for k, v in options.items() if k != "background_id"}
         snapshots = []
         for index, seed in enumerate(seeds):
             try:
-                self.base_env.reset(seed=seed, options=options, randomize=True)
+                self.base_env.reset(seed=seed, options=base_options, randomize=True)
             except RandomizationSamplingError:
                 seed += 100_000
                 print(f"seed {seed - 100_000} unplaceable, resampled -> {seed}", flush=True)
-                self.base_env.reset(seed=seed, options=options, randomize=True)
+                self.base_env.reset(seed=seed, options=base_options, randomize=True)
             self.seeds[index] = seed
             self.randomization[index] = self.base_env._last_randomization
             self.prompts[index] = self.base_env.prompt
@@ -178,6 +186,8 @@ class BatchedWarpYAMEnv:
             time=stacked["time"],
         )
         self._runtime.forward()
+        if self._background is not None:
+            self._apply_backgrounds((options or {}).get("background_id"))
         self.qpos = stacked["qpos"]
         if isinstance(self._evaluator, PerWorldEvaluators):
             self._evaluator.reset(self.model, self.randomization)
@@ -192,6 +202,31 @@ class BatchedWarpYAMEnv:
                 if hasattr(self._evaluator, method):
                     getattr(self._evaluator, method)([state.metadata[key] for state in self.randomization])
         return self.get_obs()
+
+    def _apply_backgrounds(self, background_id: int | None = None) -> None:
+        """Draw one background per texture set and point every world's background materials at its set."""
+        mjm = self._runtime.mjm
+        materials = background_material_ids(mjm)
+        n_sets = self._background.config.n_sets
+        draws = (
+            self._background.draw_sets(n_sets)
+            if background_id is None
+            else [self._background.library_draw(background_id) for _ in range(n_sets)]
+        )
+        images, texids = {}, []
+        for j, (_, slot_images) in enumerate(draws):
+            ids = background_texture_ids(mjm, j)
+            texids.append(ids)
+            images.update({ids[k]: img for k, img in slot_images.items() if k in ids})
+        self._renderer.update_textures(images)
+        mat_texid = np.repeat(mjm.mat_texid[None], self.num_worlds, axis=0)
+        rgb = mujoco.mjtTextureRole.mjTEXROLE_RGB
+        for world in range(self.num_worlds):
+            ids = texids[world % n_sets]
+            for slot, mat in materials.items():
+                mat_texid[world, mat, rgb] = ids[slot]
+        self._runtime.set_mat_texid(mat_texid)
+        self.background_info = [self._background.info_of(draws[w % n_sets][0]) for w in range(self.num_worlds)]
 
     def _snapshot(self) -> dict[str, Any]:
         model, data = self.base_env.model, self.base_env.data

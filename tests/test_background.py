@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 import mujoco
 import numpy as np
@@ -13,6 +14,7 @@ from abc_sim.background import (
     BackgroundController,
     BackgroundLibrary,
     apply_background_xml,
+    background_material_ids,
     background_rng,
     has_background_slots,
     resolve_asset_dir,
@@ -215,3 +217,62 @@ class EnvTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _have_warp() -> bool:
+    try:
+        import mujoco_warp  # noqa: F401
+        import torch  # noqa: F401
+        import warp  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@unittest.skipUnless(_HAVE_SCENES and _have_warp(), "needs sim assets and mujoco_warp / warp / torch")
+class BatchedTest(unittest.TestCase):
+    TASK = "put_plastic_bottles_in_bin"
+    OPTS: ClassVar[dict] = {"randomization": {"randomize_variants": False, "randomize_scales": False}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.root = make_package(Path(cls.tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def make(self, **bg):
+        import abc_sim
+
+        if bg:
+            bg = {"randomize_background": True, "background_variation_asset_dir": str(self.root), **bg}
+        return abc_sim.make_batched_env(self.TASK, num_worlds=3, camera_height=48, camera_width=64, **bg)
+
+    def test_per_world_backgrounds_redrawn_per_reset_and_physics_unchanged(self):
+        plain, bg = self.make(), self.make(background_seed=2, background_pool_size=2)
+        trajs = []
+        for env in (plain, bg):
+            env.reset(seeds=[0, 1, 2], options=self.OPTS)
+            action = np.asarray(env.state(), np.float32)
+            qs = [env.qpos.copy()]
+            for _ in range(3):
+                env.step(action)
+                qs.append(env.qpos.copy())
+            trajs.append(np.array(qs))
+        np.testing.assert_array_equal(trajs[0], trajs[1])
+        self.assertIsNone(plain.background_info)
+        first = bg.background_info
+        self.assertEqual(len(first), 3)
+        self.assertEqual(first[0], first[2])  # pool of 2: world 2 shares set 0
+        texid = bg._runtime.m_warp.mat_texid.numpy()
+        mats = list(background_material_ids(bg.model).values())
+        rgb = mujoco.mjtTextureRole.mjTEXROLE_RGB
+        self.assertTrue((texid[0, mats, rgb] != texid[1, mats, rgb]).all())
+        np.testing.assert_array_equal(texid[0, mats, rgb], texid[2, mats, rgb])
+        bg.reset(seeds=[3, 4, 5], options=self.OPTS)
+        self.assertEqual(len(bg.background_info), 3)
+        bg.reset(seeds=[3, 4, 5], options={**self.OPTS, "background_id": 4})
+        self.assertTrue(all(b["background_id"] == 4 for b in bg.background_info))
+        plain.close(), bg.close()

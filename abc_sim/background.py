@@ -30,7 +30,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
-# Texture slots: (name, width, height). Fixed sizes make in-place swaps possible.
+# Texture slots: (width, height) at slot_scale 1. Fixed sizes make in-place swaps possible.
 _SLOTS = {
     "wall_far": (1024, 1024),
     "wall_left": (768, 1024),
@@ -61,6 +61,9 @@ class BackgroundConfig:
         background_id: pin one combination in ``[0, n_combinations)``; instances still vary per draw.
         resample: ``"episode"`` draws a new background on every randomized ``reset``; ``"env"`` keeps
             the first draw for the env's lifetime.
+        n_sets: texture sets compiled into the model. Set 0 is what the CPU env shows; batched MJWarp
+            envs point each world at its own set (``abc_sim.make_batched_env`` sets this).
+        slot_scale: texture slot resolution relative to the defaults (0.5 halves each side).
     """
 
     asset_dir: str
@@ -69,10 +72,29 @@ class BackgroundConfig:
     resample: str = "episode"
     wall_emission: float = 0.85
     table_emission: float = 0.55
+    n_sets: int = 1
+    slot_scale: float = 1.0
 
     def __post_init__(self):
         if self.resample not in ("episode", "env"):
             raise ValueError("resample must be 'episode' or 'env'")
+        if self.n_sets < 1:
+            raise ValueError("n_sets must be >= 1")
+        if not 0 < self.slot_scale <= 1:
+            raise ValueError("slot_scale must be in (0, 1]")
+
+
+def slot_sizes(scale: float = 1.0) -> dict[str, tuple[int, int]]:
+    return {k: (max(16, round(w * scale)), max(16, round(h * scale))) for k, (w, h) in _SLOTS.items()}
+
+
+def texture_name(slot: str, set_index: int = 0) -> str:
+    """Name of a background texture: set 0 keeps the plain name its materials reference."""
+    return f"{_PREFIX}{slot}" if set_index == 0 else f"{_PREFIX}{set_index}_{slot}"
+
+
+def material_name(slot: str) -> str:
+    return f"{_PREFIX}{slot}"
 
 
 def resolve_asset_dir(asset_dir: str | os.PathLike) -> Path:
@@ -155,7 +177,7 @@ class BackgroundLibrary:
         if not self.wall_types or not self.table_types:
             raise ValueError(f"empty background package at {self.root}")
         self._cache: dict[tuple[str, str], np.ndarray] = {}
-        self._slots: dict[tuple[str, str], dict[str, np.ndarray]] = {}
+        self._slots: dict[tuple, dict[str, np.ndarray]] = {}
 
     @property
     def n_combinations(self) -> int:
@@ -179,24 +201,25 @@ class BackgroundLibrary:
                 "wallpaper_dir": wi["dir"], "table_dir": ti["dir"]}
 
     # ---- pixels -------------------------------------------------------------------------------
-    def slot_images(self, state: dict[str, Any]) -> dict[str, np.ndarray]:
+    def slot_images(self, state: dict[str, Any], scale: float = 1.0) -> dict[str, np.ndarray]:
         """(H, W, 3) uint8 per slot, at the scene's true print scale (recent instances cached)."""
-        S = _SCENE
-        walls = self._slots.get(("w", state["wallpaper_dir"]))
+        S, sizes = _SCENE, slot_sizes(scale)
+        walls = self._slots.get(("w", state["wallpaper_dir"], scale))
         if walls is None:
             walls = {}
             for k in ("wall_far", "wall_left", "wall_right"):
                 span_u = (S["left_y"] - S["right_y"]) if k == "wall_far" else (S["far_x"] - S["near_x"])
-                walls[k] = self._fit_wall(state["wallpaper_dir"], k, span_u, S["z1"] - S["z0"], _SLOTS[k])
-            self._remember(("w", state["wallpaper_dir"]), walls)
-        table = self._slots.get(("t", state["table_dir"]))
+                walls[k] = self._fit_wall(state["wallpaper_dir"], k, span_u, S["z1"] - S["z0"], sizes[k])
+            self._remember(("w", state["wallpaper_dir"], scale), walls)
+        table = self._slots.get(("t", state["table_dir"], scale))
         if table is None:
-            table = {"table": self._tile_table(state["table_dir"], 2 * S["table_y"], S["table_x"][1] - S["table_x"][0], _SLOTS["table"])}
-            self._remember(("t", state["table_dir"]), table)
+            span = (2 * S["table_y"], S["table_x"][1] - S["table_x"][0])
+            table = {"table": self._tile_table(state["table_dir"], *span, sizes["table"])}
+            self._remember(("t", state["table_dir"], scale), table)
         return {**walls, **table}
 
     def _remember(self, key, value) -> None:
-        if len(self._slots) >= 6:  # <= ~50 MB per process
+        if len(self._slots) >= 12:  # <= ~50 MB per process at slot_scale 1
             self._slots.pop(next(iter(self._slots)))
         self._slots[key] = value
 
@@ -263,8 +286,19 @@ def background_rng(seed: int | None) -> np.random.Generator:
 
 
 # ---- scene XML ---------------------------------------------------------------------------------
-def apply_background_xml(xml: str, *, wall_emission: float = 0.85, table_emission: float = 0.55) -> str:
-    """Add fixed-size background texture slots and visual-only quads to a standard YAM scene."""
+def apply_background_xml(
+    xml: str,
+    *,
+    wall_emission: float = 0.85,
+    table_emission: float = 0.55,
+    n_sets: int = 1,
+    slot_scale: float = 1.0,
+) -> str:
+    """Add fixed-size background texture slots and visual-only quads to a standard YAM scene.
+
+    Set 0's textures carry the materials and quads; sets 1.. are extra texture slots that batched
+    renderers select per world through the materials' texture ids.
+    """
     root = ET.fromstring(xml)
     if root.find(f".//texture[@name='{_PREFIX}wall_far']") is not None:
         return xml  # already applied
@@ -282,10 +316,11 @@ def apply_background_xml(xml: str, *, wall_emission: float = 0.85, table_emissio
         "wall_right": [[xf, yr, z1], [xn, yr, z1], [xn, yr, z0], [xf, yr, z0]],
         "table": [[tx1, ty, tz], [tx1, -ty, tz], [tx0, -ty, tz], [tx0, ty, tz]],
     }
-    for k, (w, h) in _SLOTS.items():
-        n = _PREFIX + k
-        ET.SubElement(asset, "texture", name=n, type="2d", builtin="flat", width=str(w), height=str(h),
-                      rgb1="0.95 0.93 0.96", rgb2="0.95 0.93 0.96")
+    for k, (w, h) in slot_sizes(slot_scale).items():
+        n = material_name(k)
+        for j in range(n_sets):
+            ET.SubElement(asset, "texture", name=texture_name(k, j), type="2d", builtin="flat", width=str(w),
+                          height=str(h), rgb1="0.95 0.93 0.96", rgb2="0.95 0.93 0.96")
         em = table_emission if k == "table" else wall_emission
         ET.SubElement(asset, "material", name=n, texture=n, emission=f"{em:g}", specular="0", shininess="0",
                       reflectance="0", rgba="1 1 1 1")
@@ -299,14 +334,33 @@ def apply_background_xml(xml: str, *, wall_emission: float = 0.85, table_emissio
 
 
 def has_background_slots(model: mujoco.MjModel) -> bool:
-    return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, _PREFIX + "wall_far") >= 0
+    return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name("wall_far")) >= 0
 
 
-def write_background(model: mujoco.MjModel, images: dict[str, np.ndarray]) -> list[int]:
-    """Write slot images into ``model.tex_data``; returns the texture ids written."""
+def background_texture_ids(model: mujoco.MjModel, set_index: int = 0) -> dict[str, int]:
+    """slot -> texture id of one set (missing slots omitted)."""
+    out = {}
+    for k in _SLOTS:
+        tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name(k, set_index))
+        if tid >= 0:
+            out[k] = tid
+    return out
+
+
+def background_material_ids(model: mujoco.MjModel) -> dict[str, int]:
+    out = {}
+    for k in _SLOTS:
+        mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, material_name(k))
+        if mid >= 0:
+            out[k] = mid
+    return out
+
+
+def write_background(model: mujoco.MjModel, images: dict[str, np.ndarray], set_index: int = 0) -> list[int]:
+    """Write slot images into ``model.tex_data`` (one set); returns the texture ids written."""
     ids = []
     for k, img in images.items():
-        tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, _PREFIX + k)
+        tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_name(k, set_index))
         if tid < 0:
             continue
         w, h, c = int(model.tex_width[tid]), int(model.tex_height[tid]), int(model.tex_nchannel[tid])
@@ -334,14 +388,33 @@ class BackgroundController:
         self._unused = False  # a draw made before the first reset serves that reset
 
     def xml(self, xml: str) -> str:
-        return apply_background_xml(xml, wall_emission=self.config.wall_emission, table_emission=self.config.table_emission)
+        c = self.config
+        return apply_background_xml(xml, wall_emission=c.wall_emission, table_emission=c.table_emission,
+                                    n_sets=c.n_sets, slot_scale=c.slot_scale)
 
     def draw(self, background_id: int | None = None) -> dict[str, Any]:
         bid = self.config.background_id if background_id is None else background_id
         self.state = self.library.draw(self.rng, bid)
-        self._images = self.library.slot_images(self.state)
+        self._images = self.library.slot_images(self.state, self.config.slot_scale)
         self._unused = False
         return self.state
+
+    def draw_sets(self, n: int) -> list[tuple[dict[str, Any], dict[str, np.ndarray]]]:
+        """``n`` independent draws from the background stream (batched worlds), with their slot images."""
+        out = []
+        for _ in range(n):
+            state = self.library.draw(self.rng, self.config.background_id)
+            out.append((state, self.library.slot_images(state, self.config.slot_scale)))
+        return out
+
+    def library_draw(self, background_id: int) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+        """One draw of a pinned combination (instances from the stream), with its slot images."""
+        state = self.library.draw(self.rng, background_id)
+        return state, self.library.slot_images(state, self.config.slot_scale)
+
+    @staticmethod
+    def info_of(state: dict[str, Any]) -> dict[str, Any]:
+        return {k: state[k] for k in ("background_id", "wallpaper", "table")}
 
     def next_episode(self, background_id: int | None = None) -> bool:
         """Draw for a new episode; returns False when the pending construction-time draw is used."""
@@ -368,8 +441,12 @@ __all__ = [
     "BackgroundController",
     "BackgroundLibrary",
     "apply_background_xml",
+    "background_material_ids",
     "background_rng",
+    "background_texture_ids",
     "has_background_slots",
     "resolve_asset_dir",
+    "slot_sizes",
+    "texture_name",
     "write_background",
 ]
