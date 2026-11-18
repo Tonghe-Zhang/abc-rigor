@@ -301,7 +301,7 @@ class DrawerSceneTest(unittest.TestCase):
                                     moved = {}
                                     for robot_joint in robot_joints:
                                         self.assertIn(
-                                            robot_joint.type[0],
+                                            int(robot_joint.type[0]),
                                             (
                                                 mujoco.mjtJoint.mjJNT_HINGE,
                                                 mujoco.mjtJoint.mjJNT_SLIDE,
