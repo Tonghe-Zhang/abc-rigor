@@ -12,6 +12,25 @@ from typing import Any
 # The internal sim datasets record it, so exports have to carry it too.
 DEFAULT_SCENE = "hybrid"
 
+LIFT_BOTTLES_UPRIGHT_PROMPTS = (
+    "lift the bottles upright",
+    "stand the bottles upright",
+    "stand all three water bottles upright",
+    "set the bottles upright on the table",
+    "turn the fallen bottles upright",
+    "pick up the bottles and stand them on their bases",
+    "make all three bottles stand upright",
+    "place the water bottles standing up on the table",
+    "stand up the three bottles lying on their sides",
+    "put all the bottles right side up",
+    "lift each bottle and set it down upright",
+    "set all three water bottles on their bases",
+    "bring the lying bottles into an upright position",
+    "get the three water bottles standing on the table",
+    "turn each water bottle right side up",
+    "stand the fallen water bottles back up",
+)
+
 
 @dataclass(frozen=True)
 class SimTaskSpec:
@@ -83,6 +102,14 @@ def _normalize_key(value: str) -> str:
 
 
 _TASK_SPECS: tuple[SimTaskSpec, ...] = (
+    SimTaskSpec(
+        name="lift_bottles_upright",
+        env_task="lift_bottles_upright",
+        prompt=LIFT_BOTTLES_UPRIGHT_PROMPTS[0],
+        description="Stand three side-lying water bottles upright on the table.",
+        evaluator_name="bottles_upright",
+        aliases=LIFT_BOTTLES_UPRIGHT_PROMPTS[1:],
+    ),
     SimTaskSpec(
         name="throw_plastic_bottles_in_bin",
         env_task="bottles",

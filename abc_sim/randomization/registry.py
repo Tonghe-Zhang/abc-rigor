@@ -7,6 +7,7 @@ from .tasks.ball_sorting import BallSortingRandomizer
 from .tasks.ball_tray import BallTrayBalancingRandomizer
 from .tasks.blocks import BlocksRandomizer
 from .tasks.bottles import BottlesRandomizer, WaterBottleRandomizer
+from .tasks.bottles_upright import BottlesUprightRandomizer
 from .tasks.chess import ChessRandomizer
 from .tasks.conveyor_pick import ConveyorPickObjectRandomizer
 from .tasks.count_box import CountIntoOpaqueBoxRandomizer
@@ -24,6 +25,7 @@ from .tasks.sweep import SweepRandomizer
 _WATER_BOTTLE_RANDOMIZER = WaterBottleRandomizer()
 
 TASK_RANDOMIZERS: dict[str, SceneRandomizer] = {
+    "lift_bottles_upright": BottlesUprightRandomizer(),
     "bottles":      BottlesRandomizer(),
     "put_bottles":  _WATER_BOTTLE_RANDOMIZER,
     "water_bottles": _WATER_BOTTLE_RANDOMIZER,

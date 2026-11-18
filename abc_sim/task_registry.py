@@ -36,6 +36,7 @@ class ResolvedTask:
 
 
 _SCENE_TASKS: tuple[SceneTaskSpec, ...] = (
+    SceneTaskSpec(name="lift_bottles_upright", scene_xml=_MODELS_DIR / "yam_lift_bottles_upright_scene.xml"),
     SceneTaskSpec(name="bottles", scene_xml=_MODELS_DIR / "yam_bottles_scene.xml"),
     SceneTaskSpec(name="put_bottles", scene_xml=_MODELS_DIR / "yam_put_bottles_scene.xml"),
     SceneTaskSpec(name="conveyor_pick", scene_xml=_MODELS_DIR / "yam_conveyor_pick_scene.xml"),

@@ -63,6 +63,26 @@ obs, reward, terminated, truncated, step_info = env.step(env.action_space.sample
 env.close()
 ```
 
+### Stand three water bottles upright
+
+`lift_bottles_upright` uses the ABC station with exactly three water bottles and
+no bin. Bottles start lying on their sides at separated, seed-randomized positions
+and headings. Install its assets with
+`uv run prepare.py --sim-task lift_bottles_upright`, then select the task through
+`abc_sim.make_env(task="lift_bottles_upright")`.
+
+Seed 0 prompts “lift the bottles upright”. Consecutive seeds cycle through
+sixteen equivalent instructions, including “stand all three water bottles
+upright” and “lift each bottle and set it down upright”. Each instruction is
+also a task alias; reset records the selected wording in the episode metadata.
+
+Reward is the fraction of bottles standing cap-up on the table. Success requires
+all three: axes within 14° of vertical, base origins within 8 mm of table height,
+and inside the tabletop with an edge margin. This is a pose rubric without a
+release or dwell-time requirement; airborne, inverted, sideways, and off-table
+bottles do not count. The task has a finite table collision box so objects pushed
+over the edge fall.
+
 For a runnable example:
 
 ```bash
