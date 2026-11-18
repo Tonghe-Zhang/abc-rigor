@@ -129,6 +129,19 @@ def sample_compiled_letter_faces(model, letter, texture_name):
 
 
 class AppearanceTextureTests(unittest.TestCase):
+    def test_rendering_reexports_the_canonical_record_functions(self):
+        from abc_sim import block_appearance as records
+        from abc_sim.randomization.assets import block_appearance as rendering
+
+        for name in (
+            "sample_appearance",
+            "validate_appearance",
+            "luminance",
+            "contrast",
+        ):
+            with self.subTest(name=name):
+                self.assertIs(getattr(rendering, name), getattr(records, name))
+
     def test_simulator_randomizers_and_glyphs_do_not_require_imageio(self):
         probe = textwrap.dedent(
             """
