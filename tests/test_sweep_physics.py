@@ -14,6 +14,7 @@ import mujoco
 import numpy as np
 
 import abc_sim
+from tests.grasp_fixture import close_and_lift
 
 
 class SweepPhysicsTest(unittest.TestCase):
@@ -148,11 +149,6 @@ class SweepPhysicsTest(unittest.TestCase):
         brush_adr = int(model.jnt_qposadr[brush_joint])
         brush_geoms = set(np.flatnonzero(model.geom_bodyid == brush))
         for side in ("left", "right"):
-            joints = [model.joint(f"{side}_joint{i}").id for i in range(1, 7)]
-            qpos_indices = model.jnt_qposadr[joints]
-            dof_indices = model.jnt_dofadr[joints]
-            actuators = [model.actuator(f"{side}_joint{i}").id for i in range(1, 7)]
-            gripper = model.actuator(side + "_gripper").id
             site_id = model.site(side + "_grasp_site").id
             finger_bodies = {
                 model.body(name).id
@@ -208,42 +204,7 @@ class SweepPhysicsTest(unittest.TestCase):
                                     contacts += 1
                                     penetration = max(penetration, -float(contact.dist))
 
-                        dt = model.opt.timestep
-                        for n in range(round(1.5 / dt)):
-                            data.ctrl[gripper] = 0.0475 * max(0, 1 - n * dt / 0.5)
-                            step()
-                        mujoco.mj_forward(model, data)
-                        target_pos = data.site(site_id).xpos + [0, 0, 0.08]
-                        target_quat = np.empty(4)
-                        mujoco.mju_mat2Quat(target_quat, data.site(site_id).xmat)
-                        kinematics = mujoco.MjData(model)
-                        mujoco.mj_copyData(kinematics, model, data)
-                        for _ in range(200):
-                            mujoco.mj_forward(model, kinematics)
-                            current_quat, angular_error = np.empty(4), np.empty(3)
-                            mujoco.mju_mat2Quat(current_quat, kinematics.site(site_id).xmat)
-                            mujoco.mju_subQuat(angular_error, target_quat, current_quat)
-                            angular_error = kinematics.site(site_id).xmat.reshape(3, 3) @ angular_error
-                            error = np.r_[target_pos - kinematics.site(site_id).xpos, angular_error]
-                            if np.linalg.norm(error) < 1e-5:
-                                break
-                            jac_pos, jac_rot = np.zeros((3, model.nv)), np.zeros((3, model.nv))
-                            mujoco.mj_jacSite(model, kinematics, jac_pos, jac_rot, site_id)
-                            jacobian = np.vstack([jac_pos[:, dof_indices], jac_rot[:, dof_indices]])
-                            kinematics.qpos[qpos_indices] += jacobian.T @ np.linalg.solve(
-                                jacobian @ jacobian.T + np.eye(6) * 1e-5,
-                                error,
-                            )
-                        self.assertLess(np.linalg.norm(error), 1e-5, "Lift target is unreachable")
-                        goal = kinematics.qpos[qpos_indices].copy()
-                        self.assertTrue(np.all(goal >= model.jnt_range[joints, 0]))
-                        self.assertTrue(np.all(goal <= model.jnt_range[joints, 1]))
-                        before = data.qpos[qpos_indices].copy()
-                        model.opt.gravity[:] = gravity
-                        for n in range(round(2.5 / dt)):
-                            data.ctrl[actuators] = before + (goal - before) * min(1, (n + 1) * dt / 1.5)
-                            step()
-                        mujoco.mj_forward(model, data)
+                        close_and_lift(self, model, data, side, gravity, step)
                         grip_world = data.xpos[brush] + data.xmat[brush].reshape(3, 3) @ grip_point
                         site = data.site(site_id)
                         grasp_error = np.linalg.norm(site.xmat.reshape(3, 3).T @ (grip_world - site.xpos) - grasp_local)
