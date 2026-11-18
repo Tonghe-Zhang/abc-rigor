@@ -483,7 +483,7 @@ class ChessRandomizer(SceneRandomizer):
         self._current_scene_model_cache_key = cache_key
         return True
 
-    def _store_compiled_scene_model(self, cache_key: tuple[Any, ...]) -> None:
+    def _store_compiled_scene_model(self, cache_key: tuple[Any, ...], *, scaled: bool = False) -> None:
         if self._env_ref is None:
             return
         cache = getattr(self, "_compiled_scene_model_cache", None)
@@ -492,6 +492,13 @@ class ChessRandomizer(SceneRandomizer):
             cache = self._compiled_scene_model_cache
         cache[cache_key] = self._env_ref.copy_model(self._env_ref.model)
         cache.move_to_end(cache_key)
+        # Continuous random scales never repeat across episodes: keep only the latest scaled model
+        # (replays of the current episode) instead of filling the cache with models no reset reuses.
+        if scaled:
+            previous = getattr(self, "_scaled_scene_model_key", None)
+            if previous is not None and previous != cache_key:
+                cache.pop(previous, None)
+            self._scaled_scene_model_key = cache_key
         while len(cache) > self._scene_model_cache_size:
             cache.popitem(last=False)
 
@@ -532,7 +539,7 @@ class ChessRandomizer(SceneRandomizer):
                 xml, _ = transform_scene_xml(xml, options=self._scene_xml_transform_options)
 
             self._env_ref.reload_from_xml(xml)
-            self._store_compiled_scene_model(scene_cache_key)
+            self._store_compiled_scene_model(scene_cache_key, scaled=bool(scale_states))
             self._current_scene_model_cache_key = scene_cache_key
             scene_reloaded = True
 
