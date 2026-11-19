@@ -108,8 +108,8 @@ class PackAndPourFruitEvaluator:
         self._transported_fruits = np.zeros(3, dtype=bool)
         self._packed_stage = self._transport_complete = self._ever_success = False
         self._carried_filled = False
-        self._transport_time = 0.0
-        self._previous_transport = False
+        self._transport_time = np.zeros(3)
+        self._previous_transport = np.zeros(3, dtype=bool)
         self._return_time = 0.0
         self._previous_return = False
         # Rows track bowl grasps and rim grasps; columns track the two hands.
@@ -330,7 +330,7 @@ class PackAndPourFruitEvaluator:
             & inside[0]
             & (self._fruit_support_gaps <= self.contact_gap_seconds)
         )
-        if held and source_lift >= 0.05 and lift_load.any() and np.array_equal(lift_load, source_resident):
+        if held and source_lift >= 0.05:
             # Remember every qualified fruit lifted in the bowl. Spills cannot
             # shrink the load against which emptying is measured.
             self._carried_fruits |= lift_load
@@ -352,16 +352,17 @@ class PackAndPourFruitEvaluator:
             and bowl_ok[1]
         )
         pending_load = self._carried_fruits & ~self._emptied
-        transport = (
-            bool(pending_load.any())
-            and np.all(~pending_load | source_resident)
-            and (source_nested or (in_transport_zone and (held or receiver_supported)))
+        transport = bool((pending_load & source_resident).any()) and (
+            source_nested or (in_transport_zone and (held or receiver_supported))
         )
-        self._transport_time = self._transport_time + elapsed if transport and self._previous_transport else 0.0
-        self._previous_transport = bool(transport)
-        transported_now = bool(transport and self._transport_time >= self.transport_seconds)
-        self._transport_complete |= transported_now
-        self._transported_fruits |= pending_load & transported_now
+        transporting_fruits = pending_load & source_resident & transport
+        self._transport_time = np.where(
+            transporting_fruits & self._previous_transport, self._transport_time + elapsed, 0
+        )
+        self._previous_transport = transporting_fruits
+        transported_now = transporting_fruits & (self._transport_time >= self.transport_seconds)
+        self._transport_complete |= bool(transported_now.any())
+        self._transported_fruits |= transported_now
         # A brushed fruit can re-arm after being released onto the supported pile.
         source_rearmed = released_support & (self._released_support_time >= self.fruit_rearm_seconds)
         packing_credit = self._packed_fruits | self._carried_fruits | self._packed_stage
@@ -374,8 +375,8 @@ class PackAndPourFruitEvaluator:
         tilt_deg = float(np.rad2deg(np.arccos(np.clip(bowl_rot[0, 2, 2], -1, 1))))
         rim = self._bounds[0][1] + self.containment_tolerance_m
         pouring_support = bool(
-            in_transport_zone
-            and ((held and source_lift >= 0.05) or self._receiver_support_gap <= self.contact_gap_seconds)
+            (held and source_lift >= 0.05)
+            or (in_transport_zone and self._receiver_support_gap <= self.contact_gap_seconds)
         )
         crossed = np.zeros(3, dtype=bool)
         departure = np.zeros(3, dtype=bool)
@@ -409,7 +410,7 @@ class PackAndPourFruitEvaluator:
             self._carried_filled and np.all(~self._carried_fruits | self._emptied) and not source_resident.any()
         )
         return_eligible = bool(
-            self._transport_complete and source_empty_after_pour and bowl_ok[0] and not touching_robot[3]
+            self._transport_complete and not source_resident.any() and bowl_ok[0] and not touching_robot[3]
         )
         self._return_time = self._return_time + elapsed if return_eligible and self._previous_return else 0.0
         self._previous_return = return_eligible
@@ -490,7 +491,8 @@ class PackAndPourFruitEvaluator:
                 "rim_held": np.array([bool(self._holds[1].any())]),
                 "rim_grasp_seconds": np.array([self._grasp_times[1].max()]),
                 "transport_eligible": np.array([transport]),
-                "transport_settling_seconds": np.array([self._transport_time]),
+                "transport_settling_seconds": np.array([self._transport_time.max()]),
+                "fruit_transport_settling_seconds": self._transport_time[None].copy(),
                 "source_lift_m": np.array([source_lift]),
                 "source_tilt_deg": np.array([tilt_deg]),
                 "source_over_target": np.array([above]),

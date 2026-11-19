@@ -290,13 +290,27 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertGreater(result.scalar_reward(), 0.99)
         self.assertTrue(self.result().scalar_success())
 
-    def test_closed_empty_or_missing_object_never_gets_closure_or_staying_credit(self):
-        self.pack(0, close=True)
-        self.assertAlmostEqual(self.steps(700).scalar_reward(), 0)
-        self.pack(2, close=True)
-        result = self.steps(700)
-        self.assertAlmostEqual(result.scalar_reward(), 0.2)
-        self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
+    def test_closure_and_staying_credit_are_independent_of_packing_count(self):
+        for count in range(4):
+            with self.subTest(count=count):
+                self.setUp()
+                self.pack(count, close=True)
+                result = self.steps(700)
+                penalty = result.metrics["force_penalty"][0]
+                self.assertAlmostEqual(result.metrics["packing_reward"][0], count * 0.1 - penalty[:count].sum())
+                self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - penalty[3])
+                self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3)
+                self.assertAlmostEqual(result.scalar_reward(), 0.7 + count * 0.1 - penalty[:count].sum() - penalty[3])
+                self.assertEqual(result.scalar_success(), count == 3)
+
+    def test_losing_packing_credit_keeps_a_properly_closed_cases_credit(self):
+        self.pack(close=True)
+        self.assertTrue(self.steps(700).scalar_success())
+        self.data.joint("packing_object_1_joint").qpos[:] = [0.4, -0.2, 0.77, 1, 0, 0, 0]
+        result = self.steps(1)
+        self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.2 - result.metrics["force_penalty"][0, 1:3].sum())
+        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - result.metrics["force_penalty"][0, 3])
+        self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3)
         self.assertFalse(result.scalar_success())
 
     def test_current_credit_revokes_on_removal_or_reopening_and_history_resets(self):
@@ -372,7 +386,6 @@ class SuitcaseRewardTest(unittest.TestCase):
                 self.assertFalse(result.metrics["object_contained_mask"][0, 0])
                 self.assertFalse(result.metrics["object_packed_mask"][0, 0])
                 self.assertFalse(result.scalar_success())
-                self.assertEqual(result.metrics["lid_reward"][0], 0)
 
     def test_airborne_object_in_cavity_needs_floor_support(self):
         self.pack(1)
@@ -382,7 +395,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertFalse(result.metrics["object_supported_mask"][0, 0])
         self.assertEqual(result.scalar_reward(), 0)
 
-    def test_touching_robot_preserves_contained_packing_but_revokes_closure(self):
+    def test_object_contact_preserves_case_credit_but_case_contact_revokes_it(self):
         self.pack(close=True)
         self.assertTrue(self.steps(700).scalar_success())
         # Reach through the lid with a test probe to isolate item release.
@@ -392,7 +405,9 @@ class SuitcaseRewardTest(unittest.TestCase):
         result = self.steps(1)
         self.assertTrue(result.metrics["object_touching_robot"][0, 0])
         self.assertTrue(result.metrics["object_packed_mask"][0, 0])
-        self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
+        self.assertFalse(result.metrics["suitcase_touching_robot"][0])
+        self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3)
+        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - result.metrics["force_penalty"][0, 3])
         self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3 - result.metrics["force_penalty"][0, :3].sum())
         self.assertFalse(result.scalar_success())
         self.data.mocap_pos[0] = [-2, 0, 2]

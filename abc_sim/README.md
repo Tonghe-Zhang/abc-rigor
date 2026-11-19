@@ -109,9 +109,9 @@ Reward stages are chronological:
 | --- | ---: | --- |
 | Packing | 0.2 | 0.2/3 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
 | Transport | 0.2 | At least one qualified fruit lifted in the grasped bowl, then the load carried above or into the receiver |
-| Emptying | 0.25 | Fraction of the carried load leaving the tilted bowl's opening in the transport zone, while grasped or supported by the receiver |
+| Emptying | 0.25 | Fraction of the carried load leaving the tilted bowl's opening after each fruit's transport, while grasped or supported by the receiver |
 | Catching | 0.25 | 0.25/3 per poured fruit settled, released and supported in the receiver for 0.5 s |
-| Return | 0.1 | The carried load validly poured out and the small bowl empty, upright, released and directly supported by the table for 0.5 s |
+| Return | 0.1 | After valid transport, the small bowl empty, upright, released and directly supported by the table for 0.5 s, independently of emptying/catching success |
 
 Putting fruit directly into the receiver earns **zero**. Nesting the packed
 small bowl inside the receiver earns **0.4 before force deductions** and
@@ -144,20 +144,25 @@ finger can carry load; losing both contacts for more than 20 ms ends the hold.
 Rim contact is measured independently and does not gate reward. Transport
 allows a horizontal center distance up to the receiver's rim radius (17 cm),
 with the source mouth's center at least 1 cm above the upright receiver's rim.
-All fruit in the pending carried load must remain inside during the dwell, and the bowl must be
+At least one fruit in the pending carried load must remain inside during its own dwell, and the bowl must be
 grasped or supported by the receiver. This allows base overhang and movement
 during placement. Nesting also qualifies when the source floor is inside the receiver's
 flared cavity, with upward support from the receiver and both bowls upright and
 settled. The observer remembers fruit membership from qualified lifts; spilling
 or manually removing one cannot shrink the emptying denominator. Later loads
 add their fruit to this set and must earn transport proof for those fruits.
+A spill before arrival does not block transport credit for the remaining load.
+Each fruit needs its own full dwell and cannot borrow another fruit's elapsed time.
+Adding an unqualified fruit does not block carriage or transport of qualified
+fruit; the new fruit lacks its own packing and transport proof.
 Emptying is normalized across this remembered set. A fruit placed directly
 in the receiver cannot use another fruit's transport proof to earn catching.
 Pouring requires
 at least 30° tilt and the fruit's center leaving the opening's upper column, with no
-direct robot-fruit contact. The source must remain in the transport zone,
-either grasped and lifted 5 cm or supported by the receiver. Prior transport
-does not qualify a later dump away from the receiver. Receiver
+direct robot-fruit contact. The source must be grasped and lifted 5 cm, or
+supported by the receiver within the transport zone. After valid transport,
+emptying away from the receiver still earns emptying credit; catching independently
+measures landing in the receiver. Receiver
 support means at least 30% of the empty source bowl's weight carried by the
 upright, table-supported receiver. This permits fruit to finish rolling out
 after release onto the receiver; support gaps up to 20 ms are tolerated while
@@ -172,8 +177,9 @@ allowing 1 mm of side-wall solver penetration. The opening's vertical column
 admits above-rim piles; contact support is required for packing and catching.
 Fruit settling limits `linear_speed + radius * angular_speed` to 3 cm/s;
 bowls must move slower than 3 cm/s and 0.25 rad/s.
-Return credit requires every fruit in the carried load to have validly poured
-out and no fruit remaining in the small bowl. Its base must receive at least 60% of its
+Return credit requires prior valid transport and no fruit remaining in the small
+bowl, independently of whether that load emptied by pouring, spilling or hand removal.
+Its base must receive at least 60% of its
 own weight from the table, its upright axis within about 11.5° of vertical,
 and no robot contact throughout the 0.5 s dwell. Any table location qualifies.
 Lifting or touching the bowl again revokes only this component. Catching every
@@ -250,11 +256,12 @@ while fully contained, including during case motion, lifting, or contact.
 Leaving the cavity clears that qualification and requires settling again.
 Containment uses the generated case's actual walls, floor and rim. Objects may
 touch the side walls, allowing up to **1 mm** of contact-solver penetration.
-Closing earns **0.4** and requires all three objects packed and the lid within
-**3 degrees of closed**, with the case and contents released, the case supported
+Closing earns **0.4** independently of packing and requires the lid within
+**3 degrees of closed**, with the case released, supported
 and settled, and the hinge settled
-for another 0.5 seconds. Closing an empty or partly packed case adds no
-credit. Removing an item or reopening the lid revokes current credit;
+for 0.5 seconds. Closing an empty or partly packed case earns full closure
+credit before force deductions. Removing an item revokes its packing credit;
+reopening the lid revokes closure and pose credit.
 `ever_success` records history only.
 
 Staying in place earns **0.3**, measured from the lower shell's pose at episode
@@ -263,8 +270,10 @@ difference, independent of the lid angle. Translation keeps full credit through
 **5 cm**, then decreases linearly to zero at **20 cm**. Rotation keeps full
 credit through **5 degrees**, then decreases linearly to zero at **45 degrees**.
 The staying reward is `0.3 * min(translation_fraction, rotation_fraction)`,
-available only with the same fully packed, released, supported and settled
-closure required for lid credit. Empty closure, holding the case, lifting it,
+available only with the same released, supported and settled
+closure required for lid credit. Closing an empty case in place earns **0.7**
+before force deductions; closing with two packed objects earns **0.9**.
+Holding the case, lifting it,
 or reopening the lid removes this component. It reflects the current/final pose:
 returning the case restores pose credit once closure qualifies again.
 An untouched reset scene earns zero.

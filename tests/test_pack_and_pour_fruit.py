@@ -341,7 +341,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(fixture.pour().scalar_reward(), 0)
         self.assertEqual(fixture.return_bowl().scalar_reward(), 0)
 
-    def test_spilled_fruit_cannot_shrink_the_emptying_load_or_qualify_return(self):
+    def test_spilled_fruit_keeps_its_emptying_share_but_does_not_block_return(self):
         fixture = PourFixture(force_allowance_n=1e6)
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
         fixture.transport()
@@ -352,7 +352,70 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(result.metrics["num_caught_fruits"][0], 1)
         self.assertAlmostEqual(result.metrics["packing_reward"][0], 2 * 0.2 / 3)
         self.assertAlmostEqual(result.metrics["emptying_reward"][0], 0.125)
-        self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
+        returned = fixture.return_bowl()
+        self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
+        self.assertFalse(returned.scalar_success())
+
+    def test_spill_before_transport_does_not_block_remaining_fruit(self):
+        fixture = PourFixture(radius=0.035, force_allowance_n=1e6)
+        fixture.put_fruit(3, [0.4, -0.4, 0.785])
+        fixture.steps(2400)
+        fixture.grip()
+        lifted = fixture.move(np.array([0.6, -0.2, 0.98]), steps=750)
+        self.assertEqual(lifted.metrics["num_carried_fruits"][0], 2)
+        fixture.put_fruit(2, [0.4, -0.3, 0.785])
+        fixture.move(np.array([0.6, 0.2, 0.98]), steps=1000)
+        transported = fixture.steps(200)
+        self.assertAlmostEqual(transported.metrics["transport_reward"][0], 0.2)
+        np.testing.assert_array_equal(transported.metrics["fruit_transported_mask"], [[True, False, False]])
+        poured = fixture.pour()
+        self.assertAlmostEqual(poured.metrics["emptying_reward"][0], 0.125)
+        self.assertAlmostEqual(poured.metrics["catching_reward"][0], 0.25 / 3)
+        self.assertAlmostEqual(fixture.return_bowl().metrics["return_reward"][0], 0.1)
+
+    def test_each_carried_fruit_needs_its_own_transport_dwell(self):
+        fixture = PourFixture(force_allowance_n=1e6)
+        fixture.put_fruit(3, [0.4, -0.4, 0.774])
+        fixture.steps(800)
+        fixture.grip()
+        fixture.move(np.array([0.6, -0.2, 0.98]), steps=750)
+        fixture.put_fruit(2, [0.4, -0.3, 0.774])
+        fixture.move(np.array([0.6, 0.2, 0.98]), steps=1000)
+        self.assertEqual(fixture.result().metrics["num_transported_fruits"][0], 1)
+        fixture.put_fruit(1, [0.625, 0.2, 0.98 + fixture.source.floor + 0.024])
+        fixture.put_fruit(2, [0.575, 0.2, 0.98 + fixture.source.floor + 0.024])
+        arrived = fixture.steps(1)
+        self.assertTrue(arrived.metrics["fruit_source_resident_mask"][0, 1])
+        self.assertFalse(arrived.metrics["fruit_transported_mask"][0, 1])
+        self.assertEqual(arrived.metrics["fruit_transport_settling_seconds"][0, 1], 0)
+        self.assertTrue(fixture.steps(60).metrics["fruit_transported_mask"][0, 1])
+
+    def test_newly_added_unqualified_fruit_does_not_block_qualified_load(self):
+        for count in (1, 2):
+            with self.subTest(qualified=count):
+                fixture = PourFixture(radius=0.035, force_allowance_n=1e6)
+                late_position = fixture.data.joint(f"fruit_{count + 1}_joint").qpos[:3].copy()
+                for i in range(count + 1, 4):
+                    fixture.put_fruit(i, [0.4, -0.4 + 0.1 * i, 0.785])
+                fixture.steps(2400)
+                fixture.grip()
+                if count == 2:
+                    # Place the third fruit above the settled pair without initial overlap.
+                    pair = np.array([fixture.data.joint(f"fruit_{i}_joint").qpos[:3].copy() for i in (1, 2)])
+                    late_position = pair.mean(axis=0)
+                    late_position[2] = pair[:, 2].max() + 0.068
+                fixture.put_fruit(count + 1, late_position)
+                packed = fixture.steps(50)
+                self.assertEqual(packed.metrics["num_packed_fruits"][0], count)
+                fixture.move(np.array([0.6, -0.2, 0.98]), steps=750)
+                fixture.move(np.array([0.6, 0.2, 0.98]), steps=1000)
+                transported = fixture.steps(200)
+                self.assertTrue(transported.metrics["fruit_source_resident_mask"][0, count])
+                self.assertAlmostEqual(transported.metrics["packing_reward"][0], count * 0.2 / 3)
+                self.assertAlmostEqual(transported.metrics["transport_reward"][0], 0.2)
+                np.testing.assert_array_equal(
+                    transported.metrics["fruit_transported_mask"], [[True] * count + [False] * (3 - count)]
+                )
 
     def test_omitted_fruit_cannot_use_another_loads_transport_to_earn_catching(self):
         fixture = PourFixture(force_allowance_n=1e6)
@@ -494,7 +557,8 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertAlmostEqual(result.scalar_reward(), 0.4 + 0.5 / 3, places=5)
         self.assertFalse(result.scalar_success())
         returned = fixture.return_bowl()
-        self.assertEqual(returned.metrics["return_reward"][0], 0)
+        self.assertFalse(returned.metrics["fruit_source_resident_mask"].any())
+        self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
 
     def test_fruit_ejected_from_an_upright_bowl_is_not_a_pour(self):
         for radius in FRUIT_RADIUS_RANGE_M:
@@ -628,21 +692,24 @@ class PourPhysicsTest(unittest.TestCase):
                 self.assertTrue(result.metrics["fruit_in_target_mask"].all())
                 self.assertEqual(result.metrics["emptying_reward"][0], 0)
                 self.assertEqual(result.metrics["catching_reward"][0], 0)
-                self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
+                self.assertGreater(fixture.return_bowl().metrics["return_reward"][0], 0)
 
-    def test_prior_transport_cannot_credit_dumping_away_from_receiver(self):
+    def test_pouring_away_after_transport_earns_emptying_and_return_but_not_catching(self):
         for radius in FRUIT_RADIUS_RANGE_M:
             with self.subTest(radius=radius):
-                fixture = PourFixture(radius=radius)
+                fixture = PourFixture(radius=radius, force_allowance_n=1e6)
                 fixture.steps(2400)
                 self.assertTrue(fixture.transport().metrics["transport_complete"][0])
                 fixture.move(np.array([0.6, -0.2, 0.98]))
                 fixture.move(np.array([0.57, -0.2, 0.98]), tilt=np.deg2rad(110), steps=1250)
                 result = fixture.steps(2000)
                 self.assertFalse(result.metrics["fruit_source_resident_mask"].any())
-                self.assertEqual(result.metrics["emptying_reward"][0], 0)
+                self.assertAlmostEqual(result.metrics["emptying_reward"][0], 0.25)
                 self.assertEqual(result.metrics["catching_reward"][0], 0)
-                self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
+                returned = fixture.return_bowl()
+                self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
+                self.assertAlmostEqual(returned.scalar_reward(), 0.75)
+                self.assertFalse(returned.scalar_success())
 
     def test_landing_credit_is_per_fruit_and_revoked_when_one_leaves(self):
         fixture = PourFixture()

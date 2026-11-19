@@ -22,10 +22,10 @@ class PackSuitcaseEvaluator:
     Once packed, an object keeps its credit while its full bounds remain
     inside, including during case motion. Leaving the cavity clears that
     qualification. Closure requires a lid angle within 3 degrees, release
-    of the whole case and contents, and another 0.5 s of settled physics.
+    of the case, and 0.5 s of settled, supported physics, independently of packing.
     Case pose credit has a 5 cm / 5 degree deadband, then falls linearly to
     zero at 20 cm or 45 degrees from the reset pose. The worse fraction wins.
-    Pose credit requires the same packed, released, settled closure as lid credit.
+    Pose credit requires the same released, settled closure as lid credit.
     Thirty percent of packing and closure reflects gentle handling. Each entity's
     cumulative external contact load above its allowance irreversibly spends
     that credit over a 5 N*s dose budget. History resets only with the episode.
@@ -259,14 +259,17 @@ class PackSuitcaseEvaluator:
         angle = float(data.qpos[model.jnt_qposadr[self._hinge]])
         hinge_speed = float(data.qvel[model.jnt_dofadr[self._hinge]])
         lid_is_closed = abs(angle) <= np.deg2rad(self.lid_closed_tolerance_deg)
-        closed = bool(
-            packed.all() and eligible.all() and not case_touching_robot and lid_is_closed and abs(hinge_speed) <= 0.1
-        )
+        closed = bool(case_ok and not case_touching_robot and lid_is_closed and abs(hinge_speed) <= 0.1)
         self._closed_time = self._closed_time + elapsed if closed and self._previous_closed else 0.0
         self._previous_closed = closed
         closure_qualified = closed and self._closed_time >= self.settling_seconds
         staying_reward = closure_qualified * self.staying_reward * staying_fraction
-        success = closure_qualified and np.isclose(staying_fraction, 1.0, rtol=0, atol=1e-12)
+        success = bool(
+            closure_qualified
+            and packed.all()
+            and eligible.all()
+            and np.isclose(staying_fraction, 1.0, rtol=0, atol=1e-12)
+        )
         self._ever_success |= success
         count = int(packed.sum())
         excess_force_n = np.maximum(contact_force_n - self.force_threshold_n, 0)
