@@ -25,6 +25,7 @@ class PackSuitcaseEvaluator:
     of the whole case and contents, and another 0.5 s of settled physics.
     Case pose credit has a 5 cm / 5 degree deadband, then falls linearly to
     zero at 20 cm or 45 degrees from the reset pose. The worse fraction wins.
+    Pose credit is available only while the lid is within 3 degrees of closed.
     Thirty percent of packing and closure reflects gentle handling. Each entity's
     cumulative external contact load above its allowance irreversibly spends
     that credit over a 5 N*s dose budget. History resets only with the episode.
@@ -39,6 +40,7 @@ class PackSuitcaseEvaluator:
     position_limit_m = 0.2
     orientation_tolerance_deg = 5.0
     orientation_limit_deg = 45.0
+    lid_closed_tolerance_deg = 3.0
     gentle_fraction = 0.3
 
     def __init__(
@@ -175,7 +177,6 @@ class PackSuitcaseEvaluator:
             )
         )
         staying_fraction = min(translation_fraction, rotation_fraction)
-        staying_reward = self.staying_reward * staying_fraction
         inside = np.zeros(3, dtype=bool)
         for i, geoms in enumerate(self._bounds_geoms):
             points = np.concatenate(
@@ -255,12 +256,10 @@ class PackSuitcaseEvaluator:
         packed = self._packed
         angle = float(data.qpos[model.jnt_qposadr[self._hinge]])
         hinge_speed = float(data.qvel[model.jnt_dofadr[self._hinge]])
+        lid_is_closed = abs(angle) <= np.deg2rad(self.lid_closed_tolerance_deg)
+        staying_reward = lid_is_closed * self.staying_reward * staying_fraction
         closed = bool(
-            packed.all()
-            and eligible.all()
-            and not case_touching_robot
-            and abs(angle) <= np.deg2rad(3)
-            and abs(hinge_speed) <= 0.1
+            packed.all() and eligible.all() and not case_touching_robot and lid_is_closed and abs(hinge_speed) <= 0.1
         )
         self._closed_time = self._closed_time + elapsed if closed and self._previous_closed else 0.0
         self._previous_closed = closed
@@ -289,6 +288,7 @@ class PackSuitcaseEvaluator:
                 "suitcase_translation_fraction": np.array([translation_fraction]),
                 "suitcase_rotation_fraction": np.array([rotation_fraction]),
                 "lid_closed_and_settled": np.array([closure_qualified]),
+                "lid_is_closed": np.array([lid_is_closed]),
                 "contact_force_n": contact_force_n[None, :],
                 "peak_force_n": self._peak_force_n[None, :].copy(),
                 "force_threshold_n": self.force_threshold_n[None, :].copy(),
