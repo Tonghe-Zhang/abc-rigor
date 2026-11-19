@@ -1,0 +1,433 @@
+"""Adversarial solved-contact cases for upright-bottle reward."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest import TestCase, main, mock
+
+import mujoco
+import numpy as np
+from abc_sim.task_eval.bottles_upright import BottlesUprightEvaluator
+from abc_sim.task_specs import get_task_spec
+
+
+class BottlesUprightRewardTest(TestCase):
+    def setUp(self):
+        # A small physics model makes target identity, table and robot contacts
+        # explicit. Asset-specific stability is exercised in test_bottles_upright.
+        bottles = "".join(
+            f'<body name="bottle_{i}" pos="0.6 {(i - 2) * 0.3} 0.75">'
+            f'<freejoint name="bottle_{i}_joint"/>'
+            '<geom type="cylinder" pos="0 0 0.1" size="0.03 0.1" mass="0.05"/>'
+            "</body>"
+            for i in range(1, 4)
+        )
+        self.model = mujoco.MjModel.from_xml_string(
+            '<mujoco><option timestep="0.002"/><worldbody>'
+            '<geom name="table_plane" type="box" pos="0.6 0 0.73" size="0.3 0.6 0.02"/>'
+            '<body name="left_link_left_finger" mocap="true"><geom name="finger" type="sphere" size="0.01"/>'
+            '<body name="finger_child"><geom name="finger_child_geom" type="sphere" size="0.01"/></body></body>'
+            '<body name="right_link_right_finger" mocap="true">'
+            '<geom name="other_finger" type="sphere" size="0.01"/></body>'
+            '<body name="distractor_1" mocap="true"><geom name="clutter" type="sphere" size="0.01"/></body>'
+            f"{bottles}</worldbody></mujoco>"
+        )
+        self.evaluator = BottlesUprightEvaluator(model=self.model, spec=get_task_spec("lift_bottles_upright"))
+        self.data = SimpleNamespace(
+            qpos=self.model.qpos0.copy(), qvel=np.zeros(self.model.nv), time=0.0, contact=[], ncon=0
+        )
+        self.forces = []
+        self.targets = [self.model.body(f"bottle_{i}").geomadr[0] for i in range(1, 4)]
+        for target in self.targets:
+            self.add_contact(self.model.geom("table_plane").id, target, force=0.05 * 9.81)
+        self.force_patch = mock.patch("mujoco.mj_contactForce", side_effect=self.contact_force)
+        self.force_patch.start()
+        self.addCleanup(self.force_patch.stop)
+
+    def add_contact(self, geom1, geom2, *, force=0.0, normal_z=1.0, z=0.75, distance=-0.0001):
+        self.data.contact.append(
+            SimpleNamespace(
+                geom1=int(geom1),
+                geom2=int(geom2),
+                dist=distance,
+                frame=np.array([0.0, 0.0, normal_z, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0]),
+                pos=np.array([0.6, 0.0, z]),
+            )
+        )
+        self.forces.append(np.array([force, 0.0, 0.0, 0.0, 0.0, 0.0]))
+        self.data.ncon = len(self.forces)
+
+    def contact_force(self, model, data, index, out):
+        out[:] = self.forces[index]
+
+    def advance(self, steps=1):
+        for _ in range(steps):
+            self.data.time += self.model.opt.timestep
+            self.evaluator.after_physics_step(self.model, self.data)
+        return self.evaluator.evaluate_model_data(self.model, self.data)
+
+    def score(self):
+        self.evaluator.after_reset(self.model, self.data)
+        return self.advance(300)
+
+    def release_contacts(self):
+        del self.data.contact[3:]
+        del self.forces[3:]
+        self.data.ncon = 3
+        for index in range(3):
+            self.forces[index] = np.array([0.05 * 9.81, 0, 0, 0, 0, 0])
+
+    def lift_first_bottle(self):
+        """Remove its tabletop load while testing a gripper-carried force pulse."""
+        self.forces[0][:] = 0
+
+    def assert_first_rejected(self):
+        result = self.score()
+        np.testing.assert_array_equal(result.metrics["bottle_upright_mask"], [[False, True, True]])
+        self.assertFalse(result.scalar_success())
+        self.assertAlmostEqual(result.scalar_reward(), 2 / 3)
+
+    def test_released_table_supported_bottles_qualify_in_either_contact_order(self):
+        contact = self.data.contact[0]
+        contact.geom1, contact.geom2 = contact.geom2, contact.geom1
+        contact.frame[2] = -1
+        self.assertTrue(self.score().scalar_success())
+
+    def test_gripper_contact_blocks_credit_even_with_full_table_support(self):
+        self.add_contact(self.targets[0], self.model.geom("finger").id)
+        self.assert_first_rejected()
+
+    def test_clutter_prop_blocks_credit_even_with_full_table_support(self):
+        self.add_contact(self.model.geom("clutter").id, self.targets[0])
+        self.assert_first_rejected()
+
+    def test_target_bottles_cannot_support_each_other(self):
+        self.add_contact(self.targets[0], self.targets[1])
+        np.testing.assert_array_equal(self.score().metrics["bottle_upright_mask"], [[False, False, True]])
+
+    def test_geometric_table_contact_without_solved_support_gets_no_credit(self):
+        self.forces[0] = 0.0
+        self.assert_first_rejected()
+
+    def test_partial_weight_support_gets_no_credit(self):
+        self.forces[0] *= 0.75
+        self.assert_first_rejected()
+
+    def test_downward_table_contact_gets_no_credit(self):
+        self.data.contact[0].frame[2] = -1
+        self.assert_first_rejected()
+
+    def test_table_contact_above_the_base_gets_no_credit(self):
+        self.data.contact[0].pos[2] = 0.8
+        self.assert_first_rejected()
+
+    def test_sliding_and_spinning_bottles_get_no_credit(self):
+        for axis, speed in ((0, 0.04), (5, 0.3)):
+            with self.subTest(axis=axis):
+                self.evaluator.reset()
+                self.data.qvel[:] = 0
+                self.data.qvel[axis] = speed
+                self.assert_first_rejected()
+
+    def test_nearby_noncontacting_object_does_not_block_credit(self):
+        self.add_contact(self.targets[0], self.model.geom("clutter").id, distance=0.01)
+        self.assertTrue(self.score().scalar_success())
+
+    def test_force_inside_contact_margin_still_blocks_credit(self):
+        self.add_contact(self.targets[0], self.model.geom("finger").id, distance=0.001, force=0.1)
+        self.assert_first_rejected()
+
+    def test_bin_bottom_support_does_not_count_as_table_support(self):
+        self.data.contact[0].geom1 = self.model.geom("clutter").id
+        self.assert_first_rejected()
+
+    def test_evaluation_is_idempotent_and_returned_metrics_do_not_alias_history(self):
+        result = self.score()
+        before = result.to_info()
+        result.metrics["bottle_sustained_seconds"][:] = 99
+        result.metrics["bottle_peak_force_n"][:] = 99
+        result.metrics["bottle_force_dose_ns"][:] = 99
+        result.metrics["bottle_force_penalty"][:] = 99
+        for _ in range(10):
+            self.assertEqual(self.evaluator.evaluate_model_data(self.model, self.data).to_info(), before)
+
+    def test_nonfinite_force_fails_loudly(self):
+        self.forces[0] = np.nan
+        with self.assertRaisesRegex(ValueError, "contact forces must be finite"):
+            self.score()
+
+    def test_force_dose_duration_deadband_and_per_bottle_credit(self):
+        cases = (
+            (0, 100, 0),
+            (14.9, 100, 0),
+            (15, 1000, 0),
+            (20, 1, 0.0004),
+            (20, 50, 0.02),
+            (20, 125, 0.05),
+            (20, 250, 0.1),
+            (20, 500, 0.1),
+            (40, 50, 0.1),
+            (80, 1, 0.0052),
+        )
+        for force, steps, lost in cases:
+            with self.subTest(force=force, steps=steps):
+                self.evaluator.reset()
+                self.evaluator.after_reset(self.model, self.data)
+                self.lift_first_bottle()
+                self.add_contact(self.targets[0], self.model.geom("finger").id, force=force)
+                self.advance(steps)
+                self.release_contacts()
+                result = self.advance(300)
+                self.assertTrue(result.scalar_success())
+                self.assertAlmostEqual(result.scalar_reward(), 1 - lost)
+                np.testing.assert_allclose(result.metrics["bottle_reward"], [[1 / 3 - lost, 1 / 3, 1 / 3]])
+                np.testing.assert_allclose(result.metrics["bottle_force_penalty"], [[lost, 0, 0]])
+
+    def test_one_tick_dose_persists_through_release_and_restanding(self):
+        self.evaluator.after_reset(self.model, self.data)
+        self.lift_first_bottle()
+        self.add_contact(self.targets[0], self.model.geom("finger").id, force=25)
+        result = self.advance()
+        self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 25)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.02)
+        self.release_contacts()
+        result = self.advance(300)
+        self.assertAlmostEqual(result.scalar_reward(), 0.9992)
+        address = self.model.joint("bottle_1_joint").qposadr[0]
+        self.data.qpos[address + 2] += 0.1
+        self.advance()
+        self.data.qpos[address + 2] -= 0.1
+        result = self.advance(300)
+        self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 25)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.02)
+        self.assertAlmostEqual(result.scalar_reward(), 0.9992)
+        self.evaluator.reset()
+        result = self.score()
+        self.assertAlmostEqual(result.scalar_reward(), 1)
+        np.testing.assert_array_equal(result.metrics["bottle_force_dose_ns"], [[0, 0, 0]])
+        self.assertLess(result.metrics["bottle_peak_force_n"].max(), 10)
+
+    def test_contact_patches_and_welded_children_all_contribute(self):
+        self.evaluator.after_reset(self.model, self.data)
+        self.lift_first_bottle()
+        for geom in ("finger", "finger", "finger_child_geom"):
+            self.add_contact(self.targets[0], self.model.geom(geom).id, force=8)
+        result = self.advance(25)
+        self.assertEqual(result.metrics["bottle_contact_force_n"][0, 0], 24)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.45)
+        self.release_contacts()
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.982)
+
+    def test_opposing_gripper_forces_add_without_cancellation(self):
+        self.evaluator.after_reset(self.model, self.data)
+        self.lift_first_bottle()
+        self.add_contact(self.targets[0], self.model.geom("finger").id, force=8, normal_z=1)
+        self.add_contact(self.targets[0], self.model.geom("other_finger").id, force=8, normal_z=-1)
+        result = self.advance(50)
+        self.assertEqual(result.metrics["bottle_contact_force_n"][0, 0], 16)
+        self.release_contacts()
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.996)
+
+    def test_force_includes_friction_and_excludes_torque(self):
+        self.evaluator.after_reset(self.model, self.data)
+        self.lift_first_bottle()
+        self.add_contact(self.targets[0], self.model.geom("finger").id)
+        self.forces[-1][:] = [16, 12, 0, 100, 200, 300]
+        result = self.advance(50)
+        self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 20)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.5)
+        self.release_contacts()
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.98)
+
+    def test_table_impacts_and_other_bottles_are_also_tracked(self):
+        self.evaluator.after_reset(self.model, self.data)
+        self.forces[0][0] = 20
+        self.add_contact(self.targets[1], self.targets[2], force=20)
+        result = self.advance(50)
+        np.testing.assert_allclose(result.metrics["bottle_peak_force_n"], [[20, 20.4905, 20.4905]])
+        np.testing.assert_allclose(result.metrics["bottle_force_dose_ns"], [[0.5, 0.54905, 0.54905]])
+        self.forces[0][0] = 0.05 * 9.81
+        self.release_contacts()
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.936076)
+
+    def test_gentle_credit_requires_upright_qualification(self):
+        address = self.model.joint("bottle_1_joint").qposadr[0]
+        self.data.qpos[address + 3 : address + 7] = [0, 1, 0, 0]
+        result = self.score()
+        self.assertEqual(result.metrics["bottle_reward"][0, 0], 0)
+        self.assertAlmostEqual(result.scalar_reward(), 2 / 3)
+
+    def test_all_bottles_can_finish_with_all_gentle_credit_lost(self):
+        self.evaluator.after_reset(self.model, self.data)
+        for target in self.targets:
+            self.add_contact(target, self.model.geom("finger").id, force=21)
+        self.advance(250)
+        self.release_contacts()
+        result = self.advance(300)
+        self.assertTrue(result.scalar_success())
+        self.assertAlmostEqual(result.scalar_reward(), 0.7)
+
+    def test_force_threshold_configuration_is_validated(self):
+        for start, budget in ((-1, 2.5), (15, 0), (15, -1), (15, np.inf), (np.nan, 2.5)):
+            with self.subTest(start=start, budget=budget), self.assertRaises(ValueError):
+                BottlesUprightEvaluator(
+                    model=self.model,
+                    spec=self.evaluator.spec,
+                    force_penalty_start_n=start,
+                    force_dose_budget_ns=budget,
+                )
+        self.evaluator = BottlesUprightEvaluator(
+            model=self.model, spec=self.evaluator.spec, force_penalty_start_n=5, force_dose_budget_ns=0.5
+        )
+        self.evaluator.after_reset(self.model, self.data)
+        self.lift_first_bottle()
+        self.add_contact(self.targets[0], self.model.geom("finger").id, force=10)
+        self.advance(25)
+        self.release_contacts()
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.95)
+
+    def test_equal_dose_at_different_forces_gives_equal_credit(self):
+        for force, steps in ((20, 50), (40, 10)):
+            with self.subTest(force=force):
+                self.evaluator.reset()
+                self.evaluator.after_reset(self.model, self.data)
+                self.lift_first_bottle()
+                self.add_contact(self.targets[0], self.model.geom("finger").id, force=force)
+                self.advance(steps)
+                self.release_contacts()
+                result = self.advance(300)
+                self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.5)
+                self.assertAlmostEqual(result.scalar_reward(), 0.98)
+
+    def test_dose_is_timestep_invariant_for_fixed_exposure(self):
+        for timestep in (0.001, 0.002, 0.004):
+            with self.subTest(timestep=timestep):
+                self.model.opt.timestep = timestep
+                self.evaluator.reset()
+                self.evaluator.after_reset(self.model, self.data)
+                self.lift_first_bottle()
+                self.add_contact(self.targets[0], self.model.geom("finger").id, force=20)
+                self.advance(round(0.1 / timestep))
+                self.release_contacts()
+                result = self.advance(round(0.6 / timestep))
+                self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.5)
+                self.assertAlmostEqual(result.scalar_reward(), 0.98)
+
+    def test_separated_bursts_accumulate_without_decay(self):
+        self.evaluator.after_reset(self.model, self.data)
+        for expected_dose in (0.5, 1.0):
+            self.lift_first_bottle()
+            self.add_contact(self.targets[0], self.model.geom("finger").id, force=20)
+            result = self.advance(50)
+            self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], expected_dose)
+            self.release_contacts()
+            self.advance(100)
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.96)
+
+    def test_reset_baseline_and_score_reads_do_not_add_dose(self):
+        self.forces[0][0] = 100
+        self.evaluator.after_reset(self.model, self.data)
+        for _ in range(10):
+            result = self.evaluator.evaluate_model_data(self.model, self.data)
+            self.assertEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0)
+        result = self.advance()
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.17)
+        self.assertAlmostEqual(result.metrics["bottle_force_penalty"][0, 0], 0.0068)
+
+
+class BottlesUprightForcePhysicsTest(TestCase):
+    """Check force units and compression using actual solved MuJoCo contacts."""
+
+    def setUp(self):
+        bottles = "".join(
+            f'<body name="bottle_{i}" pos="0.6 {(i - 2) * 0.3} .75">'
+            f'<freejoint name="bottle_{i}_joint"/>'
+            '<geom type="cylinder" pos="0 0 .1" size=".03 .1" mass=".05"/>'
+            f'<site name="bottle_{i}_sensor_zone" type="box" size=".04 .04 .11" pos="0 0 .1"/>'
+            "</body>"
+            for i in range(1, 4)
+        )
+        pads = "".join(
+            f'<body name="{side}_finger" mocap="true" pos="{-index} 0 0">'
+            '<geom type="box" size=".005 .03 .08" solref=".004 1" solimp=".99 .99 .001"/>'
+            "</body>"
+            for index, side in enumerate(("left", "right"), 1)
+        )
+        self.model = mujoco.MjModel.from_xml_string(
+            '<mujoco><option timestep=".002" integrator="implicitfast"/><worldbody>'
+            '<geom name="table_plane" type="box" size=".3 .6 .02" pos=".6 0 .73"/>'
+            f"{pads}{bottles}</worldbody>"
+            '<sensor><contact name="bottle_contacts" subtree1="bottle_1" '
+            'data="found force" num="32" reduce="maxforce"/>'
+            '<force name="bottle_parent_force" site="bottle_1_sensor_zone"/>'
+            '<touch name="bottle_touch" site="bottle_1_sensor_zone"/></sensor></mujoco>'
+        )
+        self.data = mujoco.MjData(self.model)
+        self.evaluator = BottlesUprightEvaluator(model=self.model, spec=get_task_spec("lift_bottles_upright"))
+        mujoco.mj_forward(self.model, self.data)
+        self.evaluator.after_reset(self.model, self.data)
+        self.advance()
+
+    def advance(self, steps=750):
+        for _ in range(steps):
+            mujoco.mj_step(self.model, self.data)
+            self.evaluator.after_physics_step(self.model, self.data)
+        return self.evaluator.evaluate_model_data(self.model, self.data)
+
+    def test_known_static_load_is_measured_and_dose_survives_unloading(self):
+        body = self.model.body("bottle_1").id
+        self.data.xfrc_applied[body, 2] = -15
+        loaded = self.advance()
+        expected = 15 + 0.05 * 9.81
+        self.assertAlmostEqual(loaded.metrics["bottle_contact_force_n"][0, 0], expected, delta=0.05)
+        peak = loaded.metrics["bottle_peak_force_n"][0, 0]
+        self.assertGreaterEqual(peak, loaded.metrics["bottle_contact_force_n"][0, 0])
+        self.assertLess(peak, 17)
+        dose = loaded.metrics["bottle_force_dose_ns"][0, 0]
+        self.assertGreater(dose, 0.6)
+        self.assertLess(dose, 0.9)
+        self.data.xfrc_applied[:] = 0
+        released = self.advance()
+        self.assertAlmostEqual(released.metrics["bottle_contact_force_n"][0, 0], 0.05 * 9.81, delta=0.005)
+        self.assertEqual(released.metrics["bottle_peak_force_n"][0, 0], peak)
+        final_dose = released.metrics["bottle_force_dose_ns"][0, 0]
+        self.assertGreaterEqual(final_dose, dose)
+        self.assertTrue(released.scalar_success())
+        self.assertAlmostEqual(released.metrics["bottle_reward"][0, 0], 1 / 3 - 0.04 * final_dose)
+        self.assertEqual(self.advance(100).metrics["bottle_force_dose_ns"][0, 0], final_dose)
+
+    def test_balanced_squeeze_is_detected_despite_small_net_force(self):
+        # Opposing pads compress the cylinder by 1.5 mm at each side.
+        self.data.mocap_pos[:] = [[0.5665, -0.3, 0.85], [0.6335, -0.3, 0.85]]
+        squeezed = self.advance()
+        self.assertGreater(squeezed.metrics["bottle_contact_force_n"][0, 0], 20)
+        self.assertGreater(squeezed.metrics["bottle_peak_force_n"][0, 0], 20)
+        mujoco.mj_rnePostConstraint(self.model, self.data)
+        net_force = self.data.cfrc_ext[self.model.body("bottle_1").id, 3:]
+        self.assertLess(np.linalg.norm(net_force), 2)
+        self.assertLess(np.linalg.norm(self.data.sensor("bottle_parent_force").data), 2)
+        self.assertGreater(self.data.sensor("bottle_touch").data[0], 20)
+        self.data.mocap_pos[:] = [[-1, 0, 0], [-2, 0, 0]]
+        released = self.advance()
+        self.assertTrue(released.scalar_success())
+        self.assertAlmostEqual(released.scalar_reward(), 0.9)
+        np.testing.assert_allclose(released.metrics["bottle_force_penalty"], [[0.1, 0, 0]])
+
+    def test_builtin_contact_sensor_matches_all_body_contact_magnitudes(self):
+        for phase in ("rest", "loaded", "squeezed"):
+            with self.subTest(phase=phase):
+                self.data.xfrc_applied[self.model.body("bottle_1").id, 2] = -15 if phase == "loaded" else 0
+                if phase == "squeezed":
+                    self.data.mocap_pos[:] = [[0.5665, -0.3, 0.85], [0.6335, -0.3, 0.85]]
+                result = self.advance()
+                slots = self.data.sensor("bottle_contacts").data.reshape(32, 4)
+                # The sensor's found field reports the full matching count,
+                # including contacts beyond its fixed output capacity.
+                self.assertLessEqual(slots[:, 0].max(), len(slots))
+                sensor_total = np.linalg.norm(slots[:, 1:], axis=1).sum()
+                self.assertAlmostEqual(result.metrics["bottle_contact_force_n"][0, 0], sensor_total, places=9)
+                self.assertAlmostEqual(self.data.sensor("bottle_touch").data[0], slots[:, 1].sum(), places=9)
+
+
+if __name__ == "__main__":
+    main()

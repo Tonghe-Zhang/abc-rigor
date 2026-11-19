@@ -9,6 +9,7 @@ import mujoco
 from abc_sim.task_eval.base import TaskEvaluator
 from abc_sim.task_eval.ball_tray import BallTrayBalancingEvaluator
 from abc_sim.task_eval.bottles import BottlesInBinEvaluator, PutBottlesInBinEvaluator
+from abc_sim.task_eval.bottles_upright import BottlesUprightEvaluator
 from abc_sim.task_eval.chess import ChessBoardSetupEvaluator
 from abc_sim.task_eval.conveyor import ConveyorPickObjectsInBinEvaluator
 from abc_sim.task_eval.count_box import CountIntoOpaqueBoxEvaluator
@@ -23,6 +24,8 @@ from abc_sim.task_eval.multi_drawer import (
 )
 from abc_sim.task_eval.mugs import MugFlipUprightEvaluator
 from abc_sim.task_eval.nuts_bolts import NutsBoltsSortingEvaluator
+from abc_sim.task_eval.pack_and_pour_fruit import PackAndPourFruitEvaluator
+from abc_sim.task_eval.pack_suitcase import PackSuitcaseEvaluator
 from abc_sim.task_eval.pour import PourBeadsInContainerEvaluator
 from abc_sim.task_eval.put_relative import PutRelativeEvaluator
 from abc_sim.task_eval.spell import SpellWordEvaluator
@@ -34,6 +37,9 @@ TaskEvaluatorFactory: TypeAlias = type[TaskEvaluator]
 
 
 _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
+    "pack_and_pour_fruit": PackAndPourFruitEvaluator,
+    "pack_suitcase": PackSuitcaseEvaluator,
+    "bottles_upright": BottlesUprightEvaluator,
     "bottles_in_bin": BottlesInBinEvaluator,
     "put_bottles_in_bin": PutBottlesInBinEvaluator,
     "chess_board_setup": ChessBoardSetupEvaluator,

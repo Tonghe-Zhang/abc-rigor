@@ -63,6 +63,359 @@ obs, reward, terminated, truncated, step_info = env.step(env.action_space.sample
 env.close()
 ```
 
+### Pack and pour fruit
+
+`pack_and_pour_fruit` starts with three 60–75 mm fruits, a bowl with a 16 cm
+opening and 6 cm height, and a shallow 34 cm receiving bowl. Apple, orange, lemon,
+and tomato asset variants have textured visuals enclosed by spherical
+collision geometry. Both bowls have solid floors and open, outward-flaring
+walls. The receiver is large enough to catch all three fruits together.
+
+```python
+env = abc_sim.make_env(task="pack_and_pour_fruit", render_cameras=False)
+env.reset(seed=0)
+print(env.prompt)
+```
+
+Install assets with `uv run prepare.py --sim-task pack_and_pour_fruit`.
+
+Both bowls use polypropylene density **900 kg/m³**, **2.5 mm walls** and a
+**3 mm base**. MuJoCo infers their mass, center of mass and inertia from the
+floor, convex wall segments and rounded rim geoms. The empty source bowl is
+approximately **79.7 g**, and the receiver is **330.9 g**. The source's outer
+diameter is about **16.6 cm**. Force allowances and support thresholds use the
+compiled body weights.
+The seed controls identities, fruit radii, five separated poses, two distinct
+named colors from eight choices, and six prompt templates. Prompts name the
+realized colors, such as “Place all the fruits into the blue bowl, then pour
+the fruits from the blue bowl into the large white bowl. Finally, put the
+empty blue bowl back on the table.”
+Fruit collision geometry uses 800 kg/m³ density, giving 90–177 g per fruit;
+mass and inertia scale with the sampled radius.
+Serialized randomization restores geometry, colors, poses and language.
+Reset options under `randomization` accept `fruits` (three
+`category`/`variant`/`radius` dictionaries), `source_color`, `target_color`,
+and `prompt_index`.
+
+The three manipulation tasks (`lift_bottles_upright`, `pack_suitcase`, and
+`pack_and_pour_fruit`) require randomized resets or saved-scene replay.
+Use the same seed to repeat a fixed initial scene. `randomize=False` and
+invalid task options raise before physics, reward history or observer binding
+changes. Asset-builder placeholder poses are not valid episode starts.
+
+Reward stages are chronological:
+
+| Stage | Maximum | Qualification |
+| --- | ---: | --- |
+| Packing | 0.2 | 0.2/3 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
+| Transport | 0.2 | At least one qualified fruit lifted in the grasped bowl, then the load carried above or into the receiver |
+| Emptying | 0.25 | Fraction of the carried load leaving the tilted bowl's opening after each fruit's transport, while grasped or supported by the receiver |
+| Catching | 0.25 | 0.25/3 per poured fruit settled, released and supported in the receiver for 0.5 s |
+| Return | 0.1 | After valid transport, the small bowl empty, upright, released and directly supported by the table for 0.5 s, independently of emptying/catching success |
+
+Putting fruit directly into the receiver earns **zero**. Nesting the packed
+small bowl inside the receiver earns **0.4 before force deductions** and
+no pouring credit. Packing and catching remain proportional to all three fruits.
+Packing two, transporting them, pouring both into the receiver, and returning
+the empty bowl earns **0.85 before force deductions**:
+`0.2 * 2/3 + 0.2 + 0.25 + 0.25 * 2/3 + 0.1`.
+One fruit completing the same sequence earns 0.7. These are partial completions;
+binary success still requires all three caught and the source bowl returned.
+Transporting an empty bowl earns zero.
+
+Packing and transport retain their completed milestones.
+Before all three are packed, each qualified fruit retains its partial packing
+credit while its center stays inside the small bowl, including while rolling
+or being carried. This tolerates contact-solver penetration after qualification.
+Its center leaving the bowl clears that fruit's partial credit until a qualified
+bowl lift records it in the carried load; packing credit for carried fruit
+persists through pouring. The fruits can
+qualify at different times or on separate trips. Each fruit must be qualified,
+contained and supported, or already recorded in a carried load, to complete
+the permanent packing milestone. Fruits may
+protrude above either bowl's rim or stack on other fruits, with a contact-support
+path to that bowl. Above-rim fruit centers must stay over the opening; unsupported
+fruit hovering over it cannot qualify.
+Transport has a 0.1 s dwell; a nonempty bowl of qualified fruit must first have
+been lifted at least 5 cm with a bowl grasp. Grasp acquisition requires both opposing
+fingers of one hand contacting the bowl for 50 ms, tolerating gaps of up to
+20 ms per finger during acquisition. Once acquired, either
+finger can carry load; losing both contacts for more than 20 ms ends the hold.
+Rim contact is measured independently and does not gate reward. Transport
+allows a horizontal center distance up to the receiver's rim radius (17 cm),
+with the source mouth's center at least 1 cm above the upright receiver's rim.
+At least one fruit in the pending carried load must remain inside during its own dwell, and the bowl must be
+grasped or supported by the receiver. This allows base overhang and movement
+during placement. Nesting also qualifies when the source floor is inside the receiver's
+flared cavity, with upward support from the receiver and both bowls upright and
+settled. The observer remembers fruit membership from qualified lifts; spilling
+or manually removing one cannot shrink the emptying denominator. Later loads
+add their fruit to this set and must earn transport proof for those fruits.
+A spill before arrival does not block transport credit for the remaining load.
+Each fruit needs its own full dwell and cannot borrow another fruit's elapsed time.
+Adding an unqualified fruit does not block carriage or transport of qualified
+fruit; the new fruit lacks its own packing and transport proof.
+Emptying is normalized across this remembered set. A fruit placed directly
+in the receiver cannot use another fruit's transport proof to earn catching.
+Pouring requires
+at least 30° tilt and the fruit's center leaving the opening's upper column, with no
+direct robot-fruit contact. The source must be grasped and lifted 5 cm, or
+supported by the receiver within the transport zone. After valid transport,
+emptying away from the receiver still earns emptying credit; catching independently
+measures landing in the receiver. Receiver
+support means at least 30% of the empty source bowl's weight carried by the
+upright, table-supported receiver. This permits fruit to finish rolling out
+after release onto the receiver; support gaps up to 20 ms are tolerated while
+the source remains in the transport zone. A brushed fruit can re-arm for pouring
+after 50 ms released onto the supported pile, tolerating 20 ms support gaps while
+its collision bounds remain contained. A hand-carried fruit cannot.
+A spill can earn emptying credit but cannot earn catching credit
+after contacting the table. Re-entering the small bowl clears a fruit's
+pouring credit. Removing a caught fruit clears its current catching credit.
+Containment checks each sphere against the finite polygonal walls and floor,
+allowing 1 mm of side-wall solver penetration. The opening's vertical column
+admits above-rim piles; contact support is required for packing and catching.
+Fruit settling limits `linear_speed + radius * angular_speed` to 3 cm/s;
+bowls must move slower than 3 cm/s and 0.25 rad/s.
+Return credit requires prior valid transport and no fruit remaining in the small
+bowl, independently of whether that load emptied by pouring, spilling or hand removal.
+Its base must receive at least 60% of its
+own weight from the table, its upright axis within about 11.5° of vertical,
+and no robot contact throughout the 0.5 s dwell. Any table location qualifies.
+Lifting or touching the bowl again revokes only this component. Catching every
+fruit is independent of return credit; full task success requires both.
+
+For a three-fruit load, gentle handling reserves 0.045 per fruit, 0.1275 for the
+small bowl and 0.0375 for the receiver. A smaller load divides the fruit half
+of emptying's force-sensitive share among its members; packing and catching
+retain their three-fruit denominators. The `force_gentle_credit` metric reports
+the current per-entity shares, totaling 0.3. Every solved native tick sums the magnitudes of all
+external contact forces, including friction; opposing forces add. Dose is
+`max(load - allowance, 0) * dt`, and 5 N·s consumes an entity's entire
+gentle-handling share. Fruit allowance is 15 N. Bowls add their own weight
+and twice the total fruit weight, accounting for contents and support
+reaction. Damage never recovers before reset, and remains separate from
+binary task completion. `force_allowance_n` and `force_dose_budget_ns`
+are configurable evaluator options.
+
+Metrics report the five reward components, per-fruit packing/emptying/catching,
+stage milestones, retained packing masks, qualification masks and dwell times,
+bowl support/readiness, containment/support/pour masks, bowl/rim grasp, transport
+eligibility and dwell, return eligibility/dwell, center-distance transport zone, receiver support,
+mouth crossings, qualified departures, floor containment, and load/peak/
+excess-dose/potential-penalty columns in order
+`[fruit_1, fruit_2, fruit_3, source_bowl, target_bowl]`.
+Potential force penalties describe the loss if all affected stages are earned.
+Use independent native environments for rollout workers: qpos-only batch
+evaluation cannot reconstruct this contact history and raises explicitly.
+
+### Pack and close a small suitcase
+
+`pack_suitcase` starts with a free, rigid suitcase opened between **105 and
+110 degrees**, plus exactly three loose household objects on the table.
+The passive hinge has a **0–110 degree joint limit**; gravity holds the lid
+against the opening stop and closes it after it passes vertical. MuJoCo's
+joint stops are compliant, so solved angles can exceed a limit by a small
+solver tolerance. The case has a carrying handle, a lid pull tab, solid
+walls and floor, and an enclosing lid. The nominal footprint is 20 × 30 cm.
+Seeded construction varies width **19–21 cm**, length **29–31 cm**, wall height
+**8–10 cm**, wall thickness **6–12 mm**, floor thickness **9–14 mm**, and lid
+thickness **12–20 mm**. Three handle shapes (bridge, rounded, tab), four strap
+layouts (none, single, double, cross), and three shell details (smooth, ribs,
+corner caps) give 36 construction combinations before continuous dimensions
+and textures. Every combination has room for three maximum-size objects.
+
+The seed selects one of **32 shell appearances** (eight palettes × four
+procedural texture patterns), case construction and position/yaw, lid opening angle, object
+identities/poses, and one of **12 equivalent prompts**. Seed 0 says:
+“put all objects on the table into the suitcase and close it”.
+Object categories are soap, sponge, apple, lemon, orange, potato, donut,
+and yogurt. Uniform scaling limits each object to 8 cm in any dimension
+and 5.5 cm in height, leaving room for all three side by side.
+
+```python
+env = abc_sim.make_env(task="pack_suitcase", render_cameras=False)
+env.reset(seed=42, options={"randomization": {
+    "texture": {"palette": "navy", "pattern": "checker"},
+    "style": {"handle": "rounded", "straps": "none", "detail": "ribs", "wall_thickness": 0.007},
+    "lid_angle_deg": 107,
+}})
+```
+
+Optional `objects` is a list of three `{category, variant}` mappings from
+the approved library. Replay restores all appearances, construction dimensions, object identities,
+poses, opening angle and language from serialized `RandomizationState`.
+Install the existing object pack with `uv run prepare.py --sim-task pack_suitcase`.
+
+Packing earns **0.3 total**, or **0.1 per object**. Its entire collision bounds must be inside
+the cavity, with a solved upward support path to the case floor, no robot
+contact, and low linear/angular velocity for **0.5 uninterrupted seconds**.
+The suitcase must be upright, settled, and supported on the tabletop for
+initial packing qualification. Afterward, the object keeps its packing credit
+while fully contained, including during case motion, lifting, or contact.
+Leaving the cavity clears that qualification and requires settling again.
+Containment uses the generated case's actual walls, floor and rim. Objects may
+touch the side walls, allowing up to **1 mm** of contact-solver penetration.
+Closing earns **0.4** independently of packing and requires the lid within
+**3 degrees of closed**, with the case released, supported
+and settled, and the hinge settled
+for 0.5 seconds. Closing an empty or partly packed case earns full closure
+credit before force deductions. Removing an item revokes its packing credit;
+reopening the lid revokes closure and pose credit.
+`ever_success` records history only.
+
+Staying in place earns **0.3**, measured from the lower shell's pose at episode
+reset. Translation is the full 3D distance; rotation is the shortest 3D angular
+difference, independent of the lid angle. Translation keeps full credit through
+**5 cm**, then decreases linearly to zero at **20 cm**. Rotation keeps full
+credit through **5 degrees**, then decreases linearly to zero at **45 degrees**.
+The staying reward is `0.3 * min(translation_fraction, rotation_fraction)`,
+available only with the same released, supported and settled
+closure required for lid credit. Closing an empty case in place earns **0.7**
+before force deductions; closing with two packed objects earns **0.9**.
+Holding the case, lifting it,
+or reopening the lid removes this component. It reflects the current/final pose:
+returning the case restores pose credit once closure qualifies again.
+An untouched reset scene earns zero.
+Binary success requires packing, settled closure, and the case within both
+pose deadbands.
+
+Gentle handling accounts for **30%** of packing and closing: **0.03 per
+object** and **0.12 for the suitcase**. On every native physics tick each
+entity accumulates `max(contact_force_n - allowance_n, 0) * dt`.
+The penalty is its gentle-handling credit times `min(dose / 5 N*s, 1)`,
+and persists until reset. Each object's allowance is **15 N**. The case's
+allowance is **15 N + its weight + twice the combined weight of all three
+objects**: contents push down on the case and also increase its table
+reaction. This fixed, episode-specific allowance prevents ordinary loaded
+resting contact from continuously spending credit.
+
+Loads sum magnitudes of all external contact forces including friction;
+opposing fingers add. The lid and lower shell count as one suitcase entity,
+so their internal contacts do not count. A press between an object and the
+case loads both entities. Joint torques are not part of this contact-load
+metric. Unpacked objects and incomplete closure earn zero rather than a
+separate negative penalty; a completed task within both pose deadbands with
+all force credit spent earns 0.79. Force penalties do not change binary success
+or the staying-in-place component.
+These are provisional shaping defaults, not physical damage thresholds.
+Evaluator options are `object_force_allowance_n`,
+`case_extra_force_allowance_n`, and `force_dose_budget_ns`.
+Force metrics have columns `[object_1, object_2, object_3, suitcase]` and
+include `contact_force_n`, `peak_force_n`, `force_threshold_n`,
+`excess_force_n`, `force_dose_ns`, and `force_penalty`.
+Pose metrics include `suitcase_translation_m`, `suitcase_rotation_deg`,
+`suitcase_translation_fraction`, `suitcase_rotation_fraction`,
+`suitcase_staying_fraction`, and `suitcase_staying_reward`.
+
+Scoring requires native per-physics-tick observations; qpos-only/MJWarp
+scoring cannot reconstruct the required support and dwell history.
+
+### Stand three water bottles upright
+
+`lift_bottles_upright` uses the ABC station with exactly three water bottles and
+1–3 household distractors. Each bottle is sampled independently from 14 water-bottle
+variants (`bottle_5` through `bottle_18`) and starts lying on its side.
+Distractors come from 20 categories / 75 variants: mugs, bowls, coffee cups, cans,
+canned food, food boxes, drink cartons, cereal, jars, yogurt, soap bars, sponges,
+apples, lemons, oranges, tomatoes, potatoes, donuts, cupcakes, and trash bins.
+The trash bins include the round orange bin and the blue mesh bin from the bottle
+tasks. Categories are sampled without replacement; bins are distractors, not goals.
+Full visual/collision footprints fit the table, with clearance from other objects
+and the reset arm pose. Install its assets with
+`uv run prepare.py --sim-task lift_bottles_upright`, then select the task through
+`abc_sim.make_env(task="lift_bottles_upright")`.
+
+Seed 0 prompts “lift the bottles upright”. Consecutive seeds cycle through
+sixteen equivalent instructions, including “stand all three water bottles
+upright” and “lift each bottle and set it down upright”. Each instruction is
+also a task alias; reset records the selected wording in the episode metadata.
+The seed controls bottle variants, distractor count/identities, positions, headings,
+and wording. Repeating a seed reproduces the scene; serialized randomization
+states restore all object identities and poses, including across changed counts.
+
+To vary placement while retaining the same objects, pin the three bottle variants
+and distractor identities through reset options:
+
+```python
+env.reset(seed=42, options={"randomization": {
+    "bottle_variants": ["bottle_5", "bottle_11", "bottle_18"],
+    "distractors": [
+        {"category": "trash_bin", "variant": "blue_mesh"},
+        {"category": "apple", "variant": "apple_10"},
+    ],
+}})
+```
+
+`distractor_variants(category)` in
+`abc_sim.randomization.assets.tabletop_distractors` lists installed choices.
+With no identity overrides, all assets are resampled each episode. The same seed
+in all worlds already produces matching models. Assets use their native sizes.
+
+Reward combines upright placement and gentle handling for each bottle.
+Each bottle must satisfy all of these for **0.5 uninterrupted seconds**:
+
+- Cap-up axis within 14° of vertical, base origin within 8 mm of table height
+  (0.75 m), x in [0.34, 0.84] and y in [-0.53, 0.53].
+- Upward solved tabletop contact at its base carrying at least 80% of its weight.
+- No contact with the robot, other bottles, or distractors.
+- Linear speed at most 0.03 m/s and angular speed at most 0.25 rad/s.
+
+Any interruption clears that bottle's dwell and credit. All three must qualify
+simultaneously for success. Historical maximum/ever-success metrics are diagnostics;
+they do not preserve reward after a bottle falls. A bottle held upright, propped
+against clutter, bouncing, or supported inside a trash bin earns no credit.
+The table uses a finite collision box so objects pushed over the edge fall.
+
+Each qualified bottle can earn **1/3**, of which **0.1** depends on its cumulative
+excess contact-force dose. At every physics tick, sum the magnitudes of the 3D contact
+forces against **all external bodies**, including normal and friction forces.
+Two opposing 8 N fingers contribute 16 N; table, clutter and other-bottle impacts
+also count. Torque components have units N·m and are excluded.
+
+```text
+force_i = sum over contacts ||force_xyz||
+dose_i += max(force_i - 15 N, 0) * dt
+penalty_i = 0.1 * min(dose_i / (2.5 N*s), 1)
+reward_i = qualified_i * (1/3 - penalty_i)
+reward = sum_i reward_i
+```
+
+Loads at or below **15 N** spend no handling credit. Above that threshold,
+the deduction grows at **0.04 reward per N·s of excess force**, capped at 0.1.
+For example, 20 N for 100 ms deducts 0.02, 20 N for 500 ms deducts the full 0.1,
+and a single 2 ms tick at 80 N deducts 0.0052. Integration uses simulation
+time and every solved tick; the reset baseline and score reads add no dose.
+Separated bursts accumulate. That loss cannot recover after release, waiting,
+falling or re-standing; only a new episode/reset clears it. The threshold keeps
+resting weight and low-load holding from consuming the credit indefinitely.
+Unqualified bottles earn zero, including their gentle-handling component.
+Binary success still means all three qualify; reward can be 0.7 at success if
+all three exhausted their gentle-handling credit. The evaluator accepts
+`force_penalty_start_n` (default 15 N) and `force_dose_budget_ns` (default 2.5 N·s)
+through `evaluator_options`. Metrics expose `bottle_contact_force_n`,
+`bottle_excess_force_n`, `bottle_force_dose_ns`, `bottle_peak_force_n`,
+`bottle_force_penalty`, and `bottle_reward`.
+The peak remains diagnostic; it does not determine the penalty. The dose
+adjusts the qualified-bottle score, not a separate negative step reward.
+
+`mj_contactForce` reads MuJoCo's solved contact forces in Newtons, the same source
+as the built-in `<contact>` sensor. Reading all contacts avoids a fixed sensor
+slot limit and reuses the support/release checks above. Regression tests compare
+the aggregate against that sensor under rest, a known load, and a balanced
+squeeze. A `<force>` sensor measures the body-to-parent wrench and can miss
+balanced compression; `<touch>` sums normal forces within a site but omits
+friction. These are simulator contact loads, sensitive to timestep, solver and
+collision/contact parameters; they are not calibrated physical bottle stress.
+
+The evaluator observes **every solved native physics tick** through `env.step`,
+`env.apply_action`, or `env.advance_physics`. Evaluation is a read of cached state;
+repeated reads cannot accumulate dwell. Direct `mujoco.mj_step` callers must also
+invoke the observer exactly once per tick. Qpos-only scoring is explicitly
+unsupported. Independent native environments support seeded RL workers, including
+identical scene seeds across 16 workers. ABC's current batched MJWarp backend does
+not support these physics observers and rejects this task.
+
 For a runnable example:
 
 ```bash
