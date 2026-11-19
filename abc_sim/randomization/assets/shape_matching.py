@@ -26,11 +26,11 @@ PIECE_COUNT = 16
 TARGET_COUNT = 8
 DEFAULT_SELECTED = (0, 1, 4, 5, 8, 9, 12, 13)
 EMPTY_SLOT_RGBA = (0.80, 0.80, 0.78, 1)
-PITCH = 0.063
+PITCH = 0.067
 BOARD_HALF = 0.140
 WALL_HEIGHT = 0.013
 PIECE_HALF_HEIGHT = 0.011
-HOLE_CLEARANCE = 0.0015
+HOLE_CLEARANCE = 0.0025
 PIECE_DENSITY = 600.0
 PIECE_JOINTS = tuple(f"shape_piece_{i:02d}_joint" for i in range(PIECE_COUNT))
 
@@ -81,6 +81,8 @@ def prism_mesh(asset: ET.Element, name: str, vertices: np.ndarray, low: float, h
 
 def _ring_cells(vertices: np.ndarray):
     """Partition a square tile around its polygonal opening into convex prisms."""
+    if np.any(np.abs(vertices) >= PITCH / 2):
+        raise ValueError("Shape openings must fit strictly inside their board tiles.")
     angles = np.unique(
         np.round(
             np.mod(

@@ -81,7 +81,9 @@ env.reset(seed=11)
 Only the shared YAM assets are required:
 `uv run prepare.py --sim-task shape_matching`.
 The slots pass completely through the board; convex wall segments preserve the
-openings in both rendering and collision. Each requested piece earns 1/8 after
+openings in both rendering and collision. Each hole has 2.5 mm clearance per
+edge, with slot centers 67 mm apart; a 42 mm square piece fits a 47 mm square hole.
+Each requested piece earns 1/8 after
 being fully seated in its own slot, released and supported by the table for
 0.3 seconds. Wrong colors, hovering and stacked pieces receive no credit.
 Unrequested pieces earn no reward and do not reduce earned credit or prevent

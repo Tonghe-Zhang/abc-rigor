@@ -19,6 +19,7 @@ from abc_sim.randomization.assets.shape_matching import (
     PIECE_JOINTS,
     WALL_HEIGHT,
     build_board,
+    polygon,
     slot_center,
 )
 from abc_sim.randomization.core import RandomizationState
@@ -302,6 +303,32 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         result = self.step(0.6)
         np.testing.assert_array_equal(np.flatnonzero(result.metrics["piece_matched_mask"]), [0, 4, 8, 12])
         self.assertAlmostEqual(result.scalar_reward(), 4 / 8)
+
+    def test_two_mm_offset_fits_without_wall_contact_and_earns_credit(self):
+        positions = {}
+        board = self.data.body("shape_board")
+        for piece, shape in ((0, "circle"), (4, "square"), (8, "triangle"), (12, "hexagon")):
+            self.place(piece)
+            outline = polygon(shape)
+            edge = outline[1] - outline[0]
+            normal = np.array((edge[1], -edge[0])) / np.linalg.norm(edge)
+            offset = board.xmat.reshape(3, 3) @ np.array((*normal, 0.0)) * 0.002
+            self.data.joint(PIECE_JOINTS[piece]).qpos[:3] += offset
+            mujoco.mj_forward(self.model, self.data)
+            positions[piece] = self.data.body(f"shape_piece_{piece:02d}").xpos[:2].copy()
+        piece_geoms = {self.model.geom(f"shape_piece_{piece:02d}_geom").id for piece in positions}
+        board_id = self.model.body("shape_board").id
+        for contact in self.data.contact:
+            if contact.geom1 in piece_geoms:
+                self.assertNotEqual(self.model.geom_bodyid[contact.geom2], board_id)
+            if contact.geom2 in piece_geoms:
+                self.assertNotEqual(self.model.geom_bodyid[contact.geom1], board_id)
+        result = self.step(0.6)
+        self.assertAlmostEqual(result.scalar_reward(), 4 / 8)
+        for piece, position in positions.items():
+            np.testing.assert_allclose(
+                self.data.body(f"shape_piece_{piece:02d}").xpos[:2], position, rtol=0, atol=0.0001
+            )
 
     def test_hovering_stacking_and_brief_contact_do_not_qualify(self):
         self.place(0, height=0.03)
