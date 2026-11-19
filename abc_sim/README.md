@@ -121,9 +121,10 @@ reset. Translation is the full 3D distance; rotation is the shortest 3D angular
 difference, independent of the lid angle. Translation keeps full credit through
 **5 cm**, then decreases linearly to zero at **20 cm**. Rotation keeps full
 credit through **5 degrees**, then decreases linearly to zero at **45 degrees**.
-The staying reward is `0.3 * min(translation_fraction, rotation_fraction)`.
-It reflects the current/final pose: returning the case restores this credit.
-This independent component gives an untouched reset scene 0.3 reward.
+The staying reward is `0.3 * min(translation_fraction, rotation_fraction)`,
+available only while the lid is **within 3 degrees of closed**. Opening the lid
+removes this component immediately. It reflects the current/final pose:
+returning the case restores pose credit while closed. An open reset scene earns zero.
 Binary success requires packing, settled closure, and the case within both
 pose deadbands.
 
