@@ -95,18 +95,29 @@ the approved library. Replay restores all appearances, object identities,
 poses, opening angle and language from serialized `RandomizationState`.
 Install the existing object pack with `uv run prepare.py --sim-task pack_suitcase`.
 
-Packing earns **0.5 total**, or **1/6 per object**. Its entire collision bounds must be inside
+Packing earns **0.3 total**, or **0.1 per object**. Its entire collision bounds must be inside
 the cavity, with a solved upward support path to the case floor, no robot
 contact, and low linear/angular velocity for **0.5 uninterrupted seconds**.
 The suitcase must be upright, settled, and supported on the tabletop.
-The final **0.5** requires all three objects packed and the lid within
+Closing earns **0.4** and requires all three objects packed and the lid within
 **3 degrees of closed**, with the entire case released and the hinge settled
 for another 0.5 seconds. Closing an empty or partly packed case adds no
 credit. Removing an item or reopening the lid revokes current credit;
 `ever_success` records history only.
 
-Gentle handling accounts for **30%** of each reward component: **0.05 per
-object** and **0.15 for the suitcase**. On every native physics tick each
+Staying in place earns **0.3**, measured from the lower shell's pose at episode
+reset. Translation is the full 3D distance; rotation is the shortest 3D angular
+difference, independent of the lid angle. Translation keeps full credit through
+**5 cm**, then decreases linearly to zero at **20 cm**. Rotation keeps full
+credit through **5 degrees**, then decreases linearly to zero at **45 degrees**.
+The staying reward is `0.3 * min(translation_fraction, rotation_fraction)`.
+It reflects the current/final pose: returning the case restores this credit.
+This independent component gives an untouched reset scene 0.3 reward.
+Binary success requires packing, settled closure, and the case within both
+pose deadbands.
+
+Gentle handling accounts for **30%** of packing and closing: **0.03 per
+object** and **0.12 for the suitcase**. On every native physics tick each
 entity accumulates `max(contact_force_n - allowance_n, 0) * dt`.
 The penalty is its gentle-handling credit times `min(dose / 5 N*s, 1)`,
 and persists until reset. Each object's allowance is **15 N**. The case's
@@ -120,14 +131,18 @@ opposing fingers add. The lid and lower shell count as one suitcase entity,
 so their internal contacts do not count. A press between an object and the
 case loads both entities. Joint torques are not part of this contact-load
 metric. Unpacked objects and incomplete closure earn zero rather than a
-separate negative penalty; a completed but maximally penalized task earns
-0.7. Binary success continues to describe packing and closure.
+separate negative penalty; a completed task within both pose deadbands with
+all force credit spent earns 0.79. Force penalties do not change binary success
+or the staying-in-place component.
 These are provisional shaping defaults, not physical damage thresholds.
 Evaluator options are `object_force_allowance_n`,
 `case_extra_force_allowance_n`, and `force_dose_budget_ns`.
 Force metrics have columns `[object_1, object_2, object_3, suitcase]` and
 include `contact_force_n`, `peak_force_n`, `force_threshold_n`,
 `excess_force_n`, `force_dose_ns`, and `force_penalty`.
+Pose metrics include `suitcase_translation_m`, `suitcase_rotation_deg`,
+`suitcase_translation_fraction`, `suitcase_rotation_fraction`,
+`suitcase_staying_fraction`, and `suitcase_staying_reward`.
 
 Scoring requires native per-physics-tick observations; qpos-only/MJWarp
 scoring cannot reconstruct the required support and dwell history.

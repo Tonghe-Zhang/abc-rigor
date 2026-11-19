@@ -15,21 +15,28 @@ from abc_sim.task_specs import SimTaskSpec
 
 
 class PackSuitcaseEvaluator:
-    """Give 0.5 for packing all three objects and 0.5 for closing the case.
+    """Give 0.3 for packing, 0.4 for closure, and 0.3 for preserving case pose.
 
     Full object collision bounds must lie inside the cavity, with a solved
     support path to its floor, no robot contact, and low velocity for 0.5 s.
     Closure requires a lid angle within 3 degrees, release of the whole case,
     and another 0.5 s of settled physics. Credit is current-state, not latched.
-    Thirty percent of each component reflects gentle handling. Each entity's
+    Case pose credit has a 5 cm / 5 degree deadband, then falls linearly to
+    zero at 20 cm or 45 degrees from the reset pose. The worse fraction wins.
+    Thirty percent of packing and closure reflects gentle handling. Each entity's
     cumulative external contact load above its allowance irreversibly spends
     that credit over a 5 N*s dose budget. History resets only with the episode.
     """
 
     evaluation_interval_steps = 1
     settling_seconds = 0.5
-    packing_reward = 0.5
-    closure_reward = 0.5
+    packing_reward = 0.3
+    closure_reward = 0.4
+    staying_reward = 0.3
+    position_tolerance_m = 0.05
+    position_limit_m = 0.2
+    orientation_tolerance_deg = 5.0
+    orientation_limit_deg = 45.0
     gentle_fraction = 0.3
 
     def __init__(
@@ -88,6 +95,8 @@ class PackSuitcaseEvaluator:
             raise NotImplementedError("Suitcase scoring requires one native physics observer per world.")
         self._data = None
         self._previous_time = None
+        self._initial_case_pos = None
+        self._initial_case_quat = None
         self._packed_time = np.zeros(3)
         self._previous_eligible = np.zeros(3, dtype=bool)
         self._closed_time = 0.0
@@ -101,6 +110,8 @@ class PackSuitcaseEvaluator:
         if model is not self.model:
             raise ValueError("Suitcase observer model mismatch.")
         self._data, self._previous_time = data, float(data.time)
+        self._initial_case_pos = data.xpos[self._case].copy()
+        self._initial_case_quat = data.xquat[self._case].copy()
         self._observe(data, elapsed=0)
 
     def after_physics_step(self, model, data):
@@ -126,6 +137,27 @@ class PackSuitcaseEvaluator:
             raise ValueError("Suitcase scene poses and velocities must be finite.")
         case_pos = data.xpos[self._case]
         case_rot = data.xmat[self._case].reshape(3, 3)
+        translation_m = float(np.linalg.norm(case_pos - self._initial_case_pos))
+        rotation_vector = np.empty(3)
+        mujoco.mju_subQuat(rotation_vector, data.xquat[self._case], self._initial_case_quat)
+        rotation_deg = float(np.rad2deg(np.linalg.norm(rotation_vector)))
+        translation_fraction = float(
+            np.clip(
+                (self.position_limit_m - translation_m) / (self.position_limit_m - self.position_tolerance_m),
+                0,
+                1,
+            )
+        )
+        rotation_fraction = float(
+            np.clip(
+                (self.orientation_limit_deg - rotation_deg)
+                / (self.orientation_limit_deg - self.orientation_tolerance_deg),
+                0,
+                1,
+            )
+        )
+        staying_fraction = min(translation_fraction, rotation_fraction)
+        staying_reward = self.staying_reward * staying_fraction
         inside = np.zeros(3, dtype=bool)
         for i, geoms in enumerate(self._bounds_geoms):
             points = np.concatenate(
@@ -213,7 +245,8 @@ class PackSuitcaseEvaluator:
         )
         self._closed_time = self._closed_time + elapsed if closed and self._previous_closed else 0.0
         self._previous_closed = closed
-        success = closed and self._closed_time >= self.settling_seconds
+        closure_qualified = closed and self._closed_time >= self.settling_seconds
+        success = closure_qualified and np.isclose(staying_fraction, 1.0, rtol=0, atol=1e-12)
         self._ever_success |= success
         count = int(packed.sum())
         excess_force_n = np.maximum(contact_force_n - self.force_threshold_n, 0)
@@ -221,15 +254,22 @@ class PackSuitcaseEvaluator:
         self._peak_force_n = np.maximum(self._peak_force_n, contact_force_n)
         penalty = self._gentle_credit * np.minimum(self._force_dose_ns / self.force_dose_budget_ns, 1)
         object_reward = packed * (self.packing_reward / 3 - penalty[:3])
-        lid_reward = success * (self.closure_reward - penalty[3])
+        lid_reward = closure_qualified * (self.closure_reward - penalty[3])
         self._result = TaskEvalResult(
-            reward=np.array([object_reward.sum() + lid_reward]),
+            reward=np.array([object_reward.sum() + lid_reward + staying_reward]),
             success=np.array([success]),
             metrics={
                 "num_packed_objects": np.array([count]),
                 "object_reward": object_reward[None, :],
                 "packing_reward": np.array([object_reward.sum()]),
                 "lid_reward": np.array([lid_reward]),
+                "suitcase_staying_reward": np.array([staying_reward]),
+                "suitcase_staying_fraction": np.array([staying_fraction]),
+                "suitcase_translation_m": np.array([translation_m]),
+                "suitcase_rotation_deg": np.array([rotation_deg]),
+                "suitcase_translation_fraction": np.array([translation_fraction]),
+                "suitcase_rotation_fraction": np.array([rotation_fraction]),
+                "lid_closed_and_settled": np.array([closure_qualified]),
                 "contact_force_n": contact_force_n[None, :],
                 "peak_force_n": self._peak_force_n[None, :].copy(),
                 "force_threshold_n": self.force_threshold_n[None, :].copy(),
