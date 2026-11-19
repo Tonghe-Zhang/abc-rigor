@@ -5,7 +5,6 @@ import unittest
 
 import mujoco
 import numpy as np
-
 from abc_sim import make_env
 from abc_sim.batched_env import BatchedWarpYAMEnv
 from abc_sim.randomization.core import RandomizationState
@@ -123,6 +122,7 @@ class SpellingV2PhysicsTests(unittest.TestCase):
         self.teleport("A", [0, 0.12, 0.011])
         self.advance(200)
         self.assertFalse(self.result().metrics["letter_eligible"][0, z])
+        self.assertEqual(self.result().scalar_reward(), 0.75)
 
     def test_opposing_contacts_sum_and_integrate_every_tick_with_per_letter_damage(self):
         self.place_row("ZXBI")

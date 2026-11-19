@@ -405,7 +405,10 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="hang_mug_on_mug_rack",
         env_task="mug_tree",
         prompt="hang mug on mug rack",
-        evaluator_name="mug_on_rack",
+        evaluator_name="mug_on_rack_v2",
+        # These three handles cannot pass over a rack branch at the sampled
+        # scales. The remaining sixteen variants have collision-free fits.
+        reset_request=(("mug_variant_pool", tuple(f"mug_{i}" for i in range(19) if i not in (1, 7, 10))),),
         aliases=(
             "sim_hang_mug_on_mug_rack",
             "sim_hang_the_mug_on_the_mug_rack",

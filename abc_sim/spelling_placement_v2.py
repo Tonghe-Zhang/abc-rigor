@@ -19,6 +19,7 @@ class SpellingPlacementV2Cfg:
     row_width_m: float = 0.03
     gap_min_m: float = 0.025
     gap_max_m: float = 0.06
+    slot_overlap_m: float = 0.005
     displacement_m: float = 0.02
     upright_dot_min: float = 0.85
     minimum_weight_fraction: float = 0.5
@@ -46,6 +47,7 @@ class SpellingPlacementV2Cfg:
             self.gentle_fraction,
             self.force_allowance_n,
             self.force_dose_budget_ns,
+            self.slot_overlap_m,
         )
         if (
             not np.isfinite(values).all()
@@ -53,6 +55,7 @@ class SpellingPlacementV2Cfg:
             or not 0 <= self.gentle_fraction < 1
             or self.force_allowance_n < 0
             or self.force_dose_budget_ns <= 0
+            or not 0 < self.slot_overlap_m < self.gap_min_m
         ):
             raise ValueError("Invalid spelling partial-credit or force-dose configuration.")
 
@@ -73,6 +76,8 @@ def score_spelling_placement(
     tied components retain only credit common to every interpretation.
     Reading starts at the first occupied position, toward decreasing scene Y.
     Longer gaps admit empty slots. An overlong row has ambiguous endpoints.
+    Co-projected occupants reserve one conflicted slot without changing the
+    indices or credit of neighboring letters.
     Correct positions must agree across all admissible gap/endpoint choices.
     Requested, placed, eligible letters in the row otherwise earn quarter credit.
     """
@@ -115,10 +120,16 @@ def score_spelling_placement(
     largest = max((int(placed[row].sum()) for row in candidates), default=0)
     for row in candidates:
         selected = int(placed[row].sum()) == largest
-        gaps = -np.diff(positions[row, 1])
-        max_span = max(length, len(row))
+        groups = []
+        for index in row:
+            if groups and positions[groups[-1][0], 1] - positions[index, 1] <= cfg.slot_overlap_m:
+                groups[-1].append(index)
+            else:
+                groups.append([index])
+        gaps = -np.diff([positions[group, 1].mean() for group in groups])
+        max_span = max(length, len(groups))
         options = [
-            [jump for jump in range(1, max_span - len(row) + 2) if cfg.gap_min_m <= gap / jump <= cfg.gap_max_m]
+            [jump for jump in range(1, max_span - len(groups) + 2) if cfg.gap_min_m <= gap / jump <= cfg.gap_max_m]
             for gap in gaps
         ]
         row_scores = []
@@ -130,7 +141,10 @@ def score_spelling_placement(
                 slots = np.concatenate(([0], np.cumsum(jumps)))
                 for offset in range(min(0, length - span), 1):
                     values = np.zeros(count)
-                    for index, slot in zip(row, slots + offset, strict=True):
+                    for group, slot in zip(groups, slots + offset, strict=True):
+                        if len(group) != 1:
+                            continue
+                        index = group[0]
                         if eligible[index] and letters[index] in word:
                             values[index] = (
                                 1.0 if 0 <= slot < length and letters[index] == word[slot] else cfg.misplaced_fraction

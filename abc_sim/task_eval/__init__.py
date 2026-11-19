@@ -16,6 +16,7 @@ from abc_sim.task_eval.grab_clutter import GrabClutterTargetInBoxEvaluator
 from abc_sim.task_eval.inhand_transfer import InhandTransferOtherSideEvaluator
 from abc_sim.task_eval.lego_blocks import LegoBlocksSortingEvaluator
 from abc_sim.task_eval.mug_tree import MugOnRackEvaluator
+from abc_sim.task_eval.mug_tree_v2 import MugOnRackV2Evaluator
 from abc_sim.task_eval.multi_drawer import MultiDrawerSearchTargetInBinEvaluator
 from abc_sim.task_eval.mugs import MugFlipUprightEvaluator
 from abc_sim.task_eval.nuts_bolts import NutsBoltsSortingEvaluator
@@ -45,6 +46,7 @@ __all__ = [
     "InhandTransferOtherSideEvaluator",
     "LegoBlocksSortingEvaluator",
     "MugOnRackEvaluator",
+    "MugOnRackV2Evaluator",
     "MultiDrawerSearchTargetInBinEvaluator",
     "NutsBoltsSortingEvaluator",
     "PourBeadsInContainerEvaluator",

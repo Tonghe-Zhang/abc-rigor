@@ -33,6 +33,10 @@ Reading starts at the first occupied position toward decreasing scene Y.
 Thus an incomplete `ZXB` prefix earns 0.75, and `Z_BI` with an unambiguous empty
 second slot also earns 0.75. A singleton does not establish a row.
 
+Co-projected cubes within 5 mm reserve one conflicted slot. That slot earns
+zero without shifting its neighbors: stacking the first target on a wrong
+cube leaves the other three correct letters' 0.75 credit intact.
+
 Longer gaps admit missing slots. If multiple interpretations fit, full positional
 credit requires agreement across them; an eligible requested letter otherwise
 retains its quarter credit. Overlong rows have ambiguous endpoints, so adding

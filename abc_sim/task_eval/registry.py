@@ -18,6 +18,7 @@ from abc_sim.task_eval.grab_clutter import GrabClutterTargetInBoxEvaluator
 from abc_sim.task_eval.inhand_transfer import InhandTransferOtherSideEvaluator
 from abc_sim.task_eval.lego_blocks import LegoBlocksSortingEvaluator
 from abc_sim.task_eval.mug_tree import MugOnRackEvaluator
+from abc_sim.task_eval.mug_tree_v2 import MugOnRackV2Evaluator
 from abc_sim.task_eval.multi_drawer import (
     MultiDrawerSearchTargetInBinEvaluator,
     ShapedMultiDrawerSearchEvaluator,
@@ -56,6 +57,7 @@ _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
     "grab_clutter_target_in_box": GrabClutterTargetInBoxEvaluator,
     "inhand_transfer_other_side": InhandTransferOtherSideEvaluator,
     "mug_on_rack": MugOnRackEvaluator,
+    "mug_on_rack_v2": MugOnRackV2Evaluator,
     "multi_drawer_target_in_bin": MultiDrawerSearchTargetInBinEvaluator,
     "multi_drawer_search_shaped_v1": ShapedMultiDrawerSearchEvaluator,
     "ball_tray_balancing": BallTrayBalancingEvaluator,
