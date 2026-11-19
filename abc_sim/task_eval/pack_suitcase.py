@@ -41,6 +41,7 @@ class PackSuitcaseEvaluator:
     orientation_tolerance_deg = 5.0
     orientation_limit_deg = 45.0
     lid_closed_tolerance_deg = 3.0
+    wall_contact_tolerance_m = 0.001
     gentle_fraction = 0.3
 
     def __init__(
@@ -191,9 +192,10 @@ class PackSuitcaseEvaluator:
                 ]
             )
             lower, upper = points.min(axis=0), points.max(axis=0)
+            # Wall contact can include slight penetration from the soft contact solver.
             inside[i] = (
-                np.all(lower[:2] >= self._cavity_lower[:2] + 0.001)
-                and np.all(upper[:2] <= self._cavity_upper[:2] - 0.001)
+                np.all(lower[:2] >= self._cavity_lower[:2] - self.wall_contact_tolerance_m)
+                and np.all(upper[:2] <= self._cavity_upper[:2] + self.wall_contact_tolerance_m)
                 and lower[2] >= self._cavity_lower[2] - 0.002
                 and upper[2] <= self._cavity_upper[2] - 0.002
             )

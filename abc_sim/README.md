@@ -108,7 +108,8 @@ The suitcase must be upright, settled, and supported on the tabletop for
 initial packing qualification. Afterward, the object keeps its packing credit
 while fully contained, including during case motion, lifting, or contact.
 Leaving the cavity clears that qualification and requires settling again.
-Containment uses the generated case's actual walls, floor and rim.
+Containment uses the generated case's actual walls, floor and rim. Objects may
+touch the side walls, allowing up to **1 mm** of contact-solver penetration.
 Closing earns **0.4** and requires all three objects packed and the lid within
 **3 degrees of closed**, with the case and contents released, the case supported
 and settled, and the hinge settled

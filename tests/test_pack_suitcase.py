@@ -324,6 +324,55 @@ class SuitcaseRewardTest(unittest.TestCase):
             self.assertFalse(result.metrics["object_contained_mask"][0, 0])
             self.assertFalse(result.metrics["object_packed_mask"][0, 0])
 
+    def place_first_object_near_walls(self, sides, clearance):
+        geom = self.evaluator._bounds_geoms[0][0]
+        case = self.evaluator._case
+        rotation = self.data.xmat[case].reshape(3, 3)
+        center = rotation.T @ (self.data.geom_xpos[geom] - self.data.xpos[case])
+        extent = np.abs(rotation.T @ self.data.geom_xmat[geom].reshape(3, 3)) @ self.model.geom_size[geom]
+        offset = np.zeros(3)
+        for axis, side in enumerate(sides):
+            if side:
+                target = side * (CASE_INNER_XY[axis] - extent[axis] - clearance)
+                offset[axis] = target - center[axis]
+        self.data.joint("packing_object_1_joint").qpos[:3] += rotation @ offset
+        self.data.qvel[:] = 0
+        mujoco.mj_forward(self.model, self.data)
+
+    def test_wall_and_corner_contact_qualifies_and_retains_packing(self):
+        sides = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
+        for side, clearance in product(sides, (0.0005, 0.0, -0.0005)):
+            with self.subTest(side=side, clearance=clearance):
+                self.setUp()
+                self.pack(1)
+                self.place_first_object_near_walls(side, clearance)
+                result = self.steps(700)
+                self.assertTrue(result.metrics["object_packed_mask"][0, 0])
+                self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.1 - result.metrics["force_penalty"][0, 0])
+                self.place_first_object_near_walls(side, clearance)
+                for _ in range(10):
+                    result = self.steps(1)
+                    self.assertTrue(result.metrics["object_packed_mask"][0, 0])
+
+    def test_closed_case_keeps_credit_near_wall_and_rejects_actual_exit(self):
+        self.pack(close=True)
+        self.assertTrue(self.steps(700).scalar_success())
+        self.place_first_object_near_walls((-1, 0), 0.0005)
+        result = self.steps(700)
+        self.assertTrue(result.scalar_success())
+        self.assertAlmostEqual(result.scalar_reward(), 1 - result.metrics["force_penalty"].sum())
+        for side in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            with self.subTest(side=side):
+                self.setUp()
+                self.pack(close=True)
+                self.assertTrue(self.steps(700).scalar_success())
+                self.place_first_object_near_walls(side, -0.0015)
+                result = self.steps(1)
+                self.assertFalse(result.metrics["object_contained_mask"][0, 0])
+                self.assertFalse(result.metrics["object_packed_mask"][0, 0])
+                self.assertFalse(result.scalar_success())
+                self.assertEqual(result.metrics["lid_reward"][0], 0)
+
     def test_airborne_object_in_cavity_needs_floor_support(self):
         self.pack(1)
         self.data.joint("packing_object_1_joint").qpos[2] += 0.012
