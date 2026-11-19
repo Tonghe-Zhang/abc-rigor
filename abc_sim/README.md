@@ -71,11 +71,16 @@ The passive hinge has a **0–110 degree joint limit**; gravity holds the lid
 against the opening stop and closes it after it passes vertical. MuJoCo's
 joint stops are compliant, so solved angles can exceed a limit by a small
 solver tolerance. The case has a carrying handle, a lid pull tab, solid
-walls and floor, and an enclosing lid. It measures 20 × 30 cm in footprint;
-the cavity is 17.6 × 27.6 × 7.8 cm.
+walls and floor, and an enclosing lid. The nominal footprint is 20 × 30 cm.
+Seeded construction varies width **19–21 cm**, length **29–31 cm**, wall height
+**8–10 cm**, wall thickness **6–12 mm**, floor thickness **9–14 mm**, and lid
+thickness **12–20 mm**. Three handle shapes (bridge, rounded, tab), four strap
+layouts (none, single, double, cross), and three shell details (smooth, ribs,
+corner caps) give 36 construction combinations before continuous dimensions
+and textures. Every combination has room for three maximum-size objects.
 
 The seed selects one of **32 shell appearances** (eight palettes × four
-procedural texture patterns), case position/yaw, lid opening angle, object
+procedural texture patterns), case construction and position/yaw, lid opening angle, object
 identities/poses, and one of **12 equivalent prompts**. Seed 0 says:
 “put all objects on the table into the suitcase and close it”.
 Object categories are soap, sponge, apple, lemon, orange, potato, donut,
@@ -86,21 +91,27 @@ and 5.5 cm in height, leaving room for all three side by side.
 env = abc_sim.make_env(task="pack_suitcase", render_cameras=False)
 env.reset(seed=42, options={"randomization": {
     "texture": {"palette": "navy", "pattern": "checker"},
+    "style": {"handle": "rounded", "straps": "none", "detail": "ribs", "wall_thickness": 0.007},
     "lid_angle_deg": 107,
 }})
 ```
 
 Optional `objects` is a list of three `{category, variant}` mappings from
-the approved library. Replay restores all appearances, object identities,
+the approved library. Replay restores all appearances, construction dimensions, object identities,
 poses, opening angle and language from serialized `RandomizationState`.
 Install the existing object pack with `uv run prepare.py --sim-task pack_suitcase`.
 
 Packing earns **0.3 total**, or **0.1 per object**. Its entire collision bounds must be inside
 the cavity, with a solved upward support path to the case floor, no robot
 contact, and low linear/angular velocity for **0.5 uninterrupted seconds**.
-The suitcase must be upright, settled, and supported on the tabletop.
+The suitcase must be upright, settled, and supported on the tabletop for
+initial packing qualification. Afterward, the object keeps its packing credit
+while fully contained, including during case motion, lifting, or contact.
+Leaving the cavity clears that qualification and requires settling again.
+Containment uses the generated case's actual walls, floor and rim.
 Closing earns **0.4** and requires all three objects packed and the lid within
-**3 degrees of closed**, with the entire case released and the hinge settled
+**3 degrees of closed**, with the case and contents released, the case supported
+and settled, and the hinge settled
 for another 0.5 seconds. Closing an empty or partly packed case adds no
 credit. Removing an item or reopening the lid revokes current credit;
 `ever_success` records history only.

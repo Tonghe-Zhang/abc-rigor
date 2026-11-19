@@ -8,7 +8,7 @@ from itertools import product
 import mujoco
 import numpy as np
 
-from abc_sim.randomization.assets.suitcase import CASE_FLOOR_Z, CASE_INNER_XY, CASE_RIM_Z, LID_LIMIT_RAD
+from abc_sim.randomization.assets.suitcase import LID_LIMIT_RAD
 from abc_sim.task_eval.base import TaskEvalResult
 from abc_sim.task_eval.contacts import subtree_geom_ids
 from abc_sim.task_specs import SimTaskSpec
@@ -19,8 +19,10 @@ class PackSuitcaseEvaluator:
 
     Full object collision bounds must lie inside the cavity, with a solved
     support path to its floor, no robot contact, and low velocity for 0.5 s.
-    Closure requires a lid angle within 3 degrees, release of the whole case,
-    and another 0.5 s of settled physics. Credit is current-state, not latched.
+    Once packed, an object keeps its credit while its full bounds remain
+    inside, including during case motion. Leaving the cavity clears that
+    qualification. Closure requires a lid angle within 3 degrees, release
+    of the whole case and contents, and another 0.5 s of settled physics.
     Case pose credit has a 5 cm / 5 degree deadband, then falls linearly to
     zero at 20 cm or 45 degrees from the reset pose. The worse fraction wins.
     Thirty percent of packing and closure reflects gentle handling. Each entity's
@@ -61,6 +63,21 @@ class PackSuitcaseEvaluator:
         self._case = model.body("suitcase").id
         self._case_geoms = subtree_geom_ids(model, self._case)
         self._floor = model.geom("suitcase_floor").id
+        front, back, right, left = [model.geom(f"suitcase_{name}").id for name in ("front", "back", "right", "left")]
+        self._cavity_lower = np.array(
+            [
+                model.geom_pos[front, 0] + model.geom_size[front, 0],
+                model.geom_pos[right, 1] + model.geom_size[right, 1],
+                model.geom_pos[self._floor, 2] + model.geom_size[self._floor, 2],
+            ]
+        )
+        self._cavity_upper = np.array(
+            [
+                model.geom_pos[back, 0] - model.geom_size[back, 0],
+                model.geom_pos[left, 1] - model.geom_size[left, 1],
+                min(model.geom_pos[g, 2] + model.geom_size[g, 2] for g in (front, back, right, left)),
+            ]
+        )
         self._table = model.geom("table_plane").id
         self._hinge = model.joint("suitcase_hinge").id
         self._case_dof = int(model.jnt_dofadr[model.joint("suitcase_joint").id])
@@ -98,6 +115,7 @@ class PackSuitcaseEvaluator:
         self._initial_case_pos = None
         self._initial_case_quat = None
         self._packed_time = np.zeros(3)
+        self._packed = np.zeros(3, dtype=bool)
         self._previous_eligible = np.zeros(3, dtype=bool)
         self._closed_time = 0.0
         self._previous_closed = False
@@ -173,10 +191,10 @@ class PackSuitcaseEvaluator:
             )
             lower, upper = points.min(axis=0), points.max(axis=0)
             inside[i] = (
-                np.all(lower[:2] >= -np.array(CASE_INNER_XY) + 0.001)
-                and np.all(upper[:2] <= np.array(CASE_INNER_XY) - 0.001)
-                and lower[2] >= CASE_FLOOR_Z - 0.002
-                and upper[2] <= CASE_RIM_Z - 0.002
+                np.all(lower[:2] >= self._cavity_lower[:2] + 0.001)
+                and np.all(upper[:2] <= self._cavity_upper[:2] - 0.001)
+                and lower[2] >= self._cavity_lower[2] - 0.002
+                and upper[2] <= self._cavity_upper[2] - 0.002
             )
         touching_robot = np.zeros(3, dtype=bool)
         supported = np.zeros(3, dtype=bool)
@@ -233,12 +251,13 @@ class PackSuitcaseEvaluator:
         eligible = candidates & supported & case_ok
         self._packed_time = np.where(eligible & self._previous_eligible, self._packed_time + elapsed, 0)
         self._previous_eligible = eligible
-        packed = eligible & (self._packed_time >= self.settling_seconds)
+        self._packed = inside & (self._packed | (eligible & (self._packed_time >= self.settling_seconds)))
+        packed = self._packed
         angle = float(data.qpos[model.jnt_qposadr[self._hinge]])
         hinge_speed = float(data.qvel[model.jnt_dofadr[self._hinge]])
         closed = bool(
             packed.all()
-            and case_ok
+            and eligible.all()
             and not case_touching_robot
             and abs(angle) <= np.deg2rad(3)
             and abs(hinge_speed) <= 0.1

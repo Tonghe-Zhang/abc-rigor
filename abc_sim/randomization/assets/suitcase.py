@@ -30,6 +30,9 @@ SHELL_PALETTES = {
     "forest": ((0.08, 0.23, 0.12), (0.32, 0.47, 0.22)),
 }
 SHELL_PATTERNS = ("solid", "checker", "fine_checker", "bands")
+HANDLE_STYLES = ("bridge", "rounded", "tab")
+STRAP_LAYOUTS = ("none", "single", "double", "cross")
+SHELL_DETAILS = ("smooth", "ribs", "corner_caps")
 
 
 @dataclass(frozen=True)
@@ -42,10 +45,45 @@ class SuitcaseTexture:
             raise ValueError(f"Unknown suitcase texture: {self}.")
 
 
-def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Element]:
+@dataclass(frozen=True)
+class SuitcaseStyle:
+    width: float = 0.20
+    length: float = 0.30
+    height: float = 0.09
+    wall_thickness: float = 0.012
+    floor_thickness: float = 0.012
+    lid_thickness: float = 0.016
+    handle: str = "bridge"
+    straps: str = "double"
+    detail: str = "smooth"
+
+    def __post_init__(self):
+        ranges = {
+            "width": (0.19, 0.21),
+            "length": (0.29, 0.31),
+            "height": (0.08, 0.10),
+            "wall_thickness": (0.006, 0.012),
+            "floor_thickness": (0.009, 0.014),
+            "lid_thickness": (0.012, 0.020),
+        }
+        for name, (low, high) in ranges.items():
+            value = getattr(self, name)
+            if not np.isfinite(value) or not low <= value <= high:
+                raise ValueError(f"Suitcase {name} must be between {low} and {high} metres.")
+        if self.handle not in HANDLE_STYLES or self.straps not in STRAP_LAYOUTS or self.detail not in SHELL_DETAILS:
+            raise ValueError(f"Unknown suitcase style: {self}.")
+
+
+def build_suitcase(
+    texture: SuitcaseTexture, style: SuitcaseStyle = SuitcaseStyle()
+) -> tuple[list[ET.Element], ET.Element]:
     """Build a free case with a passive 0–110 degree lid and solid cavity walls."""
-    hx, hy = CASE_HALF_XY
-    ix, iy = CASE_INNER_XY
+    hx, hy = style.width / 2, style.length / 2
+    ix, iy = hx - style.wall_thickness, hy - style.wall_thickness
+    floor_z, rim_z = style.floor_thickness, style.height
+    wall_half = style.wall_thickness / 2
+    wall_center_z, wall_half_z = (floor_z + rim_z) / 2, (rim_z - floor_z) / 2
+    lid_half = style.lid_thickness / 2
     first, second = SHELL_PALETTES[texture.palette]
     repeat = {"solid": (1, 1), "checker": (3, 4), "fine_checker": (12, 16), "bands": (1, 12)}[texture.pattern]
     asset = ET.Element("asset")
@@ -76,10 +114,10 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
     ET.SubElement(
         case,
         "inertial",
-        pos="0 0 0.035",
+        pos=_format_float_list((0, 0, rim_z * 0.4)),
         mass="1.2",
         diaginertia=_format_float_list(
-            1.2 / 12 * np.array([(2 * hy) ** 2 + CASE_RIM_Z**2, (2 * hx) ** 2 + CASE_RIM_Z**2, 4 * (hx**2 + hy**2)])
+            1.2 / 12 * np.array([(2 * hy) ** 2 + rim_z**2, (2 * hx) ** 2 + rim_z**2, 4 * (hx**2 + hy**2)])
         ),
     )
 
@@ -154,22 +192,49 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
             **attrs,
         )
 
-    box(case, "suitcase_floor", (0, 0, 0.006), (hx, hy, 0.006), "suitcase_lining")
+    box(case, "suitcase_floor", (0, 0, floor_z / 2), (hx, hy, floor_z / 2), "suitcase_lining")
     for sign, label in ((-1, "front"), (1, "back")):
-        box(case, f"suitcase_{label}", (sign * (hx - 0.006), 0, 0.051), (0.006, hy, 0.039))
+        box(case, f"suitcase_{label}", (sign * (hx - wall_half), 0, wall_center_z), (wall_half, hy, wall_half_z))
     for sign, label in ((-1, "right"), (1, "left")):
-        box(case, f"suitcase_{label}", (0, sign * (hy - 0.006), 0.051), (ix, 0.006, 0.039))
+        box(case, f"suitcase_{label}", (0, sign * (hy - wall_half), wall_center_z), (ix, wall_half, wall_half_z))
     # A carrying handle is attached to the front of the lower shell.
-    for sign in (-1, 1):
+    handle_z = rim_z / 2
+    if style.handle == "bridge":
+        for sign in (-1, 1):
+            box(
+                case,
+                f"suitcase_handle_post_{sign}",
+                (-hx - 0.014, sign * 0.048, handle_z),
+                (0.014, 0.008, 0.008),
+                "suitcase_trim",
+            )
+        box(case, "suitcase_handle", (-hx - 0.028, 0, handle_z), (0.008, 0.056, 0.008), "suitcase_trim")
+    elif style.handle == "rounded":
+        segments = [
+            (-hx, -0.045, handle_z, -hx - 0.028, -0.045, handle_z),
+            (-hx - 0.028, -0.045, handle_z, -hx - 0.028, 0.045, handle_z),
+            (-hx - 0.028, 0.045, handle_z, -hx, 0.045, handle_z),
+        ]
+        for i, segment in enumerate(segments):
+            ET.SubElement(
+                case,
+                "geom",
+                name=f"suitcase_handle_rounded_{i}",
+                type="capsule",
+                fromto=_format_float_list(segment),
+                size="0.009",
+                material="suitcase_trim",
+                friction="0.9 0.01 0.001",
+            )
+    else:
         box(
             case,
-            f"suitcase_handle_post_{sign}",
-            (-hx - 0.014, sign * 0.048, 0.044),
-            (0.014, 0.008, 0.008),
-            "suitcase_trim",
+            "suitcase_handle_tab",
+            (-hx - 0.022, 0, handle_z),
+            (0.022, 0.032, 0.005),
+            "suitcase_lining",
         )
-    box(case, "suitcase_handle", (-hx - 0.028, 0, 0.044), (0.008, 0.056, 0.008), "suitcase_trim")
-    lid = ET.SubElement(case, "body", name="suitcase_lid", pos=_format_float_list((hx, 0, CASE_RIM_Z)))
+    lid = ET.SubElement(case, "body", name="suitcase_lid", pos=_format_float_list((hx, 0, rim_z)))
     ET.SubElement(
         lid,
         "joint",
@@ -186,13 +251,17 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
     ET.SubElement(
         lid,
         "inertial",
-        pos=_format_float_list((-hx, 0, 0.008)),
+        pos=_format_float_list((-hx, 0, lid_half)),
         mass="0.15",
         diaginertia=_format_float_list(
-            0.15 / 12 * np.array([(2 * hy) ** 2 + 0.016**2, (2 * hx) ** 2 + 0.016**2, 4 * (hx**2 + hy**2)])
+            0.15
+            / 12
+            * np.array(
+                [(2 * hy) ** 2 + style.lid_thickness**2, (2 * hx) ** 2 + style.lid_thickness**2, 4 * (hx**2 + hy**2)]
+            )
         ),
     )
-    box(lid, "suitcase_lid_panel", (-hx, 0, 0.008), (hx, hy, 0.008))
+    box(lid, "suitcase_lid_panel", (-hx, 0, lid_half), (hx, hy, lid_half))
     box(
         lid,
         "suitcase_lid_lining",
@@ -203,18 +272,51 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
         conaffinity="0",
         density="0",
     )
-    for sign in (-1, 1):
+    straps = {
+        "none": (),
+        "single": (((-hx, 0, -0.0015), (ix - 0.002, 0.012, 0.0005)),),
+        "double": tuple(((-hx, sign * hy / 3, -0.0015), (ix - 0.002, 0.009, 0.0005)) for sign in (-1, 1)),
+        "cross": (
+            ((-hx, 0, -0.0015), (ix - 0.002, 0.009, 0.0005)),
+            ((-hx, 0, -0.0025), (0.009, iy - 0.002, 0.0005)),
+        ),
+    }[style.straps]
+    for i, (pos, size) in enumerate(straps):
         box(
             lid,
-            f"suitcase_lid_strap_{sign}",
-            (-hx, sign * hy / 3, -0.0015),
-            (ix - 0.002, 0.009, 0.0005),
+            f"suitcase_lid_strap_{i}",
+            pos,
+            size,
             "suitcase_trim",
             contype="0",
             conaffinity="0",
             density="0",
         )
-    box(lid, "suitcase_lid_pull", (-2 * hx - 0.015, 0, 0.008), (0.015, 0.025, 0.008), "suitcase_trim")
+    if style.detail == "ribs":
+        for i, y in enumerate(np.linspace(-hy * 0.7, hy * 0.7, 5)):
+            box(
+                lid,
+                f"suitcase_lid_rib_{i}",
+                (-hx, y, style.lid_thickness + 0.002),
+                (hx * 0.85, 0.003, 0.002),
+                "suitcase_shell",
+                contype="0",
+                conaffinity="0",
+                density="0",
+            )
+    elif style.detail == "corner_caps":
+        for i, (sx, sy) in enumerate(((-1, -1), (-1, 1), (1, -1), (1, 1))):
+            box(
+                lid,
+                f"suitcase_lid_corner_{i}",
+                (-hx + sx * (hx - 0.012), sy * (hy - 0.018), style.lid_thickness + 0.001),
+                (0.012, 0.018, 0.001),
+                "suitcase_trim",
+                contype="0",
+                conaffinity="0",
+                density="0",
+            )
+    box(lid, "suitcase_lid_pull", (-2 * hx - 0.015, 0, lid_half), (0.015, 0.025, lid_half), "suitcase_trim")
     return list(asset), case
 
 

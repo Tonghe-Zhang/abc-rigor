@@ -12,11 +12,14 @@ import numpy as np
 from abc_sim.task_specs import PACK_SUITCASE_PROMPTS
 
 from ..assets.suitcase import (
-    CASE_HALF_XY,
+    HANDLE_STYLES,
     LID_LIMIT_RAD,
     PACKING_CATEGORIES,
+    SHELL_DETAILS,
     SHELL_PALETTES,
     SHELL_PATTERNS,
+    STRAP_LAYOUTS,
+    SuitcaseStyle,
     SuitcaseTexture,
     build_packing_object,
     build_suitcase,
@@ -38,7 +41,7 @@ class PackSuitcaseRandomizer(SceneRandomizer):
 
     def _identities(self, request, rng):
         options = {} if request is None else dict(request)
-        unknown = set(options) - {"objects", "texture", "lid_angle_deg"}
+        unknown = set(options) - {"objects", "texture", "lid_angle_deg", "style"}
         if unknown:
             raise ValueError(f"Unknown suitcase reset options: {sorted(unknown)}")
         if "objects" in options:
@@ -58,9 +61,24 @@ class PackSuitcaseRandomizer(SceneRandomizer):
         angle = float(options["lid_angle_deg"] if "lid_angle_deg" in options else rng.uniform(105, 110))
         if not np.isfinite(angle) or not 105 <= angle <= 110:
             raise ValueError("Initial suitcase lid_angle_deg must be between 105 and 110.")
-        return objects, texture, angle
+        style = (
+            SuitcaseStyle(**options["style"])
+            if "style" in options
+            else SuitcaseStyle(
+                width=float(rng.uniform(0.19, 0.21)),
+                length=float(rng.uniform(0.29, 0.31)),
+                height=float(rng.uniform(0.08, 0.10)),
+                wall_thickness=float(rng.uniform(0.006, 0.012)),
+                floor_thickness=float(rng.uniform(0.009, 0.014)),
+                lid_thickness=float(rng.uniform(0.012, 0.020)),
+                handle=str(rng.choice(HANDLE_STYLES)),
+                straps=str(rng.choice(STRAP_LAYOUTS)),
+                detail=str(rng.choice(SHELL_DETAILS)),
+            )
+        )
+        return objects, texture, angle, style
 
-    def _reload_scene(self, objects, texture):
+    def _reload_scene(self, objects, texture, style):
         env = self._env_ref
         if env is None:
             raise RuntimeError("Suitcase randomization requires a bound environment.")
@@ -70,7 +88,7 @@ class PackSuitcaseRandomizer(SceneRandomizer):
             for elem in list(parent):
                 if elem.get("name", "").startswith(("suitcase", "packing_object_")):
                     parent.remove(elem)
-        assets, case = build_suitcase(texture)
+        assets, case = build_suitcase(texture, style)
         asset.extend(assets)
         world.append(case)
         for i, spec in enumerate(objects, 1):
@@ -84,6 +102,7 @@ class PackSuitcaseRandomizer(SceneRandomizer):
             env.reload_from_xml(xml)
         env._set_robot_qpos(robot_qpos)
         self._objects = dict(zip(OBJECT_JOINTS, objects))
+        self._style = style
 
     @staticmethod
     def _pose(x, y, yaw, z=0.752):
@@ -94,9 +113,13 @@ class PackSuitcaseRandomizer(SceneRandomizer):
         center = np.asarray(pose["pos"][:2])
         if joint == "suitcase_joint":
             # Include the front handle and the open lid's swept projection.
-            hx, hy = CASE_HALF_XY
-            front = -hx - 0.036
-            back = hx - (2 * hx + 0.03) * np.cos(LID_LIMIT_RAD) + 0.016 * np.sin(LID_LIMIT_RAD)
+            hx, hy = self._style.width / 2, self._style.length / 2
+            front = -hx - 0.044
+            back = (
+                hx
+                - (2 * hx + 0.03) * np.cos(LID_LIMIT_RAD)
+                + (self._style.lid_thickness + 0.004) * np.sin(LID_LIMIT_RAD)
+            )
             center = center + np.array([np.cos(yaw), np.sin(yaw)]) * (front + back) / 2
             half = ((back - front) / 2 + 0.005, hy + 0.01)
         else:
@@ -112,8 +135,8 @@ class PackSuitcaseRandomizer(SceneRandomizer):
 
     def randomize(self, model, data, seed=None, request=None):
         rng = np.random.default_rng(seed)
-        objects, texture, angle = self._identities(request, rng)
-        self._reload_scene(objects, texture)
+        objects, texture, angle, style = self._identities(request, rng)
+        self._reload_scene(objects, texture, style)
         model, data = self._env_ref.model, self._env_ref.data
         for _ in range(self.max_tries):
             self._apply_states(
@@ -151,6 +174,7 @@ class PackSuitcaseRandomizer(SceneRandomizer):
                     metadata={
                         "objects": [asdict(obj) for obj in objects],
                         "texture": asdict(texture),
+                        "style": asdict(style),
                         "lid_angle_deg": angle,
                         "prompt": PACK_SUITCASE_PROMPTS[(seed or 0) % len(PACK_SUITCASE_PROMPTS)],
                     },
@@ -159,7 +183,7 @@ class PackSuitcaseRandomizer(SceneRandomizer):
 
     def _validate_scene(self, model, state):
         self._identities(
-            {key: state.metadata[key] for key in ("objects", "texture", "lid_angle_deg")},
+            {key: state.metadata[key] for key in ("objects", "texture", "lid_angle_deg", "style")},
             np.random.default_rng(0),
         )
         if state.scale_states or set(state.object_states) != {"suitcase_joint", *OBJECT_JOINTS}:
@@ -177,6 +201,7 @@ class PackSuitcaseRandomizer(SceneRandomizer):
         self._reload_scene(
             [DistractorSpec(**obj) for obj in state.metadata["objects"]],
             SuitcaseTexture(**state.metadata["texture"]),
+            SuitcaseStyle(**state.metadata["style"]),
         )
         model, data = self._env_ref.model, self._env_ref.data
         self._apply_states(model, data, state.object_states)
