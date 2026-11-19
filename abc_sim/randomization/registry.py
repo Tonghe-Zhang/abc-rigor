@@ -17,6 +17,7 @@ from .tasks.drawer import DrawerRandomizer
 from .tasks.mugs import MugFlipRandomizer, MugTreeRandomizer
 from .tasks.marker import MarkerRandomizer
 from .tasks.multi_drawer_search import MultiDrawerSearchRandomizer
+from .tasks.pack_suitcase import PackSuitcaseRandomizer
 from .tasks.pour import PourRandomizer
 from .tasks.put_relative import PutRelativeRandomizer
 from .tasks.sorting import LegoBlocksSortingRandomizer, NutsBoltsSortingRandomizer
@@ -25,6 +26,7 @@ from .tasks.sweep import SweepRandomizer
 _WATER_BOTTLE_RANDOMIZER = WaterBottleRandomizer()
 
 TASK_RANDOMIZERS: dict[str, SceneRandomizer] = {
+    "pack_suitcase": PackSuitcaseRandomizer(),
     "lift_bottles_upright": BottlesUprightRandomizer(),
     "bottles":      BottlesRandomizer(),
     "put_bottles":  _WATER_BOTTLE_RANDOMIZER,
