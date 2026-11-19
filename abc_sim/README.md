@@ -97,6 +97,12 @@ Reset options under `randomization` accept `fruits` (three
 `category`/`variant`/`radius` dictionaries), `source_color`, `target_color`,
 and `prompt_index`.
 
+The three manipulation tasks (`lift_bottles_upright`, `pack_suitcase`, and
+`pack_and_pour_fruit`) require randomized resets or saved-scene replay.
+Use the same seed to repeat a fixed initial scene. `randomize=False` and
+invalid task options raise before physics, reward history or observer binding
+changes. Asset-builder placeholder poses are not valid episode starts.
+
 Reward stages are chronological:
 
 | Stage | Maximum | Qualification |

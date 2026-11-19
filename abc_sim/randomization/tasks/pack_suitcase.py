@@ -39,6 +39,13 @@ class PackSuitcaseRandomizer(SceneRandomizer):
     table_bounds = (0.35, 0.83, -0.52, 0.52)
     perturbations = [PerturbRange(name, delta_x=(0, 0), delta_y=(0, 0)) for name in ("suitcase_joint", *OBJECT_JOINTS)]
 
+    def prepare_reset(self, *, request=None, randomize=True):
+        if not randomize:
+            raise ValueError(
+                "Suitcase packing requires a randomized reset or saved-state replay; reuse a seed for a fixed scene."
+            )
+        self._identities(request, np.random.default_rng(0))
+
     def _identities(self, request, rng):
         options = {} if request is None else dict(request)
         unknown = set(options) - {"objects", "texture", "lid_angle_deg", "style"}
