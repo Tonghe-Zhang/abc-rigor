@@ -331,7 +331,7 @@
     </body>
     <body name="suitcase" pos="0.62 0 0.75">
       <freejoint name="suitcase_joint" />
-      <inertial pos="0 0 0.035" mass="1.2" diaginertia="0.00981 0.00481 0.013" />
+      <inertial pos="0 0 0.036" mass="1.2" diaginertia="0.00981 0.00481 0.013" />
       <geom name="suitcase_floor" type="box" pos="0 0 0.006" size="0.1 0.15 0.006" material="suitcase_lining" friction="0.9 0.01 0.001" solref="0.004 1" />
       <geom name="suitcase_front_visual" type="mesh" mesh="suitcase_front_visual_mesh" pos="-0.094 0 0.051" material="suitcase_shell" group="2" contype="0" conaffinity="0" density="0" />
       <geom name="suitcase_front" type="box" pos="-0.094 0 0.051" size="0.006 0.15 0.039" friction="0.9 0.01 0.001" solref="0.004 1" group="3" rgba="0 0 0 0" />
@@ -341,16 +341,16 @@
       <geom name="suitcase_right" type="box" pos="0 -0.144 0.051" size="0.088 0.006 0.039" friction="0.9 0.01 0.001" solref="0.004 1" group="3" rgba="0 0 0 0" />
       <geom name="suitcase_left_visual" type="mesh" mesh="suitcase_left_visual_mesh" pos="0 0.144 0.051" material="suitcase_shell" group="2" contype="0" conaffinity="0" density="0" />
       <geom name="suitcase_left" type="box" pos="0 0.144 0.051" size="0.088 0.006 0.039" friction="0.9 0.01 0.001" solref="0.004 1" group="3" rgba="0 0 0 0" />
-      <geom name="suitcase_handle_post_-1" type="box" pos="-0.114 -0.048 0.044" size="0.014 0.008 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
-      <geom name="suitcase_handle_post_1" type="box" pos="-0.114 0.048 0.044" size="0.014 0.008 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
-      <geom name="suitcase_handle" type="box" pos="-0.128 0 0.044" size="0.008 0.056 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
+      <geom name="suitcase_handle_post_-1" type="box" pos="-0.114 -0.048 0.045" size="0.014 0.008 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
+      <geom name="suitcase_handle_post_1" type="box" pos="-0.114 0.048 0.045" size="0.014 0.008 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
+      <geom name="suitcase_handle" type="box" pos="-0.128 0 0.045" size="0.008 0.056 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
       <body name="suitcase_lid" pos="0.1 0 0.09">
         <joint name="suitcase_hinge" type="hinge" axis="0 1 0" limited="true" range="0 1.919862177193763" damping="0.06" frictionloss="0.015" solreflimit="0.004 1" solimplimit="0.99 0.99 0.001" />
         <inertial pos="-0.1 0 0.008" mass="0.15" diaginertia="0.0011282 0.0005032 0.001625" />
         <geom name="suitcase_lid_panel_visual" type="mesh" mesh="suitcase_lid_panel_visual_mesh" pos="-0.1 0 0.008" material="suitcase_shell" group="2" contype="0" conaffinity="0" density="0" />
         <geom name="suitcase_lid_panel" type="box" pos="-0.1 0 0.008" size="0.1 0.15 0.008" friction="0.9 0.01 0.001" solref="0.004 1" group="3" rgba="0 0 0 0" />
         <geom name="suitcase_lid_lining" type="box" pos="-0.1 0 -0.0005" size="0.088 0.138 0.0005" material="suitcase_lining" friction="0.9 0.01 0.001" solref="0.004 1" contype="0" conaffinity="0" density="0" />
-        <geom name="suitcase_lid_strap_-1" type="box" pos="-0.1 -0.05 -0.0015" size="0.086 0.009 0.0005" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" contype="0" conaffinity="0" density="0" />
+        <geom name="suitcase_lid_strap_0" type="box" pos="-0.1 -0.05 -0.0015" size="0.086 0.009 0.0005" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" contype="0" conaffinity="0" density="0" />
         <geom name="suitcase_lid_strap_1" type="box" pos="-0.1 0.05 -0.0015" size="0.086 0.009 0.0005" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" contype="0" conaffinity="0" density="0" />
         <geom name="suitcase_lid_pull" type="box" pos="-0.215 0 0.008" size="0.015 0.025 0.008" material="suitcase_trim" friction="0.9 0.01 0.001" solref="0.004 1" />
       </body>

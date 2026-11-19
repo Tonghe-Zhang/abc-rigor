@@ -6,6 +6,7 @@ import copy
 import json
 import unittest
 import xml.etree.ElementTree as ET
+from itertools import product
 
 import abc_sim
 import mujoco
@@ -15,10 +16,14 @@ from abc_sim.randomization.assets.suitcase import (
     CASE_HALF_XY,
     CASE_INNER_XY,
     CASE_RIM_Z,
+    HANDLE_STYLES,
     LID_LIMIT_RAD,
     PACKING_CATEGORIES,
+    SHELL_DETAILS,
     SHELL_PALETTES,
     SHELL_PATTERNS,
+    STRAP_LAYOUTS,
+    SuitcaseStyle,
     SuitcaseTexture,
     build_packing_object,
     build_suitcase,
@@ -45,12 +50,19 @@ class SuitcaseSceneTest(unittest.TestCase):
 
     def test_seeded_scenes_have_three_objects_open_lid_and_diverse_textures(self):
         textures, prompts, categories, layouts = set(), set(), set(), set()
+        handles, straps, details, widths, walls = set(), set(), set(), set(), set()
         for seed in range(32):
             self.env.reset(seed=seed)
             state = self.env._last_randomization
             textures.add(tuple(state.metadata["texture"].values()))
             prompts.add(self.env.prompt)
             categories.update(obj["category"] for obj in state.metadata["objects"])
+            style = state.metadata["style"]
+            handles.add(style["handle"])
+            straps.add(style["straps"])
+            details.add(style["detail"])
+            widths.add(style["width"])
+            walls.add(style["wall_thickness"])
             layouts.add(tuple(self.env.data.qpos))
             free = [
                 self.env.model.joint(i).name
@@ -68,16 +80,25 @@ class SuitcaseSceneTest(unittest.TestCase):
         self.assertEqual(categories, set(PACKING_CATEGORIES))
         self.assertEqual(prompts, set(PACK_SUITCASE_PROMPTS))
         self.assertEqual(len(layouts), 32)
+        self.assertEqual(handles, set(HANDLE_STYLES))
+        self.assertEqual(straps, set(STRAP_LAYOUTS))
+        self.assertEqual(details, set(SHELL_DETAILS))
+        self.assertEqual(len(widths), 32)
+        self.assertEqual(len(walls), 32)
 
     def test_same_seed_and_serialized_replay_restore_geometry_texture_pose_and_prompt(self):
         self.env.reset(seed=9)
         qpos = self.env.data.qpos.copy()
         textures = self.env.model.tex_data.copy()
+        geom_sizes = self.env.model.geom_size.copy()
+        vertices = self.env.model.mesh_vert.copy()
         saved = json.loads(json.dumps(self.env._last_randomization.to_dict()))
         self.env.reset(seed=4)
         self.env._task_randomizer.apply(self.env.model, self.env.data, RandomizationState.from_dict(saved))
         np.testing.assert_array_equal(self.env.data.qpos, qpos)
         np.testing.assert_array_equal(self.env.model.tex_data, textures)
+        np.testing.assert_array_equal(self.env.model.geom_size, geom_sizes)
+        np.testing.assert_array_equal(self.env.model.mesh_vert, vertices)
         self.assertEqual(self.env._last_randomization.to_dict(), saved)
         other = abc_sim.make_env(task="pack_suitcase", render_cameras=False)
         try:
@@ -94,6 +115,7 @@ class SuitcaseSceneTest(unittest.TestCase):
             ("objects", []),
             ("texture", {"palette": "bad", "pattern": "solid"}),
             ("lid_angle_deg", 111),
+            ("style", {"wall_thickness": 0.04}),
         ):
             state = RandomizationState.from_dict(copy.deepcopy(saved))
             state.metadata[key] = value
@@ -154,6 +176,61 @@ class SuitcaseSceneTest(unittest.TestCase):
                 model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
                 signatures.add((model.tex_data.tobytes(), model.mesh_texcoord.tobytes()))
         self.assertEqual(len(signatures), len(SHELL_PALETTES) * len(SHELL_PATTERNS))
+
+    def test_all_construction_styles_fit_three_maximum_size_objects_and_close(self):
+        for handle, straps, detail in product(HANDLE_STYLES, STRAP_LAYOUTS, SHELL_DETAILS):
+            with self.subTest(handle=handle, straps=straps, detail=detail):
+                style = SuitcaseStyle(
+                    width=0.19,
+                    length=0.29,
+                    height=0.08,
+                    wall_thickness=0.012,
+                    floor_thickness=0.014,
+                    lid_thickness=0.020,
+                    handle=handle,
+                    straps=straps,
+                    detail=detail,
+                )
+                root = ET.Element("mujoco")
+                ET.SubElement(root, "compiler", angle="radian")
+                ET.SubElement(root, "option", timestep="0.002", integrator="implicitfast")
+                asset, world = ET.SubElement(root, "asset"), ET.SubElement(root, "worldbody")
+                ET.SubElement(world, "geom", name="table_plane", type="plane", size="1 1 0.1", pos="0 0 0.75")
+                for side in ("left", "right"):
+                    body = ET.SubElement(world, "body", name=f"{side}_arm", pos="-2 0 2")
+                    ET.SubElement(body, "geom", type="sphere", size="0.01")
+                assets, case = build_suitcase(SuitcaseTexture("teal", "checker"), style)
+                asset.extend(assets)
+                world.append(case)
+                for i in range(1, 4):
+                    body = ET.SubElement(
+                        world,
+                        "body",
+                        name=f"packing_object_{i}",
+                        pos=f"0.62 {(i - 2) * 0.087} {0.75 + style.floor_thickness + 0.0275}",
+                    )
+                    ET.SubElement(body, "freejoint", name=f"packing_object_{i}_joint")
+                    ET.SubElement(body, "geom", type="box", size="0.04 0.04 0.0275", mass="0.02")
+                model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+                data = mujoco.MjData(model)
+                mujoco.mj_forward(model, data)
+                evaluator = PackSuitcaseEvaluator(model=model, spec=get_task_spec("pack_suitcase"))
+                evaluator.after_reset(model, data)
+                for _ in range(600):
+                    mujoco.mj_step(model, data)
+                    evaluator.after_physics_step(model, data)
+                result = evaluator.evaluate_model_data(model, data)
+                self.assertTrue(result.scalar_success())
+                self.assertAlmostEqual(result.scalar_reward(), 1)
+                self.assertEqual(
+                    len([g for g in range(model.ngeom) if model.geom(g).name.startswith("suitcase_lid_strap")]),
+                    {"none": 0, "single": 1, "double": 2, "cross": 2}[straps],
+                )
+                data.joint("packing_object_2_joint").qpos[0] += 0.045
+                mujoco.mj_forward(model, data)
+                mujoco.mj_step(model, data)
+                evaluator.after_physics_step(model, data)
+                self.assertFalse(evaluator.evaluate_model_data(model, data).metrics["object_contained_mask"][0, 1])
 
 
 class SuitcaseRewardTest(unittest.TestCase):
@@ -255,7 +332,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertFalse(result.metrics["object_supported_mask"][0, 0])
         self.assertAlmostEqual(result.scalar_reward(), 0.3)
 
-    def test_touching_robot_revokes_object_and_closed_case_credit(self):
+    def test_touching_robot_preserves_contained_packing_but_revokes_closure(self):
         self.pack(close=True)
         self.assertTrue(self.steps(700).scalar_success())
         # Reach through the lid with a test probe to isolate item release.
@@ -264,6 +341,8 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.data.mocap_pos[0] = center
         result = self.steps(1)
         self.assertTrue(result.metrics["object_touching_robot"][0, 0])
+        self.assertTrue(result.metrics["object_packed_mask"][0, 0])
+        self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3 - result.metrics["force_penalty"][0, :3].sum())
         self.assertFalse(result.scalar_success())
         self.data.mocap_pos[0] = [-2, 0, 2]
         self.pack(close=True)
@@ -289,7 +368,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             self.evaluator.reset(nworld=16)
 
-    def test_case_must_rest_on_table(self):
+    def test_case_table_support_is_required_for_closure_but_not_packing_retention(self):
         self.pack(close=True)
         self.assertTrue(self.steps(700).scalar_success())
         self.data.joint("suitcase_joint").qpos[2] += 0.1
@@ -297,8 +376,8 @@ class SuitcaseRewardTest(unittest.TestCase):
             self.data.joint(f"packing_object_{i}_joint").qpos[2] += 0.1
         result = self.steps(1)
         self.assertFalse(result.metrics["suitcase_supported_and_settled"][0])
-        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=3)
-        self.assertEqual(result.metrics["packing_reward"][0], 0)
+        self.assertAlmostEqual(result.scalar_reward(), 0.5, places=3)
+        self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3)
         self.assertEqual(result.metrics["lid_reward"][0], 0)
 
     def test_packed_resting_case_does_not_accumulate_force_penalty(self):
@@ -424,6 +503,29 @@ class SuitcaseRewardTest(unittest.TestCase):
                 result.scalar_reward(), 0.7 + pose_reward - result.metrics["force_penalty"].sum(), places=4
             )
             self.assertEqual(result.scalar_success(), distance == 0)
+
+    def test_packing_credit_survives_case_motion_and_clears_only_on_exit(self):
+        self.pack()
+        self.steps(600)
+        self.assertAlmostEqual(self.result().metrics["packing_reward"][0], 0.3)
+        dofs = [self.evaluator._case_dof, *self.evaluator._dofs]
+        for dof in dofs:
+            self.data.qvel[dof + 1] = 0.5
+        result = self.steps(10)
+        self.assertFalse(result.metrics["suitcase_supported_and_settled"][0])
+        np.testing.assert_array_equal(result.metrics["object_contained_mask"], True)
+        np.testing.assert_array_equal(result.metrics["object_packed_mask"], True)
+        self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3)
+        self.data.joint("packing_object_1_joint").qpos[0] -= 0.2
+        self.data.qvel[:] = 0
+        result = self.steps(1)
+        self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.2)
+        self.assertFalse(result.metrics["object_packed_mask"][0, 0])
+        self.pack(1)
+        self.assertFalse(self.steps(1).metrics["object_packed_mask"][0, 0])
+        self.evaluator.reset()
+        self.evaluator.after_reset(self.model, self.data)
+        np.testing.assert_array_equal(self.result().metrics["object_packed_mask"], False)
 
     def test_force_configuration_rejects_invalid_values(self):
         for kwargs in (
