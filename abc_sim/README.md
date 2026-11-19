@@ -71,8 +71,8 @@ The passive hinge has a **0–110 degree joint limit**; gravity holds the lid
 against the opening stop and closes it after it passes vertical. MuJoCo's
 joint stops are compliant, so solved angles can exceed a limit by a small
 solver tolerance. The case has a carrying handle, a lid pull tab, solid
-walls and floor, and an enclosing lid. It measures 26 × 38 cm in footprint;
-the cavity is 23.6 × 35.6 × 7.8 cm.
+walls and floor, and an enclosing lid. It measures 20 × 30 cm in footprint;
+the cavity is 17.6 × 27.6 × 7.8 cm.
 
 The seed selects one of **32 shell appearances** (eight palettes × four
 procedural texture patterns), case position/yaw, lid opening angle, object
