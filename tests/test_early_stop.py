@@ -1,4 +1,4 @@
-"""Conveyor and pour latch ``ever_failed`` once nothing left can raise the reward, so rollouts can stop."""
+"""Conveyor latches ``ever_failed`` once nothing left can raise the reward, and the env ends the episode there."""
 
 from __future__ import annotations
 
@@ -59,61 +59,43 @@ class ConveyorStopTest(unittest.TestCase):
         )
 
 
-class PourStopTest(unittest.TestCase):
-    def setUp(self):
-        self.env = make_env("pouring", render_cameras=False)
-        self.addCleanup(self.env.close)
-        self.env.reset(seed=0)
-        self.ev = self.env._task_evaluator
-        self.beads = [f"{name}_jnt" for name in self.ev.bead_names]
-        self.start = self.env.data.qpos.copy()
+class EnvTerminationTest(unittest.TestCase):
+    """RL episodes end on ``ever_failed`` by default; the flags restore the previous behavior."""
 
-    def score(self, **where):
-        """Put beads in "target", "table" or "air" (others stay in the source cup) and score positions only."""
-        q = self.start.copy()
-        target = q[
-            _adr(self.env.model, "cup_1_jnt") : _adr(self.env.model, "cup_1_jnt") + 3
-        ]
-        spots = {
-            "target": lambda i: (
-                target + [0, 0, self.ev._container_floor_z + 0.01 + 0.004 * i]
-            ),
-            "table": lambda i: [0.75, -0.45 + 0.03 * i, self.ev._table_z + 0.008],
-            "air": lambda i: target + [0, 0.15, 0.15],
-        }
-        index = 0
-        for place, count in where.items():
-            for _ in range(count):
-                a = _adr(self.env.model, self.beads[index])
-                q[a : a + 3] = spots[place](index)
-                index += 1
-        result = self.ev.evaluate_qpos_batch(q[None, :])
-        self.ev.reset()
-        return (
-            bool(result.success[0]),
-            bool(result.metrics["ever_failed"][0]),
-            int(result.metrics["num_spilled_beads"][0]),
+    def first_terminated(self, seconds=13.0, **env_kwargs):
+        env = make_env("conveyor_pick", render_cameras=False, **env_kwargs)
+        self.addCleanup(env.close)
+        env.reset(seed=3)
+        hold = env.get_state()
+        for step in range(
+            int(seconds / (env.model.opt.timestep * env._control_decimation))
+        ):
+            _, _, terminated, _, info = env.step(hold, render_obs=False)
+            if terminated:
+                return step, info
+        return None, info
+
+    def test_conveyor_episode_terminates_once_every_object_is_gone(self):
+        step, info = self.first_terminated()
+        self.assertIsNotNone(step)
+        self.assertTrue(info["task_failed"])
+        self.assertEqual(int(info["task_eval"]["num_removed_objects"]), 3)
+
+    def test_terminate_on_failure_false_steps_to_the_end(self):
+        step, info = self.first_terminated(terminate_on_failure=False)
+        self.assertIsNone(step)
+        self.assertTrue(
+            info["task_failed"]
+        )  # still reported, just not ending the episode
+
+    def test_evaluator_options_restore_the_first_removal_rule(self):
+        step, info = self.first_terminated(
+            evaluator_options={"fail_when_nothing_left": False}
         )
-
-    def test_start_and_partial_states_keep_going(self):
-        self.assertEqual(self.score(), (False, False, 0))  # all in the source cup
-        self.assertEqual(
-            self.score(target=5, table=2), (False, False, 2)
-        )  # 3 still in the source cup
-        self.assertEqual(
-            self.score(target=8, air=2), (False, False, 0)
-        )  # 2 still falling
-
-    def test_everything_spilled_stops(self):
-        self.assertEqual(self.score(table=10), (False, True, 10))
-
-    def test_too_few_left_to_succeed_stops(self):
-        self.assertEqual(
-            self.score(target=8, table=2), (False, True, 2)
-        )  # success needs 9
-
-    def test_success_is_not_a_failure(self):
-        self.assertEqual(self.score(target=9, table=1), (True, False, 1))
+        self.assertIsNotNone(step)
+        self.assertEqual(int(info["task_eval"]["num_removed_objects"]), 1)
+        default_step, _ = self.first_terminated()
+        self.assertLess(step, default_step)
 
 
 if __name__ == "__main__":

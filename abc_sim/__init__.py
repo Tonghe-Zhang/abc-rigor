@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 __version__ = "0.1.0"
 
@@ -168,6 +168,8 @@ def make_env(
     enable_task_randomizer: bool = True,
     max_episode_steps: int | None = None,
     terminate_on_success: bool = False,
+    terminate_on_failure: bool = True,
+    evaluator_options: dict[str, Any] | None = None,
     physics_profile: str | PhysicsProfile | None = None,
     randomize_background: bool = False,
     background_seed: int | None = None,
@@ -200,6 +202,13 @@ def make_env(
             ``step`` returns ``truncated=True``.
         terminate_on_success: Whether ``step`` should return ``terminated=True``
             when the task evaluator reports success.
+        terminate_on_failure: Whether ``step`` should return ``terminated=True``
+            once the task evaluator reports ``ever_failed`` (on by default): the
+            reward can no longer rise, e.g. every conveyor object is gone or every
+            bead is spilled. ``False`` keeps stepping to the time limit.
+        evaluator_options: Extra keyword arguments for the task evaluator, such as
+            the flags that restore an earlier scoring rule, e.g.
+            ``{"fail_when_nothing_left": False}``.
         physics_profile: Optional named or explicit contact profile, applied to
             every compiled model before simulation and rendering are initialized.
         randomize_background: Opt-in (default off). Replace the walls' and table's
@@ -287,6 +296,8 @@ def make_env(
             **kwargs,
             "max_episode_steps": max_episode_steps,
             "terminate_on_success": terminate_on_success,
+            "terminate_on_failure": terminate_on_failure,
+            "evaluator_options": evaluator_options,
         }
         env = MuJoCoYAMEnv(
             config=config,
@@ -340,6 +351,8 @@ def make_env(
         **kwargs,
         "max_episode_steps": max_episode_steps,
         "terminate_on_success": terminate_on_success,
+        "terminate_on_failure": terminate_on_failure,
+        "evaluator_options": evaluator_options,
     }
     try:
         env = MuJoCoYAMEnv(

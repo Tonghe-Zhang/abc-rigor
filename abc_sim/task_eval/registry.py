@@ -60,8 +60,13 @@ _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
 def make_task_evaluator(
     model: mujoco.MjModel,
     task: str | SimTaskSpec | None,
+    options: dict[str, object] | None = None,
 ) -> TaskEvaluator | None:
-    """Instantiate a task evaluator for a task name/spec if one is configured."""
+    """Instantiate a task evaluator for a task name/spec if one is configured.
+
+    ``options`` are extra evaluator keyword arguments (for example the flags
+    that restore an earlier scoring rule); they override the spec's.
+    """
 
     spec = task if isinstance(task, SimTaskSpec) else maybe_get_task_spec(task)
     if spec is None or spec.evaluator_name is None:
@@ -74,4 +79,4 @@ def make_task_evaluator(
             f"Unknown task evaluator {spec.evaluator_name!r} for task {spec.name!r}"
         ) from exc
 
-    return evaluator_cls(model=model, spec=spec, **spec.evaluator_kwargs())
+    return evaluator_cls(model=model, spec=spec, **{**spec.evaluator_kwargs(), **(options or {})})
