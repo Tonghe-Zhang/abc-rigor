@@ -85,14 +85,23 @@ Only the shared YAM assets are required:
 The slots pass completely through the board; convex wall segments preserve the
 openings in both rendering and collision. Each hole has 2.5 mm clearance per
 edge, with slot centers 67 mm apart; a 42 mm square piece fits a 47 mm square hole.
-Each requested piece earns 1/8 after
-being fully seated in its own slot, released and supported by the table for
-0.3 seconds. Wrong colors, hovering and stacked pieces receive no credit.
+Each requested piece earns 1/8 after being fully seated in its own slot,
+released and supported by the table for 0.3 seconds. A piece resting over its
+correct slot without full insertion can earn up to half of that share (1/16):
+full partial credit within 5 mm of the slot center, tapering linearly to zero at
+20 mm. This requires release, 0.3 seconds of settling, and direct board/table
+support carrying at least half the piece's weight. Its bottom must be between
+the board base and slot rim, within the 1.5 mm height tolerance. Wrong colors, hovering
+and stacked pieces receive no credit.
 Unrequested pieces earn no reward and do not reduce earned credit or prevent
 success. Only the eight requested placements are scored.
-Qualified pieces retain credit while contained;
-removing one clears its share. Every piece reserves 20% for gentle piece handling
-and 10% for gentle board handling. External contact-load magnitudes are summed
+Fully seated pieces retain credit while contained; near-slot credit requires
+the piece to remain released, settled and supported. Moving away clears only
+that piece's credit. Success requires all eight requested pieces fully inserted.
+Every piece reserves 20% for gentle piece handling and 10% for gentle board
+handling. These deductions scale with placement progress and persist when a
+partially placed piece is subsequently inserted. External contact-load magnitudes
+are summed
 without cancelling opposing forces, and excess above a 15 N allowance integrates
 over every physics tick. A 5 N·s dose consumes the reserve permanently for the
 episode. The board allowance additionally covers its own weight. Seated pieces

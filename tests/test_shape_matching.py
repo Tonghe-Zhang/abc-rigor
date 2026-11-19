@@ -225,9 +225,9 @@ class ShapeMatchingRewardTest(unittest.TestCase):
             self.evaluator.after_physics_step(self.model, self.data)
         return self.evaluator.evaluate_model_data(self.model, self.data)
 
-    def place(self, piece, *, slot=None, height=0.0005, yaw=0.0):
+    def place(self, piece, *, slot=None, height=0.0005, yaw=0.0, xy_offset=(0.0, 0.0)):
         board = self.data.body("shape_board")
-        center = slot_center(piece if slot is None else slot)
+        center = slot_center(piece if slot is None else slot) + xy_offset
         position = np.array((*center, PIECE_HALF_HEIGHT + height))
         qpos = self.data.joint(PIECE_JOINTS[piece]).qpos
         qpos[:3] = board.xpos + board.xmat.reshape(3, 3) @ position
@@ -294,15 +294,94 @@ class ShapeMatchingRewardTest(unittest.TestCase):
             self.assertFalse(result.metrics["piece_inside_mask"][0, piece])
         self.assertGreater(self.data.body("shape_piece_05").xpos[2], 0.91)
         self.assertFalse(result.metrics["piece_supported_mask"][0, 5])
-        self.assertEqual(result.scalar_reward(), 0)
+        self.assertTrue(result.metrics["piece_near_slot_mask"][0, 5])
+        self.assertAlmostEqual(result.scalar_reward(), 0.5 / 8)
 
-    def test_symmetric_rotations_fit_and_misaligned_square_does_not(self):
+    def test_symmetric_rotations_fit_and_misaligned_square_gets_partial_credit(self):
         for piece, yaw in ((0, np.pi / 2), (4, np.pi / 2), (8, 2 * np.pi / 3), (12, np.pi / 3)):
             self.place(piece, yaw=yaw)
         self.place(5, yaw=np.pi / 4, height=0.02)
         result = self.step(0.6)
         np.testing.assert_array_equal(np.flatnonzero(result.metrics["piece_matched_mask"]), [0, 4, 8, 12])
-        self.assertAlmostEqual(result.scalar_reward(), 4 / 8)
+        np.testing.assert_array_equal(np.flatnonzero(result.metrics["piece_near_slot_mask"]), [5])
+        self.assertAlmostEqual(result.scalar_reward(), 4.5 / 8)
+
+    def test_near_slot_credit_tapers_with_center_distance(self):
+        for offset, reward in ((0.0, 0.5 / 8), (0.005, 0.5 / 8), (0.0125, 0.25 / 8), (0.025, 0.0)):
+            with self.subTest(offset=offset):
+                self.place(4, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005, xy_offset=(offset, 0))
+                result = self.step(0.6)
+                self.assertAlmostEqual(result.scalar_reward(), reward, places=5)
+                self.assertFalse(result.scalar_success())
+                self.assertFalse(result.metrics["piece_matched_mask"][0, 4])
+
+    def test_near_slot_requires_fresh_settling_and_loses_credit_when_removed(self):
+        self.place(0)
+        self.place(4, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005)
+        self.assertEqual(self.step(0.15).scalar_reward(), 0)
+        self.assertAlmostEqual(self.step(0.35).scalar_reward(), 1.5 / 8)
+        self.place(4, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005, xy_offset=(0.03, 0))
+        self.assertAlmostEqual(self.step(0.5).scalar_reward(), 1 / 8)
+        self.assertEqual(self.evaluator._near_settling[4], 0)
+        self.place(4, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005)
+        self.assertAlmostEqual(self.step(0.15).scalar_reward(), 1 / 8)
+        self.assertAlmostEqual(self.step(0.35).scalar_reward(), 1.5 / 8)
+
+    def test_near_slot_credit_follows_board_translation_and_rotation(self):
+        qpos = self.data.joint("shape_board_joint").qpos
+        qpos[:2] += (0.025, 0.0125)
+        qpos[3:] = (np.cos(0.1), 0, 0, np.sin(0.1))
+        mujoco.mj_forward(self.model, self.data)
+        self.place(4, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005)
+        result = self.step(0.6)
+        self.assertAlmostEqual(result.scalar_reward(), 0.5 / 8)
+        self.assertLess(result.metrics["piece_center_error_m"][0, 4], 0.0001)
+
+    def test_hovering_and_stacking_at_the_correct_target_give_no_near_credit(self):
+        self.place(4, height=0.008)
+        body = self.model.body("shape_piece_04").id
+        dof = self.model.joint(PIECE_JOINTS[4]).dofadr[0]
+        self.data.qfrc_applied[dof + 2] = self.model.body_subtreemass[body] * -self.model.opt.gravity[2]
+        hovered = self.step(0.6)
+        self.assertEqual(hovered.scalar_reward(), 0)
+        self.assertLess(hovered.metrics["piece_center_error_m"][0, 4], 0.0001)
+        self.assertEqual(hovered.metrics["piece_board_or_table_support_force_n"][0, 4], 0)
+        self.data.qfrc_applied[:] = 0
+        self.place(6, slot=4)
+        self.place(4, height=2 * PIECE_HALF_HEIGHT + 0.0005)
+        stacked = self.step(0.6)
+        self.assertEqual(stacked.scalar_reward(), 0)
+        self.assertLess(stacked.metrics["piece_center_error_m"][0, 4], 0.0001)
+        self.assertFalse(stacked.metrics["piece_near_slot_mask"][0, 4])
+
+    def test_near_slot_force_deductions_scale_with_progress_and_persist_after_insertion(self):
+        self.place(4, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005)
+        self.assertAlmostEqual(self.step(0.6).scalar_reward(), 0.5 / 8)
+        dof = self.model.joint(PIECE_JOINTS[4]).dofadr[0]
+        self.data.qfrc_applied[dof + 2] = -60
+        self.step(0.4)
+        self.data.qfrc_applied[:] = 0
+        released = self.step(0.6)
+        self.assertGreater(released.metrics["force_dose_ns"][0, 4], 5)
+        self.assertGreater(released.metrics["force_dose_ns"][0, -1], 5)
+        self.assertAlmostEqual(released.scalar_reward(), 0.5 * 0.7 / 8, places=5)
+        self.place(4)
+        self.assertAlmostEqual(self.step(0.6).scalar_reward(), 0.7 / 8, places=5)
+
+    def test_half_credit_piece_does_not_complete_the_task(self):
+        for piece in DEFAULT_SELECTED:
+            if piece == 4:
+                self.place(piece, yaw=np.pi / 4, height=WALL_HEIGHT + 0.0005)
+            else:
+                self.place(piece)
+        result = self.step(0.6)
+        self.assertAlmostEqual(result.scalar_reward(), 7.5 / 8)
+        self.assertEqual(result.metrics["num_matched_pieces"][0], 7)
+        self.assertFalse(result.scalar_success())
+        self.place(4)
+        completed = self.step(0.6)
+        self.assertAlmostEqual(completed.scalar_reward(), 1)
+        self.assertTrue(completed.scalar_success())
 
     def test_two_mm_offset_fits_without_wall_contact_and_earns_credit(self):
         positions = {}
