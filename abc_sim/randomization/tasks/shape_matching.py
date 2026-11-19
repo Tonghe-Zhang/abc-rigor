@@ -10,6 +10,7 @@ import numpy as np
 from abc_sim.task_specs import SHAPE_MATCHING_PROMPTS
 
 from ..assets.shape_matching import (
+    BOARD_CENTER_X,
     COLORS,
     PIECE_COUNT,
     PIECE_HALF_HEIGHT,
@@ -101,7 +102,10 @@ class ShapeMatchingRandomizer(SceneRandomizer):
         for _ in range(self.max_tries):
             states = {
                 "shape_board_joint": self._pose(
-                    rng.uniform(0.58, 0.60), rng.uniform(-0.015, 0.015), rng.uniform(-0.06, 0.06), 0.75
+                    rng.uniform(BOARD_CENTER_X - 0.01, BOARD_CENTER_X + 0.01),
+                    rng.uniform(-0.015, 0.015),
+                    rng.uniform(-0.06, 0.06),
+                    0.75,
                 )
             }
             positions = []

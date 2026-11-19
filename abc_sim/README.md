@@ -72,6 +72,8 @@ reference card shows their target positions in color and the other eight in
 gray. Seeds randomize the selection, permutation, palette, wood finish, board
 pose, piece poses and instruction. Saved-scene replay includes the selection.
 Pin eight distinct piece IDs with the `selected` randomization option.
+The board starts centered at x=0.56 m (±1 cm), with a 17 cm square reference sheet
+and enlarged symbols behind it.
 
 ```python
 env = abc_sim.make_env(task="shape_matching", render_cameras=False)

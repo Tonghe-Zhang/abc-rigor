@@ -28,6 +28,8 @@ DEFAULT_SELECTED = (0, 1, 4, 5, 8, 9, 12, 13)
 EMPTY_SLOT_RGBA = (0.80, 0.80, 0.78, 1)
 PITCH = 0.067
 BOARD_HALF = 0.140
+BOARD_CENTER_X = 0.56
+REFERENCE_SCALE = 0.56
 WALL_HEIGHT = 0.013
 PIECE_HALF_HEIGHT = 0.011
 HOLE_CLEARANCE = 0.0025
@@ -110,7 +112,7 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int, sel
     """Build sixteen pieces and slots, with eight requested pieces on the card."""
     asset = ET.Element("asset")
     world = ET.Element("worldbody")
-    board = ET.SubElement(world, "body", name="shape_board", pos="0.59 0 0.75")
+    board = ET.SubElement(world, "body", name="shape_board", pos=_format_float_list((BOARD_CENTER_X, 0, 0.75)))
     ET.SubElement(board, "freejoint", name="shape_board_joint")
     common = {"friction": "0.7 0.01 0.001", "solref": "0.004 1", "density": "600"}
     wood_rgba = _format_float_list(WOOD_COLORS[wood])
@@ -132,13 +134,13 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int, sel
                 rgba=wood_rgba,
                 **common,
             )
-    card = ET.SubElement(world, "body", name="shape_reference", pos="0.822 0 0.753")
+    card = ET.SubElement(world, "body", name="shape_reference", pos="0.81 0 0.753")
     ET.SubElement(
         card,
         "geom",
         name="shape_reference_paper",
         type="box",
-        size="0.070 0.070 0.001",
+        size="0.085 0.085 0.001",
         rgba="0.99 0.99 0.97 1",
         contype="0",
         conaffinity="0",
@@ -170,20 +172,20 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int, sel
                 conaffinity="1",
                 **common,
             )
-        mesh = prism_mesh(asset, f"shape_reference_{slot:02d}_mesh", polygon(shape) * 0.46, 0.0011, 0.0013)
+        mesh = prism_mesh(asset, f"shape_reference_{slot:02d}_mesh", polygon(shape) * REFERENCE_SCALE, 0.0011, 0.0013)
         ET.SubElement(
             card,
             "geom",
             name=f"shape_reference_{slot:02d}",
             type="mesh",
             mesh=mesh,
-            pos=_format_float_list((*(center * 0.46), 0)),
+            pos=_format_float_list((*(center * REFERENCE_SCALE), 0)),
             rgba=_format_float_list(COLORS[palette[piece % 4]] if piece in selected else EMPTY_SLOT_RGBA),
             contype="0",
             conaffinity="0",
         )
     # Matching corner marks make the board/card orientation visible from any camera.
-    for body, scale, height in ((board, 1.0, WALL_HEIGHT + 0.0002), (card, 0.46, 0.0015)):
+    for body, scale, height in ((board, 1.0, WALL_HEIGHT + 0.0002), (card, REFERENCE_SCALE, 0.0015)):
         ET.SubElement(
             body,
             "geom",
