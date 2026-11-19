@@ -19,8 +19,9 @@ class BottlesUprightEvaluator:
     Every solved native physics tick must satisfy orientation, base height,
     tabletop load, release, and velocity checks. Any interruption clears that
     bottle's dwell and current credit. Each qualified bottle earns 1/3, including
-    a 0.1 gentle-handling component that decreases linearly as its episode peak
-    contact load rises from 10 to 20 N. Force history persists until reset.
+    a 0.1 gentle-handling component that decreases with cumulative contact load
+    above 15 N. An excess dose of 2.5 N*s exhausts this credit. Force history
+    persists until reset; the episode peak is retained as a diagnostic.
     Success requires all three upright simultaneously. Evaluation reads are idempotent.
     Qpos-only and MJWarp replay scoring cannot supply the required contact history.
     """
@@ -34,18 +35,19 @@ class BottlesUprightEvaluator:
         *,
         model: mujoco.MjModel,
         spec: SimTaskSpec,
-        force_penalty_start_n: float = 10.0,
-        force_penalty_end_n: float = 20.0,
+        force_penalty_start_n: float = 15.0,
+        force_dose_budget_ns: float = 2.5,
     ) -> None:
         self.model = model
         self.spec = spec
         if not (
-            np.isfinite([force_penalty_start_n, force_penalty_end_n]).all()
-            and 0 <= force_penalty_start_n < force_penalty_end_n
+            np.isfinite([force_penalty_start_n, force_dose_budget_ns]).all()
+            and force_penalty_start_n >= 0
+            and force_dose_budget_ns > 0
         ):
-            raise ValueError("Force thresholds must be finite with 0 <= start < end.")
+            raise ValueError("Force threshold and dose budget must be finite with threshold >= 0 and budget > 0.")
         self.force_penalty_start_n = float(force_penalty_start_n)
-        self.force_penalty_end_n = float(force_penalty_end_n)
+        self.force_dose_budget_ns = float(force_dose_budget_ns)
         self.bottle_names, self._addrs = _resolve_bottle_qpos_addrs(model)
         if self.bottle_names != ["bottle_1", "bottle_2", "bottle_3"]:
             raise ValueError("Upright bottles requires exactly bottle_1, bottle_2, bottle_3.")
@@ -67,6 +69,7 @@ class BottlesUprightEvaluator:
         self._sustained = np.zeros(3)
         self._previous_eligible = np.zeros(3, dtype=bool)
         self._peak_force_n = np.zeros(3)
+        self._force_dose_ns = np.zeros(3)
         self._max_upright = 0
         self._ever_success = False
         self._result = None
@@ -141,12 +144,11 @@ class BottlesUprightEvaluator:
                 else:
                     touching_other[index] = True
         self._peak_force_n = np.maximum(self._peak_force_n, contact_force_n)
-        # Saturation defines the requested 10–20 N reward ramp.
-        force_penalty = self.gentle_reward * np.clip(
-            (self._peak_force_n - self.force_penalty_start_n) / (self.force_penalty_end_n - self.force_penalty_start_n),
-            0.0,
-            1.0,
-        )
+        excess_force_n = np.maximum(contact_force_n - self.force_penalty_start_n, 0.0)
+        # Reset has zero elapsed time. Solved ticks contribute their own load,
+        # so even a one-tick impact contributes exactly one timestep of dose.
+        self._force_dose_ns += excess_force_n * elapsed
+        force_penalty = self.gentle_reward * np.minimum(self._force_dose_ns / self.force_dose_budget_ns, 1.0)
         linear_speed = np.linalg.norm(velocities[:, :3], axis=1)
         angular_speed = np.linalg.norm(velocities[:, 3:], axis=1)
         weight_fraction = table_load / self._weights
@@ -173,6 +175,8 @@ class BottlesUprightEvaluator:
                 "bottle_table_weight_fraction": weight_fraction[None, :],
                 "bottle_contact_force_n": contact_force_n[None, :],
                 "bottle_peak_force_n": self._peak_force_n[None, :].copy(),
+                "bottle_excess_force_n": excess_force_n[None, :],
+                "bottle_force_dose_ns": self._force_dose_ns[None, :].copy(),
                 "bottle_force_penalty": force_penalty[None, :],
                 "bottle_reward": bottle_reward[None, :],
                 "bottle_touching_other": touching_other[None, :],
