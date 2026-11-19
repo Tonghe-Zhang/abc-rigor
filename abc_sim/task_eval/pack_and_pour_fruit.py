@@ -23,10 +23,10 @@ class PackAndPourFruitEvaluator:
     contact_gap_seconds = 0.02
     fruit_rearm_seconds = 0.05
     containment_tolerance_m = 0.001
-    packing_reward = 0.3
-    transport_reward = 0.3
-    emptying_reward = 0.15
-    catching_reward = 0.15
+    packing_reward = 0.2
+    transport_reward = 0.2
+    emptying_reward = 0.25
+    catching_reward = 0.25
     return_reward = 0.1
     gentle_fraction = 0.3
 

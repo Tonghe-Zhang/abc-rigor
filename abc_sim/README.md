@@ -101,14 +101,14 @@ Reward stages are chronological:
 
 | Stage | Maximum | Qualification |
 | --- | ---: | --- |
-| Packing | 0.3 | 0.1 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
-| Transport | 0.3 | All three packed together, then a bowl grasp lifts the filled bowl and carries it above or into the receiver |
-| Emptying | 0.15 | 0.05 per fruit observed leaving the tilted bowl's opening after transport, while grasped or supported by the receiver |
-| Catching | 0.15 | 0.05 per poured fruit settled, released and supported in the receiver for 0.5 s |
+| Packing | 0.2 | 0.2/3 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
+| Transport | 0.2 | All three packed together, then a bowl grasp lifts the filled bowl and carries it above or into the receiver |
+| Emptying | 0.25 | 0.25/3 per fruit observed leaving the tilted bowl's opening after transport, while grasped or supported by the receiver |
+| Catching | 0.25 | 0.25/3 per poured fruit settled, released and supported in the receiver for 0.5 s |
 | Return | 0.1 | All three fruits poured out, then small bowl upright, released and directly supported by the table for 0.5 s |
 
 Putting fruit directly into the receiver earns **zero**. Nesting the packed
-small bowl inside the receiver earns **0.6 before force deductions** and
+small bowl inside the receiver earns **0.4 before force deductions** and
 no pouring credit. Packing and transport retain their completed milestones.
 Before all three are packed, each qualified fruit retains its partial packing
 credit while its center stays inside the small bowl, including while rolling
@@ -156,7 +156,7 @@ and no robot contact throughout the 0.5 s dwell. Any table location qualifies.
 Lifting or touching the bowl again revokes only this component. Catching every
 fruit is independent of return credit; full task success requires both.
 
-Gentle handling reserves 0.045 per fruit, 0.1425 for the small bowl and 0.0225
+Gentle handling reserves 0.045 per fruit, 0.1275 for the small bowl and 0.0375
 for the receiver. Every solved native tick sums the magnitudes of all
 external contact forces, including friction; opposing forces add. Dose is
 `max(load - allowance, 0) * dt`, and 5 N·s consumes an entity's entire

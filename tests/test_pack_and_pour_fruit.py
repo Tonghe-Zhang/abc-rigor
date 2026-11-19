@@ -165,10 +165,10 @@ class PourPhysicsTest(unittest.TestCase):
     def test_physical_pack_transport_and_gravity_pour(self):
         fixture = PourFixture(force_allowance_n=1e6)
         packed = fixture.steps(600)
-        self.assertAlmostEqual(packed.scalar_reward(), 0.3, places=5)
+        self.assertAlmostEqual(packed.scalar_reward(), 0.2, places=5)
         carried = fixture.transport()
         self.assertTrue(carried.metrics["transport_complete"][0], carried.metrics)
-        self.assertAlmostEqual(carried.scalar_reward(), 0.6, places=5)
+        self.assertAlmostEqual(carried.scalar_reward(), 0.4, places=5)
         poured = fixture.pour()
         self.assertEqual(poured.metrics["num_caught_fruits"][0], 3)
         self.assertFalse(poured.scalar_success())
@@ -199,7 +199,7 @@ class PourPhysicsTest(unittest.TestCase):
         returned = fixture.return_bowl()
         self.assertTrue(returned.metrics["bowl_ready_for_packing_mask"][0, 0])
         self.assertFalse(returned.metrics["touching_robot"][0, 3])
-        self.assertAlmostEqual(returned.scalar_reward(), 0.6, places=5)
+        self.assertAlmostEqual(returned.scalar_reward(), 0.4, places=5)
         self.assertEqual(returned.metrics["return_reward"][0], 0)
 
     def test_return_requires_upright_table_support_release_and_continuous_dwell(self):
@@ -249,7 +249,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(returned.metrics["num_emptied_fruits"][0], 3)
         self.assertEqual(returned.metrics["num_caught_fruits"][0], 2)
         self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
-        self.assertAlmostEqual(returned.scalar_reward(), 0.95, places=5)
+        self.assertAlmostEqual(returned.scalar_reward(), 1 - 0.25 / 3, places=5)
         self.assertFalse(returned.scalar_success())
 
     def test_direct_placement_in_the_large_bowl_earns_zero(self):
@@ -261,7 +261,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(result.scalar_reward(), 0)
         self.assertFalse(result.scalar_success())
 
-    def test_nesting_a_packed_bowl_without_pouring_earns_only_six_tenths(self):
+    def test_nesting_a_packed_bowl_without_pouring_earns_only_four_tenths(self):
         # Isolate stage weights; the default force deduction is tested separately.
         fixture = PourFixture(force_allowance_n=1e6)
         fixture.steps(600)
@@ -282,7 +282,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertTrue(result.metrics["source_nested_in_target"][0], result.metrics)
         self.assertTrue(result.metrics["transport_complete"][0])
         self.assertTrue(result.metrics["fruit_in_source_mask"].all())
-        self.assertAlmostEqual(result.scalar_reward(), 0.6, places=4)
+        self.assertAlmostEqual(result.scalar_reward(), 0.4, places=4)
         self.assertEqual(result.metrics["emptying_reward"][0], 0)
         self.assertEqual(result.metrics["catching_reward"][0], 0)
         self.assertFalse(result.scalar_success())
@@ -291,11 +291,11 @@ class PourPhysicsTest(unittest.TestCase):
         fixture = PourFixture()
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
         result = fixture.steps(600)
-        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 2 * 0.2 / 3, places=5)
         self.assertFalse(result.metrics["packing_stage_complete"][0])
         result = fixture.transport()
         np.testing.assert_array_equal(result.metrics["fruit_in_source_mask"], [[True, True, False]])
-        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 2 * 0.2 / 3, places=5)
         self.assertFalse(result.metrics["transport_complete"][0])
         self.assertEqual(result.metrics["emptying_reward"][0], 0)
         self.assertEqual(result.metrics["catching_reward"][0], 0)
@@ -314,7 +314,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertFalse(result.metrics["rim_held"][0])
         self.assertTrue(result.metrics["bowl_held"][0])
         self.assertTrue(result.metrics["transport_complete"][0], result.metrics)
-        self.assertAlmostEqual(result.scalar_reward(), 0.6, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.4, places=5)
 
     def test_transport_accepts_base_overhang_within_receiver_radius(self):
         fixture = PourFixture(force_allowance_n=1e6)
@@ -333,7 +333,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertFalse(result.metrics["source_over_target"][0])
         self.assertTrue(result.metrics["source_in_transport_zone"][0])
         self.assertTrue(result.metrics["transport_complete"][0], result.metrics)
-        self.assertAlmostEqual(result.scalar_reward(), 0.6, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.4, places=5)
 
     def test_supported_off_center_nesting_earns_transport(self):
         fixture = PourFixture(force_allowance_n=1e6)
@@ -350,7 +350,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertGreater(offset, 0.06)
         self.assertTrue(result.metrics["fruit_in_source_mask"].all())
         self.assertTrue(result.metrics["source_nested_in_target"][0], result.metrics)
-        self.assertAlmostEqual(result.scalar_reward(), 0.6, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.4, places=5)
 
     def test_released_bowl_can_finish_pouring_while_supported_by_receiver(self):
         fixture = PourFixture(force_allowance_n=1e6)
@@ -402,7 +402,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(departures, 1)
         self.assertEqual(result.metrics["num_emptied_fruits"][0], 1)
         self.assertEqual(result.metrics["num_caught_fruits"][0], 1)
-        self.assertAlmostEqual(result.scalar_reward(), 0.7, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.4 + 0.5 / 3, places=5)
         self.assertFalse(result.scalar_success())
         returned = fixture.return_bowl()
         self.assertEqual(returned.metrics["return_reward"][0], 0)
@@ -418,15 +418,15 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertGreater(crossings, 0)
         self.assertEqual(result.metrics["num_emptied_fruits"][0], 0)
         self.assertEqual(result.metrics["num_caught_fruits"][0], 0)
-        self.assertAlmostEqual(result.scalar_reward(), 0.6, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.4, places=5)
 
     def test_partial_packing_credit_clears_on_exit_and_reset(self):
         fixture = PourFixture()
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
-        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
+        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 2 * 0.2 / 3, places=5)
         fixture.put_fruit(1, [0.4, -0.2, 0.774])
         result = fixture.steps(1)
-        self.assertAlmostEqual(result.scalar_reward(), 0.1, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.2 / 3, places=5)
         np.testing.assert_array_equal(result.metrics["fruit_packed_mask"], [[False, True, False]])
         fixture.evaluator.reset()
         fixture.evaluator.after_reset(fixture.model, fixture.data)
@@ -459,20 +459,20 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertTrue(result.metrics["source_nested_in_target"][0])
         self.assertFalse(result.metrics["filled_bowl_carried"][0])
         self.assertFalse(result.metrics["transport_complete"][0])
-        self.assertAlmostEqual(result.scalar_reward(), 0.3, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=5)
 
     def test_fruits_can_qualify_at_different_times_before_pouring(self):
         fixture = PourFixture()
         third_position = fixture.data.joint("fruit_3_joint").qpos[:3].copy()
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
-        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
+        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 2 * 0.2 / 3, places=5)
         fixture.put_fruit(3, third_position)
         for _ in range(600):
             # The first fruit rolls in place while the last fruit settles.
             fixture.data.joint("fruit_1_joint").qvel[5] = 5
             result = fixture.steps(1)
         self.assertTrue(result.metrics["packing_stage_complete"][0], result.metrics)
-        self.assertAlmostEqual(result.scalar_reward(), 0.3, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=5)
         self.assertTrue(result.metrics["fruit_armed_mask"].all())
         self.assertFalse(result.metrics["fruit_source_qualified_mask"][0, 0])
         fixture.transport()
@@ -483,7 +483,7 @@ class PourPhysicsTest(unittest.TestCase):
         fixture = PourFixture()
         third_position = fixture.data.joint("fruit_3_joint").qpos[:3].copy()
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
-        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
+        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 2 * 0.2 / 3, places=5)
         fixture.put_fruit(3, third_position)
         protruding = fixture.data.joint("fruit_1_joint").qpos[:3].copy()
         protruding[2] = 0.75 + fixture.source.height + 0.030
@@ -499,7 +499,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertTrue(result.metrics["fruit_in_source_mask"].all())
         self.assertTrue(result.metrics["packing_stage_complete"][0])
 
-    def test_pouring_before_transport_cannot_earn_the_last_four_tenths(self):
+    def test_pouring_before_transport_cannot_earn_pouring_credit(self):
         fixture = PourFixture()
         fixture.steps(600)
         fixture.grip()
@@ -586,12 +586,12 @@ class PourPhysicsTest(unittest.TestCase):
         fixture.data.xfrc_applied[fixture.model.body("source_bowl").id, 2] = -100
         packed = fixture.steps(100)
         self.assertGreater(packed.metrics["force_dose_ns"][0, 3], fixture.evaluator.force_dose_budget_ns)
-        self.assertAlmostEqual(packed.scalar_reward(), 0.3, places=5)
+        self.assertAlmostEqual(packed.scalar_reward(), 0.2, places=5)
         fixture.data.xfrc_applied[:] = 0
         carried = fixture.transport()
         self.assertTrue(carried.metrics["transport_complete"][0])
-        self.assertAlmostEqual(carried.scalar_reward(), 0.51, places=5)
-        self.assertAlmostEqual(carried.metrics["force_penalty"][0, 3], 0.1425)
+        self.assertAlmostEqual(carried.scalar_reward(), 0.34, places=5)
+        self.assertAlmostEqual(carried.metrics["force_penalty"][0, 3], 0.1275)
         fixture.pour()
         returned = fixture.return_bowl()
         self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.07)
@@ -603,7 +603,7 @@ class PourPhysicsTest(unittest.TestCase):
             with self.subTest(radius=radius):
                 fixture = PourFixture(radius=radius, force_allowance_n=1e6)
                 packed = fixture.steps(800)
-                self.assertAlmostEqual(packed.scalar_reward(), 0.3, places=5)
+                self.assertAlmostEqual(packed.scalar_reward(), 0.2, places=5)
                 self.assertTrue(packed.metrics["fruit_source_geometric_support_mask"].all())
                 centers = fixture.data.geom_xpos[fixture.evaluator._fruit_geoms]
                 source = fixture.data.body("source_bowl").xpos
@@ -620,7 +620,7 @@ class PourPhysicsTest(unittest.TestCase):
         packed = fixture.steps(800)
         self.assertTrue(packed.metrics["fruit_source_supported_mask"].all(), packed.metrics)
         self.assertTrue(packed.metrics["packing_stage_complete"][0])
-        self.assertAlmostEqual(packed.scalar_reward(), 0.3)
+        self.assertAlmostEqual(packed.scalar_reward(), 0.2)
 
     def test_rim_grasp_requires_opposing_fingers_and_expires_on_release(self):
         fixture = PourFixture()
