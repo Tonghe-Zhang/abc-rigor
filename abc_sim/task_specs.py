@@ -12,6 +12,21 @@ from typing import Any
 # The internal sim datasets record it, so exports have to carry it too.
 DEFAULT_SCENE = "hybrid"
 
+PACK_SUITCASE_PROMPTS = (
+    "put all objects on the table into the suitcase and close it",
+    "pack all three objects into the suitcase, then close the lid",
+    "put everything on the table inside the suitcase and shut it",
+    "place the three loose items in the suitcase and close it",
+    "pack the scattered objects into the open suitcase and shut the lid",
+    "put all three items in the suitcase, then shut it",
+    "move the objects from the table into the suitcase and close the lid",
+    "fill the suitcase with all three objects and close it",
+    "pack away the three tabletop objects and shut the suitcase",
+    "place all the loose objects inside the suitcase before closing it",
+    "put the three objects into the open suitcase, then close it",
+    "pack every object on the table into the suitcase and shut the lid",
+)
+
 LIFT_BOTTLES_UPRIGHT_PROMPTS = (
     "lift the bottles upright",
     "stand the bottles upright",
@@ -102,6 +117,15 @@ def _normalize_key(value: str) -> str:
 
 
 _TASK_SPECS: tuple[SimTaskSpec, ...] = (
+    SimTaskSpec(
+        name="pack_suitcase",
+        env_task="pack_suitcase",
+        prompt=PACK_SUITCASE_PROMPTS[0],
+        max_chunks=120,
+        description="Pack three scattered household objects into an open suitcase and close its lid.",
+        evaluator_name="pack_suitcase",
+        aliases=PACK_SUITCASE_PROMPTS[1:],
+    ),
     SimTaskSpec(
         name="lift_bottles_upright",
         env_task="lift_bottles_upright",

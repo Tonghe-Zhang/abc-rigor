@@ -63,6 +63,75 @@ obs, reward, terminated, truncated, step_info = env.step(env.action_space.sample
 env.close()
 ```
 
+### Pack and close a small suitcase
+
+`pack_suitcase` starts with a free, rigid suitcase opened between **105 and
+110 degrees**, plus exactly three loose household objects on the table.
+The passive hinge has a **0–110 degree joint limit**; gravity holds the lid
+against the opening stop and closes it after it passes vertical. MuJoCo's
+joint stops are compliant, so solved angles can exceed a limit by a small
+solver tolerance. The case has a carrying handle, a lid pull tab, solid
+walls and floor, and an enclosing lid. It measures 26 × 38 cm in footprint;
+the cavity is 23.6 × 35.6 × 7.8 cm.
+
+The seed selects one of **32 shell appearances** (eight palettes × four
+procedural texture patterns), case position/yaw, lid opening angle, object
+identities/poses, and one of **12 equivalent prompts**. Seed 0 says:
+“put all objects on the table into the suitcase and close it”.
+Object categories are soap, sponge, apple, lemon, orange, potato, donut,
+and yogurt. Uniform scaling limits each object to 8 cm in any dimension
+and 5.5 cm in height, leaving room for all three side by side.
+
+```python
+env = abc_sim.make_env(task="pack_suitcase", render_cameras=False)
+env.reset(seed=42, options={"randomization": {
+    "texture": {"palette": "navy", "pattern": "checker"},
+    "lid_angle_deg": 107,
+}})
+```
+
+Optional `objects` is a list of three `{category, variant}` mappings from
+the approved library. Replay restores all appearances, object identities,
+poses, opening angle and language from serialized `RandomizationState`.
+Install the existing object pack with `uv run prepare.py --sim-task pack_suitcase`.
+
+Packing earns **0.5 total**, or **1/6 per object**. Its entire collision bounds must be inside
+the cavity, with a solved upward support path to the case floor, no robot
+contact, and low linear/angular velocity for **0.5 uninterrupted seconds**.
+The suitcase must be upright, settled, and supported on the tabletop.
+The final **0.5** requires all three objects packed and the lid within
+**3 degrees of closed**, with the entire case released and the hinge settled
+for another 0.5 seconds. Closing an empty or partly packed case adds no
+credit. Removing an item or reopening the lid revokes current credit;
+`ever_success` records history only.
+
+Gentle handling accounts for **30%** of each reward component: **0.05 per
+object** and **0.15 for the suitcase**. On every native physics tick each
+entity accumulates `max(contact_force_n - allowance_n, 0) * dt`.
+The penalty is its gentle-handling credit times `min(dose / 5 N*s, 1)`,
+and persists until reset. Each object's allowance is **15 N**. The case's
+allowance is **15 N + its weight + twice the combined weight of all three
+objects**: contents push down on the case and also increase its table
+reaction. This fixed, episode-specific allowance prevents ordinary loaded
+resting contact from continuously spending credit.
+
+Loads sum magnitudes of all external contact forces including friction;
+opposing fingers add. The lid and lower shell count as one suitcase entity,
+so their internal contacts do not count. A press between an object and the
+case loads both entities. Joint torques are not part of this contact-load
+metric. Unpacked objects and incomplete closure earn zero rather than a
+separate negative penalty; a completed but maximally penalized task earns
+0.7. Binary success continues to describe packing and closure.
+These are provisional shaping defaults, not physical damage thresholds.
+Evaluator options are `object_force_allowance_n`,
+`case_extra_force_allowance_n`, and `force_dose_budget_ns`.
+Force metrics have columns `[object_1, object_2, object_3, suitcase]` and
+include `contact_force_n`, `peak_force_n`, `force_threshold_n`,
+`excess_force_n`, `force_dose_ns`, and `force_penalty`.
+
+Scoring requires native per-physics-tick observations; qpos-only/MJWarp
+scoring cannot reconstruct the required support and dwell history.
+
 ### Stand three water bottles upright
 
 `lift_bottles_upright` uses the ABC station with exactly three water bottles and
