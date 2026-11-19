@@ -1,4 +1,4 @@
-"""Ordered packing, rim-held transport, pouring events, and settled catching."""
+"""Ordered packing, grasped transport, pouring events, and settled catching."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ class PackAndPourFruitEvaluator:
     evaluation_interval_steps = 1
     settling_seconds = 0.5
     transport_seconds = 0.2
-    rim_grasp_seconds = 0.05
-    rim_contact_gap_seconds = 0.02
+    grasp_seconds = 0.05
+    contact_gap_seconds = 0.02
     containment_tolerance_m = 0.001
     packing_reward = 0.3
     transport_reward = 0.3
@@ -47,6 +47,8 @@ class PackAndPourFruitEvaluator:
         self._radii = model.geom_size[self._fruit_geoms, 0].copy()
         self._table = model.geom("table_plane").id
         self._floors = [model.geom(f"{name}_floor").id for name in self.force_entity_names[3:]]
+        if model.geom_type[self._floors[0]] != mujoco.mjtGeom.mjGEOM_CYLINDER:
+            raise ValueError("Fruit pouring requires a cylindrical source-bowl floor.")
         self._bounds = []
         for name in self.force_entity_names[3:]:
             floor, rim = (model.site(f"{name}_cavity_{part}").id for part in ("floor", "rim"))
@@ -100,10 +102,12 @@ class PackAndPourFruitEvaluator:
         self._carried_filled = False
         self._transport_time = 0.0
         self._previous_transport = False
-        self._grasp_times = np.zeros(2)
-        self._previous_grasps = np.zeros(2, dtype=bool)
-        self._rim_holds = np.zeros(2, dtype=bool)
-        self._rim_gaps = np.zeros(2)
+        # Rows track bowl grasps and rim grasps; columns track the two hands.
+        self._grasp_times = np.zeros((2, 2))
+        self._previous_grasps = np.zeros((2, 2), dtype=bool)
+        self._holds = np.zeros((2, 2), dtype=bool)
+        self._contact_gaps = np.zeros(2)
+        self._finger_contact_gaps = np.full((2, 2), self.contact_gap_seconds + self.model.opt.timestep)
         self._armed = np.zeros(3, dtype=bool)
         self._emptied = np.zeros(3, dtype=bool)
         self._pour_valid = np.zeros(3, dtype=bool)
@@ -147,6 +151,40 @@ class PackAndPourFruitEvaluator:
             & (local[:, 2] + radii <= rim + self.containment_tolerance_m)
         )
 
+    def _source_floor_placement(self, data, bowl_pos, bowl_rot):
+        source_floor = self._floors[0]
+        center = (data.geom_xpos[source_floor] - bowl_pos[1]) @ bowl_rot[1]
+        rotation = bowl_rot[1].T @ data.geom_xmat[source_floor].reshape(3, 3)
+        radius, half_height = self.model.geom_size[source_floor, :2]
+        floor, rim, bottom_radius, rim_radius = self._bounds[1]
+        slope = (rim_radius - bottom_radius) / (rim - floor)
+
+        def extent(normals):
+            local_normals = normals @ rotation
+            return radius * np.linalg.norm(local_normals[..., :2], axis=-1) + half_height * np.abs(
+                local_normals[..., 2]
+            )
+
+        side_normals = np.column_stack((self._normals_xy, np.full(BOWL_SEGMENTS, -slope)))
+        opening_normals = np.column_stack((self._normals_xy, np.zeros(BOWL_SEGMENTS)))
+        vertical_extent = extent(np.array([0, 0, 1]))
+        # The floor footprint must fit through the mouth for overhead credit.
+        above = bool(
+            bowl_rot[1, 2, 2] >= 0.98
+            and np.all(opening_normals @ center + extent(opening_normals) <= rim_radius + self.containment_tolerance_m)
+            and center[2] - vertical_extent >= rim + 0.025
+        )
+        # Nesting follows the receiver's flared cavity, including its floor height.
+        inside = bool(
+            np.all(
+                side_normals @ center + slope * floor + extent(side_normals)
+                <= bottom_radius + self.containment_tolerance_m
+            )
+            and center[2] - vertical_extent >= floor - 0.002
+            and center[2] + vertical_extent <= rim + self.containment_tolerance_m
+        )
+        return above, inside
+
     def _observe(self, data, *, elapsed):
         model = self.model
         if not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all():
@@ -165,6 +203,7 @@ class PackAndPourFruitEvaluator:
         supported = np.zeros((2, 3), dtype=bool)
         supports = np.zeros((3, 3), dtype=bool)
         fingers = np.zeros((2, 2), dtype=bool)
+        rim_fingers = np.zeros((2, 2), dtype=bool)
         force = np.zeros(6)
         for c in range(data.ncon):
             contact = data.contact[c]
@@ -195,13 +234,14 @@ class PackAndPourFruitEvaluator:
                             supports[owner, other_owner] = True
                 elif mine == self._floors[owner - 3] and other == self._table:
                     bowl_table_load[owner - 3] += sign * world_force[2]
-                if owner == 3 and mine == self._floors[0] and other_owner == 4:
+                if owner == 3 and other_owner == 4:
                     nested_source_load += sign * world_force[2]
                 if owner == 3 and other in self._fingers and force[0] > 0.02:
+                    fingers[self._fingers[other]] = True
                     point = (contact.pos - bowl_pos[0]) @ bowl_rot[0]
                     _, rim, _, rim_radius = self._bounds[0]
                     if abs(point[2] - rim) <= 0.015 and np.linalg.norm(point[:2]) >= rim_radius - 0.018:
-                        fingers[self._fingers[other]] = True
+                        rim_fingers[self._fingers[other]] = True
         speeds = data.qvel[self._dofs[:, None] + np.arange(6)]
         linear_speed = np.linalg.norm(speeds[:, :3], axis=1)
         angular_speed = np.linalg.norm(speeds[:, 3:], axis=1)
@@ -222,26 +262,24 @@ class PackAndPourFruitEvaluator:
         self._packed_fruits = (self._packed_fruits | source_qualified) & source_resident
         packing_completed_now = bool(self._packed_fruits.all() and inside[0].all()) and not self._packed_stage
         self._packed_stage |= packing_completed_now
-        paired_contacts = fingers.all(axis=1)
-        self._grasp_times = np.where(paired_contacts & self._previous_grasps, self._grasp_times + elapsed, 0)
-        self._previous_grasps = paired_contacts
-        self._rim_holds |= paired_contacts & (self._grasp_times >= self.rim_grasp_seconds)
-        self._rim_gaps = np.where(fingers.any(axis=1), 0, self._rim_gaps + elapsed)
+        paired_contacts = np.array([fingers.all(axis=1), fingers.all(axis=1) & rim_fingers.any(axis=1)])
+        self._finger_contact_gaps = np.where(fingers, 0, self._finger_contact_gaps + elapsed)
+        paired_recently = (self._finger_contact_gaps <= self.contact_gap_seconds).all(axis=1)
+        acquiring = np.array([paired_recently, paired_recently & rim_fingers.any(axis=1)])
+        self._grasp_times = np.where(acquiring & self._previous_grasps, self._grasp_times + elapsed, 0)
+        self._previous_grasps = acquiring
+        self._holds |= acquiring & (self._grasp_times >= self.grasp_seconds)
+        self._contact_gaps = np.where(fingers.any(axis=1), 0, self._contact_gaps + elapsed)
         # Once acquired, a grip can transfer load between opposing fingertips.
         # A short gap tolerates contact-manifold changes while the bowl rotates.
-        self._rim_holds &= self._rim_gaps <= self.rim_contact_gap_seconds
-        held = bool(self._rim_holds.any())
+        self._holds &= self._contact_gaps[None] <= self.contact_gap_seconds
+        held = bool(self._holds[0].any())
         source_lift = float(bowl_pos[0, 2] - self._initial_source_z)
         self._carried_filled |= bool(self._packed_stage and inside[0].all() and held and source_lift >= 0.05)
-        target_rim_world = bowl_pos[1] + bowl_rot[1] @ np.array([0, 0, self._bounds[1][1]])
         overhead_distance = float(np.linalg.norm(bowl_pos[0, :2] - bowl_pos[1, :2]))
-        above = (
-            overhead_distance <= self._bounds[1][3] - self._bounds[0][3] - 0.005
-            and bowl_pos[0, 2] >= target_rim_world[2] + 0.025
-        )
+        above, floor_inside = self._source_floor_placement(data, bowl_pos, bowl_rot)
         source_nested = (
-            overhead_distance <= self._bounds[1][3] - self._bounds[0][3] - 0.005
-            and bowl_pos[0, 2] >= bowl_pos[1, 2] + self._bounds[1][0] - 0.002
+            floor_inside
             and nested_source_load >= 0.6 * self._weights[3]
             and bowl_rot[0, 2, 2] >= 0.98
             and settled[3]
@@ -342,13 +380,22 @@ class PackAndPourFruitEvaluator:
                 "fruit_emptied_mask": self._emptied[None].copy(),
                 "fruit_valid_pour_mask": self._pour_valid[None].copy(),
                 "fruit_caught_mask": caught[None],
-                "rim_grasped": np.array([bool(paired_contacts.any())]),
-                "rim_held": np.array([held]),
-                "rim_grasp_seconds": np.array([self._grasp_times.max()]),
+                "bowl_grasped": np.array([bool(paired_contacts[0].any())]),
+                "bowl_held": np.array([held]),
+                "bowl_grasp_seconds": np.array([self._grasp_times[0].max()]),
+                "bowl_finger_contact_mask": fingers[None],
+                "bowl_finger_contact_gap_seconds": self._finger_contact_gaps[None].copy(),
+                "rim_finger_contact_mask": rim_fingers[None],
+                "rim_grasped": np.array([bool(paired_contacts[1].any())]),
+                "rim_held": np.array([bool(self._holds[1].any())]),
+                "rim_grasp_seconds": np.array([self._grasp_times[1].max()]),
+                "transport_eligible": np.array([transport]),
                 "transport_settling_seconds": np.array([self._transport_time]),
                 "source_lift_m": np.array([source_lift]),
                 "source_tilt_deg": np.array([tilt_deg]),
                 "source_over_target": np.array([above]),
+                "source_floor_inside_target": np.array([floor_inside]),
+                "source_target_support_n": np.array([nested_source_load]),
                 "source_target_distance_xy_m": np.array([overhead_distance]),
                 "settled_mask": settled[None],
                 "bowl_table_load_n": bowl_table_load[None],
