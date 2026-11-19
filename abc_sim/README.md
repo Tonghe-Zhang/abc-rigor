@@ -63,6 +63,73 @@ obs, reward, terminated, truncated, step_info = env.step(env.action_space.sample
 env.close()
 ```
 
+### Pack and pour fruit
+
+`pack_and_pour_fruit` starts with three 42–50 mm fruits, a 21 cm bowl with a
+6 mm rounded rim, and a shallow 34 cm receiving bowl. Apple, orange, lemon,
+and tomato asset variants have textured visuals enclosed by spherical
+collision geometry. Both bowls have solid floors and open, outward-flaring
+walls. The receiver is large enough to catch all three fruits together.
+
+```python
+env = abc_sim.make_env(task="pack_and_pour_fruit", render_cameras=False)
+env.reset(seed=0)
+print(env.prompt)
+```
+
+Install assets with `uv run prepare.py --sim-task pack_and_pour_fruit`.
+The seed controls identities, fruit radii, five separated poses, two distinct
+named colors from eight choices, and six prompt templates. Prompts name the
+realized colors, such as “Place all the fruits into the blue bowl, then pour
+the fruits from the blue bowl into the large white bowl.”
+Serialized randomization restores geometry, colors, poses and language.
+Reset options under `randomization` accept `fruits` (three
+`category`/`variant`/`radius` dictionaries), `source_color`, `target_color`,
+and `prompt_index`.
+
+Reward stages are chronological:
+
+| Stage | Maximum | Qualification |
+| --- | ---: | --- |
+| Packing | 0.3 | 0.1 per fully contained fruit, supported, released and settled for 0.5 s |
+| Transport | 0.3 | All three packed together, then a rim grasp lifts the filled bowl and carries it above or into the receiver |
+| Emptying | 0.2 | 1/15 per fruit observed leaving the mouth of the lifted, tilted, rim-held bowl after transport |
+| Catching | 0.2 | 1/15 per poured fruit settled, released and supported inside the receiver for 0.5 s |
+
+Putting fruit directly into the receiver earns **zero**. Nesting the packed
+small bowl inside the receiver earns **0.6 before force deductions** and
+no pouring credit. Packing and transport retain their completed milestones.
+Transport has a 0.2 s dwell; the filled bowl must first have been lifted
+at least 5 cm with a rim grasp. Grasp acquisition requires both opposing
+fingers of one hand for 50 ms. Once acquired, either finger can carry load;
+losing both contacts for more than 20 ms ends the hold. Pouring requires
+at least 45° tilt and passage through the mouth, with no direct robot-fruit
+contact. A spill can earn emptying credit but cannot earn catching credit
+after contacting the table. Re-entering the small bowl clears a fruit's
+pouring credit. Removing a caught fruit clears its current catching credit.
+Containment accounts for the fruit's full sphere and each bowl's polygonal
+interior, allowing 1 mm of side-wall solver penetration.
+Fruit settling limits `linear_speed + radius * angular_speed` to 3 cm/s;
+bowls must move slower than 3 cm/s and 0.25 rad/s.
+
+Gentle handling reserves 0.05 per fruit, 0.12 for the small bowl and 0.03
+for the receiver. Every solved native tick sums the magnitudes of all
+external contact forces, including friction; opposing forces add. Dose is
+`max(load - allowance, 0) * dt`, and 5 N·s consumes an entity's entire
+gentle-handling share. Fruit allowance is 15 N. Bowls add their own weight
+and twice the total fruit weight, accounting for contents and support
+reaction. Damage never recovers before reset, and remains separate from
+binary task completion. `force_allowance_n` and `force_dose_budget_ns`
+are configurable evaluator options.
+
+Metrics report the four reward components, per-fruit packing/emptying/catching,
+stage milestones, containment/support/pour masks, rim grasp, and load/peak/
+excess-dose/potential-penalty columns in order
+`[fruit_1, fruit_2, fruit_3, source_bowl, target_bowl]`.
+Potential force penalties describe the loss if all affected stages are earned.
+Use independent native environments for rollout workers: qpos-only batch
+evaluation cannot reconstruct this contact history and raises explicitly.
+
 ### Pack and close a small suitcase
 
 `pack_suitcase` starts with a free, rigid suitcase opened between **105 and

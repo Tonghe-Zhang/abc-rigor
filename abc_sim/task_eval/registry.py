@@ -24,6 +24,7 @@ from abc_sim.task_eval.multi_drawer import (
 )
 from abc_sim.task_eval.mugs import MugFlipUprightEvaluator
 from abc_sim.task_eval.nuts_bolts import NutsBoltsSortingEvaluator
+from abc_sim.task_eval.pack_and_pour_fruit import PackAndPourFruitEvaluator
 from abc_sim.task_eval.pack_suitcase import PackSuitcaseEvaluator
 from abc_sim.task_eval.pour import PourBeadsInContainerEvaluator
 from abc_sim.task_eval.put_relative import PutRelativeEvaluator
@@ -36,6 +37,7 @@ TaskEvaluatorFactory: TypeAlias = type[TaskEvaluator]
 
 
 _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
+    "pack_and_pour_fruit": PackAndPourFruitEvaluator,
     "pack_suitcase": PackSuitcaseEvaluator,
     "bottles_upright": BottlesUprightEvaluator,
     "bottles_in_bin": BottlesInBinEvaluator,

@@ -104,6 +104,7 @@ SIM_MARKER_DIR = SIM_MODELS_DIR / "assets" / ".abc_sim_asset_packages"
 # `env_task` values from abc_sim/task_specs.py; user-facing task names resolve onto them.
 SIM_BASE_PACKAGES = ("i2rt_yam",)
 SIM_TASK_PACKAGES = {
+    "pack_and_pour_fruit": ("task_grab_clutter",),
     "pack_suitcase": ("task_grab_clutter",),
     "bottles": (),
     "put_bottles": ("task_water_bottles",),

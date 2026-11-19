@@ -12,6 +12,26 @@ from typing import Any
 # The internal sim datasets record it, so exports have to carry it too.
 DEFAULT_SCENE = "hybrid"
 
+FRUIT_BOWL_COLOR_NAMES = ("blue", "white", "red", "yellow", "green", "purple", "orange", "pink")
+PACK_AND_POUR_FRUIT_TEMPLATES = (
+    "Place all the fruits into the {source_color} bowl, then pour the fruits from the "
+    "{source_color} bowl into the large {target_color} bowl.",
+    "Put the three fruits in the {source_color} bowl, then lift it by the rim and pour them "
+    "into the large {target_color} bowl.",
+    "Gather all three fruits in the small {source_color} bowl, then tip them into the large {target_color} bowl.",
+    "Fill the {source_color} bowl with the fruits, then hold its rim and pour everything into the large {target_color} bowl.",
+    "First collect the fruits in the {source_color} bowl. Then pick up that bowl and empty it "
+    "into the large {target_color} bowl.",
+    "Pack all the fruit into the small {source_color} bowl and pour its contents into the large {target_color} bowl.",
+)
+PACK_AND_POUR_FRUIT_PROMPTS = tuple(
+    template.format(source_color=source, target_color=target)
+    for source in FRUIT_BOWL_COLOR_NAMES
+    for target in FRUIT_BOWL_COLOR_NAMES
+    if source != target
+    for template in PACK_AND_POUR_FRUIT_TEMPLATES
+)
+
 PACK_SUITCASE_PROMPTS = (
     "put all objects on the table into the suitcase and close it",
     "pack all three objects into the suitcase, then close the lid",
@@ -117,6 +137,15 @@ def _normalize_key(value: str) -> str:
 
 
 _TASK_SPECS: tuple[SimTaskSpec, ...] = (
+    SimTaskSpec(
+        name="pack_and_pour_fruit",
+        env_task="pack_and_pour_fruit",
+        prompt=PACK_AND_POUR_FRUIT_PROMPTS[0],
+        max_chunks=120,
+        description="Gather three fruits in a small bowl, then grasp its rim and pour them into a large bowl.",
+        evaluator_name="pack_and_pour_fruit",
+        aliases=("pack and pour fruit", *PACK_AND_POUR_FRUIT_PROMPTS[1:]),
+    ),
     SimTaskSpec(
         name="pack_suitcase",
         env_task="pack_suitcase",
