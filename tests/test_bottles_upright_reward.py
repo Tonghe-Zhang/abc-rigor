@@ -146,6 +146,7 @@ class BottlesUprightRewardTest(TestCase):
         before = result.to_info()
         result.metrics["bottle_sustained_seconds"][:] = 99
         result.metrics["bottle_peak_force_n"][:] = 99
+        result.metrics["bottle_force_dose_ns"][:] = 99
         result.metrics["bottle_force_penalty"][:] = 99
         for _ in range(10):
             self.assertEqual(self.evaluator.evaluate_model_data(self.model, self.data).to_info(), before)
@@ -155,14 +156,26 @@ class BottlesUprightRewardTest(TestCase):
         with self.assertRaisesRegex(ValueError, "contact forces must be finite"):
             self.score()
 
-    def test_force_ramp_boundaries_and_per_bottle_credit(self):
-        for force, lost in ((0, 0), (9.9, 0), (10, 0), (12.5, 0.025), (15, 0.05), (20, 0.1), (80, 0.1)):
-            with self.subTest(force=force):
+    def test_force_dose_duration_deadband_and_per_bottle_credit(self):
+        cases = (
+            (0, 100, 0),
+            (14.9, 100, 0),
+            (15, 1000, 0),
+            (20, 1, 0.0004),
+            (20, 50, 0.02),
+            (20, 125, 0.05),
+            (20, 250, 0.1),
+            (20, 500, 0.1),
+            (40, 50, 0.1),
+            (80, 1, 0.0052),
+        )
+        for force, steps, lost in cases:
+            with self.subTest(force=force, steps=steps):
                 self.evaluator.reset()
                 self.evaluator.after_reset(self.model, self.data)
                 self.lift_first_bottle()
                 self.add_contact(self.targets[0], self.model.geom("finger").id, force=force)
-                self.advance()
+                self.advance(steps)
                 self.release_contacts()
                 result = self.advance(300)
                 self.assertTrue(result.scalar_success())
@@ -170,66 +183,72 @@ class BottlesUprightRewardTest(TestCase):
                 np.testing.assert_allclose(result.metrics["bottle_reward"], [[1 / 3 - lost, 1 / 3, 1 / 3]])
                 np.testing.assert_allclose(result.metrics["bottle_force_penalty"], [[lost, 0, 0]])
 
-    def test_peak_captures_one_tick_and_persists_through_release_and_restanding(self):
+    def test_one_tick_dose_persists_through_release_and_restanding(self):
         self.evaluator.after_reset(self.model, self.data)
         self.lift_first_bottle()
         self.add_contact(self.targets[0], self.model.geom("finger").id, force=25)
         result = self.advance()
         self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 25)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.02)
         self.release_contacts()
         result = self.advance(300)
-        self.assertAlmostEqual(result.scalar_reward(), 0.9)
+        self.assertAlmostEqual(result.scalar_reward(), 0.9992)
         address = self.model.joint("bottle_1_joint").qposadr[0]
         self.data.qpos[address + 2] += 0.1
         self.advance()
         self.data.qpos[address + 2] -= 0.1
         result = self.advance(300)
         self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 25)
-        self.assertAlmostEqual(result.scalar_reward(), 0.9)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.02)
+        self.assertAlmostEqual(result.scalar_reward(), 0.9992)
         self.evaluator.reset()
         result = self.score()
         self.assertAlmostEqual(result.scalar_reward(), 1)
+        np.testing.assert_array_equal(result.metrics["bottle_force_dose_ns"], [[0, 0, 0]])
         self.assertLess(result.metrics["bottle_peak_force_n"].max(), 10)
 
     def test_contact_patches_and_welded_children_all_contribute(self):
         self.evaluator.after_reset(self.model, self.data)
         self.lift_first_bottle()
         for geom in ("finger", "finger", "finger_child_geom"):
-            self.add_contact(self.targets[0], self.model.geom(geom).id, force=5)
-        result = self.advance()
-        self.assertEqual(result.metrics["bottle_contact_force_n"][0, 0], 15)
+            self.add_contact(self.targets[0], self.model.geom(geom).id, force=8)
+        result = self.advance(25)
+        self.assertEqual(result.metrics["bottle_contact_force_n"][0, 0], 24)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.45)
         self.release_contacts()
-        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.95)
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.982)
 
     def test_opposing_gripper_forces_add_without_cancellation(self):
         self.evaluator.after_reset(self.model, self.data)
         self.lift_first_bottle()
         self.add_contact(self.targets[0], self.model.geom("finger").id, force=8, normal_z=1)
         self.add_contact(self.targets[0], self.model.geom("other_finger").id, force=8, normal_z=-1)
-        result = self.advance()
+        result = self.advance(50)
         self.assertEqual(result.metrics["bottle_contact_force_n"][0, 0], 16)
         self.release_contacts()
-        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.94)
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.996)
 
     def test_force_includes_friction_and_excludes_torque(self):
         self.evaluator.after_reset(self.model, self.data)
         self.lift_first_bottle()
         self.add_contact(self.targets[0], self.model.geom("finger").id)
-        self.forces[-1][:] = [12, 9, 0, 100, 200, 300]
-        result = self.advance()
-        self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 15)
+        self.forces[-1][:] = [16, 12, 0, 100, 200, 300]
+        result = self.advance(50)
+        self.assertEqual(result.metrics["bottle_peak_force_n"][0, 0], 20)
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.5)
         self.release_contacts()
-        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.95)
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.98)
 
     def test_table_impacts_and_other_bottles_are_also_tracked(self):
         self.evaluator.after_reset(self.model, self.data)
-        self.forces[0][0] = 15
+        self.forces[0][0] = 20
         self.add_contact(self.targets[1], self.targets[2], force=20)
-        result = self.advance()
-        np.testing.assert_allclose(result.metrics["bottle_peak_force_n"], [[15, 20.4905, 20.4905]])
+        result = self.advance(50)
+        np.testing.assert_allclose(result.metrics["bottle_peak_force_n"], [[20, 20.4905, 20.4905]])
+        np.testing.assert_allclose(result.metrics["bottle_force_dose_ns"], [[0.5, 0.54905, 0.54905]])
         self.forces[0][0] = 0.05 * 9.81
         self.release_contacts()
-        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.75)
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.936076)
 
     def test_gentle_credit_requires_upright_qualification(self):
         address = self.model.joint("bottle_1_joint").qposadr[0]
@@ -242,30 +261,78 @@ class BottlesUprightRewardTest(TestCase):
         self.evaluator.after_reset(self.model, self.data)
         for target in self.targets:
             self.add_contact(target, self.model.geom("finger").id, force=21)
-        self.advance()
+        self.advance(250)
         self.release_contacts()
         result = self.advance(300)
         self.assertTrue(result.scalar_success())
         self.assertAlmostEqual(result.scalar_reward(), 0.7)
 
     def test_force_threshold_configuration_is_validated(self):
-        for start, end in ((-1, 20), (10, 10), (20, 10), (10, np.inf), (np.nan, 20)):
-            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+        for start, budget in ((-1, 2.5), (15, 0), (15, -1), (15, np.inf), (np.nan, 2.5)):
+            with self.subTest(start=start, budget=budget), self.assertRaises(ValueError):
                 BottlesUprightEvaluator(
                     model=self.model,
                     spec=self.evaluator.spec,
                     force_penalty_start_n=start,
-                    force_penalty_end_n=end,
+                    force_dose_budget_ns=budget,
                 )
         self.evaluator = BottlesUprightEvaluator(
-            model=self.model, spec=self.evaluator.spec, force_penalty_start_n=5, force_penalty_end_n=15
+            model=self.model, spec=self.evaluator.spec, force_penalty_start_n=5, force_dose_budget_ns=0.5
         )
         self.evaluator.after_reset(self.model, self.data)
         self.lift_first_bottle()
         self.add_contact(self.targets[0], self.model.geom("finger").id, force=10)
-        self.advance()
+        self.advance(25)
         self.release_contacts()
         self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.95)
+
+    def test_equal_dose_at_different_forces_gives_equal_credit(self):
+        for force, steps in ((20, 50), (40, 10)):
+            with self.subTest(force=force):
+                self.evaluator.reset()
+                self.evaluator.after_reset(self.model, self.data)
+                self.lift_first_bottle()
+                self.add_contact(self.targets[0], self.model.geom("finger").id, force=force)
+                self.advance(steps)
+                self.release_contacts()
+                result = self.advance(300)
+                self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.5)
+                self.assertAlmostEqual(result.scalar_reward(), 0.98)
+
+    def test_dose_is_timestep_invariant_for_fixed_exposure(self):
+        for timestep in (0.001, 0.002, 0.004):
+            with self.subTest(timestep=timestep):
+                self.model.opt.timestep = timestep
+                self.evaluator.reset()
+                self.evaluator.after_reset(self.model, self.data)
+                self.lift_first_bottle()
+                self.add_contact(self.targets[0], self.model.geom("finger").id, force=20)
+                self.advance(round(0.1 / timestep))
+                self.release_contacts()
+                result = self.advance(round(0.6 / timestep))
+                self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.5)
+                self.assertAlmostEqual(result.scalar_reward(), 0.98)
+
+    def test_separated_bursts_accumulate_without_decay(self):
+        self.evaluator.after_reset(self.model, self.data)
+        for expected_dose in (0.5, 1.0):
+            self.lift_first_bottle()
+            self.add_contact(self.targets[0], self.model.geom("finger").id, force=20)
+            result = self.advance(50)
+            self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], expected_dose)
+            self.release_contacts()
+            self.advance(100)
+        self.assertAlmostEqual(self.advance(300).scalar_reward(), 0.96)
+
+    def test_reset_baseline_and_score_reads_do_not_add_dose(self):
+        self.forces[0][0] = 100
+        self.evaluator.after_reset(self.model, self.data)
+        for _ in range(10):
+            result = self.evaluator.evaluate_model_data(self.model, self.data)
+            self.assertEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0)
+        result = self.advance()
+        self.assertAlmostEqual(result.metrics["bottle_force_dose_ns"][0, 0], 0.17)
+        self.assertAlmostEqual(result.metrics["bottle_force_penalty"][0, 0], 0.0068)
 
 
 class BottlesUprightForcePhysicsTest(TestCase):
@@ -307,7 +374,7 @@ class BottlesUprightForcePhysicsTest(TestCase):
             self.evaluator.after_physics_step(self.model, self.data)
         return self.evaluator.evaluate_model_data(self.model, self.data)
 
-    def test_known_static_load_is_measured_in_newtons_and_peak_survives_unloading(self):
+    def test_known_static_load_is_measured_and_dose_survives_unloading(self):
         body = self.model.body("bottle_1").id
         self.data.xfrc_applied[body, 2] = -15
         loaded = self.advance()
@@ -316,12 +383,18 @@ class BottlesUprightForcePhysicsTest(TestCase):
         peak = loaded.metrics["bottle_peak_force_n"][0, 0]
         self.assertGreaterEqual(peak, loaded.metrics["bottle_contact_force_n"][0, 0])
         self.assertLess(peak, 17)
+        dose = loaded.metrics["bottle_force_dose_ns"][0, 0]
+        self.assertGreater(dose, 0.6)
+        self.assertLess(dose, 0.9)
         self.data.xfrc_applied[:] = 0
         released = self.advance()
         self.assertAlmostEqual(released.metrics["bottle_contact_force_n"][0, 0], 0.05 * 9.81, delta=0.005)
         self.assertEqual(released.metrics["bottle_peak_force_n"][0, 0], peak)
+        final_dose = released.metrics["bottle_force_dose_ns"][0, 0]
+        self.assertGreaterEqual(final_dose, dose)
         self.assertTrue(released.scalar_success())
-        self.assertAlmostEqual(released.metrics["bottle_reward"][0, 0], 1 / 3 - 0.1 * (peak - 10) / 10)
+        self.assertAlmostEqual(released.metrics["bottle_reward"][0, 0], 1 / 3 - 0.04 * final_dose)
+        self.assertEqual(self.advance(100).metrics["bottle_force_dose_ns"][0, 0], final_dose)
 
     def test_balanced_squeeze_is_detected_despite_small_net_force(self):
         # Opposing pads compress the cylinder by 1.5 mm at each side.
