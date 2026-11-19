@@ -21,12 +21,14 @@ from .tasks.pack_and_pour_fruit import PackAndPourFruitRandomizer
 from .tasks.pack_suitcase import PackSuitcaseRandomizer
 from .tasks.pour import PourRandomizer
 from .tasks.put_relative import PutRelativeRandomizer
+from .tasks.shape_matching import ShapeMatchingRandomizer
 from .tasks.sorting import LegoBlocksSortingRandomizer, NutsBoltsSortingRandomizer
 from .tasks.sweep import SweepRandomizer
 
 _WATER_BOTTLE_RANDOMIZER = WaterBottleRandomizer()
 
 TASK_RANDOMIZERS: dict[str, SceneRandomizer] = {
+    "shape_matching": ShapeMatchingRandomizer(),
     "pack_and_pour_fruit": PackAndPourFruitRandomizer(),
     "pack_suitcase": PackSuitcaseRandomizer(),
     "lift_bottles_upright": BottlesUprightRandomizer(),
