@@ -60,7 +60,7 @@ class DishrackEvaluator:
         margin_m: float = 0.05,
         height_min_m: float = -0.06,
         height_max_m: float = 0.45,
-        upright_normal_z_max: float = 0.55,
+        upright_normal_z_max: float = 2**-0.5,
         horizontal_normal_z_min: float = 0.75,
     ) -> None:
         self.model = model

@@ -37,9 +37,11 @@ This is not a claim about legibility under every lighting or camera condition.
 
 The existing visual mesh triangles and scales remain intact; only their UVs
 and materials change. Collision geoms, friction, mass, inertia, joints,
-actuators, placements, and reward/evaluator configuration do not change.
-The registered evaluator remains native `spell_word` with a sampled sequence;
-the existing separate free-placement scoring helper is unchanged.
+actuators and placements do not change. The registered random tasks use
+[`abc-spelling-placement-v2`](spelling-placement-v2.md): zero initial credit,
+independent per-letter placement, quarter credit for misplaced target letters,
+and irreversible excess-contact-force deductions. The explicit v1
+free-placement evaluator retains its existing definition.
 
 `RandomizationState.metadata["block_appearance"]` records the revision, seed,
 and every realized per-block style. Replay applies those styles without
@@ -78,10 +80,12 @@ appearance.
 No generated texture files are needed for replay; the recorded parameters and
 bundled glyph assets suffice.
 
-Use independent environments for these tasks. `BatchedWarpYAMEnv` shares texture
-buffers across worlds and therefore rejects appearance-randomized resets before
-GPU initialization, including explicit reset overrides. Different per-world
-textures in that shared-model renderer are not implemented here.
+Use independent native environments for these tasks. `BatchedWarpYAMEnv`
+rejects the contact-dependent placement evaluator before GPU initialization.
+It also rejects appearance-randomized resets with qpos-only evaluators because
+its renderer shares texture buffers across worlds, including explicit reset
+overrides. Different per-world textures in that shared-model renderer are not
+implemented here.
 
 ## CPU validation and preview
 

@@ -19,8 +19,9 @@ observation, info = env.reset(seed=37)
 ```
 
 The reset request samples two, three or four distinct letters. Its realized goal
-and prompt come from the seeded spelling randomizer. The existing named tasks,
-including `spell_cat`, continue to use `spell_word`.
+and prompt come from the seeded spelling randomizer. Fixed-word tasks, including
+`spell_cat`, use `spell_word`. The public random appearance tasks use
+[`abc-spelling-placement-v2`](spelling-placement-v2.md).
 
 The evaluator considers the geometry of every row occupant, including wrong,
 unreadable and held blocks. At least one block must move from its reset position.
