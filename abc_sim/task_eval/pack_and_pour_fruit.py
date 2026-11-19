@@ -17,7 +17,8 @@ class PackAndPourFruitEvaluator:
 
     evaluation_interval_steps = 1
     settling_seconds = 0.5
-    transport_seconds = 0.2
+    transport_seconds = 0.1
+    pour_tilt_degrees = 30.0
     grasp_seconds = 0.05
     contact_gap_seconds = 0.02
     containment_tolerance_m = 0.001
@@ -185,6 +186,18 @@ class PackAndPourFruitEvaluator:
         )
         return above, inside
 
+    def _source_in_transport_zone(self, bowl_pos, bowl_rot):
+        source_rim = self._bounds[0][1]
+        mouth_world = bowl_pos[0] + source_rim * bowl_rot[0, :, 2]
+        mouth = (mouth_world - bowl_pos[1]) @ bowl_rot[1]
+        _, target_rim, _, target_radius = self._bounds[1]
+        # Center distance defines the transport zone; the mouth must clear the rim.
+        return bool(
+            bowl_rot[1, 2, 2] >= 0.98
+            and np.linalg.norm(bowl_pos[0, :2] - bowl_pos[1, :2]) <= target_radius
+            and mouth[2] >= target_rim + 0.01
+        )
+
     def _observe(self, data, *, elapsed):
         model = self.model
         if not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all():
@@ -278,6 +291,12 @@ class PackAndPourFruitEvaluator:
         self._carried_filled |= bool(self._packed_stage and inside[0].all() and held and source_lift >= 0.05)
         overhead_distance = float(np.linalg.norm(bowl_pos[0, :2] - bowl_pos[1, :2]))
         above, floor_inside = self._source_floor_placement(data, bowl_pos, bowl_rot)
+        in_transport_zone = self._source_in_transport_zone(bowl_pos, bowl_rot)
+        receiver_supported = bool(
+            nested_source_load >= 0.3 * self._weights[3]
+            and bowl_rot[1, 2, 2] >= 0.98
+            and bowl_table_load[1] >= 0.6 * self._weights[4]
+        )
         source_nested = (
             floor_inside
             and nested_source_load >= 0.6 * self._weights[3]
@@ -287,30 +306,24 @@ class PackAndPourFruitEvaluator:
         )
         transport = (
             self._carried_filled
-            and inside[0].all()
-            and (
-                source_nested
-                or (
-                    held
-                    and above
-                    and bowl_rot[0, 2, 2] >= 0.9
-                    and np.linalg.norm(speeds[3, :3]) <= 0.08
-                    and np.linalg.norm(speeds[3, 3:]) <= 0.5
-                )
-            )
+            and source_resident.all()
+            and (source_nested or (in_transport_zone and (held or receiver_supported)))
         )
         self._transport_time = self._transport_time + elapsed if transport and self._previous_transport else 0.0
         self._previous_transport = bool(transport)
         self._transport_complete |= bool(transport and self._transport_time >= self.transport_seconds)
         self._armed |= (source_qualified & self._packed_stage) | (self._packed_fruits & packing_completed_now)
         self._armed &= ~touching_robot[:3] & ~fruit_table
-        self._emptied &= ~inside[0]
-        self._pour_valid &= ~inside[0] & ~touching_robot[:3] & ~fruit_table
+        self._emptied &= ~source_resident
+        self._pour_valid &= ~source_resident & ~touching_robot[:3] & ~fruit_table
         tilt_deg = float(np.rad2deg(np.arccos(np.clip(bowl_rot[0, 2, 2], -1, 1))))
-        bottom = local[0][:, 2] - self._radii
-        rim = self._bounds[0][1]
+        rim = self._bounds[0][1] + self.containment_tolerance_m
+        pouring_support = bool((held and source_lift >= 0.05) or (receiver_supported and in_transport_zone))
+        crossed = np.zeros(3, dtype=bool)
+        departure = np.zeros(3, dtype=bool)
         if self._previous_local is not None:
-            crossed = (self._previous_local[:, 2] - self._radii < rim) & (bottom >= rim)
+            # A rolling fruit's center crosses the lip before its trailing surface.
+            crossed = (self._previous_local[:, 2] <= rim) & (local[0][:, 2] > rim)
             opening = np.linalg.norm(local[0][:, :2], axis=1) <= self._bounds[0][3] + self._radii + 0.005
             departure = (
                 crossed
@@ -318,9 +331,8 @@ class PackAndPourFruitEvaluator:
                 & self._armed
                 & ~touching_robot[:3]
                 & self._transport_complete
-                & held
-                & (source_lift >= 0.05)
-                & (tilt_deg >= 45)
+                & pouring_support
+                & (tilt_deg >= self.pour_tilt_degrees)
             )
             self._emptied |= departure
             self._pour_valid |= departure & ~fruit_table
@@ -379,6 +391,9 @@ class PackAndPourFruitEvaluator:
                 "fruit_armed_mask": self._armed[None].copy(),
                 "fruit_emptied_mask": self._emptied[None].copy(),
                 "fruit_valid_pour_mask": self._pour_valid[None].copy(),
+                "fruit_crossed_mouth_mask": crossed[None],
+                "fruit_departure_mask": departure[None],
+                "fruit_table_contact_mask": fruit_table[None],
                 "fruit_caught_mask": caught[None],
                 "bowl_grasped": np.array([bool(paired_contacts[0].any())]),
                 "bowl_held": np.array([held]),
@@ -394,6 +409,10 @@ class PackAndPourFruitEvaluator:
                 "source_lift_m": np.array([source_lift]),
                 "source_tilt_deg": np.array([tilt_deg]),
                 "source_over_target": np.array([above]),
+                "source_in_transport_zone": np.array([in_transport_zone]),
+                "transport_radius_m": np.array([self._bounds[1][3]]),
+                "source_receiver_supported": np.array([receiver_supported]),
+                "pouring_support_valid": np.array([pouring_support]),
                 "source_floor_inside_target": np.array([floor_inside]),
                 "source_target_support_n": np.array([nested_source_load]),
                 "source_target_distance_xy_m": np.array([overhead_distance]),

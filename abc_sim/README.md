@@ -93,7 +93,7 @@ Reward stages are chronological:
 | --- | ---: | --- |
 | Packing | 0.3 | 0.1 per fully contained fruit, supported, released and settled for 0.5 s |
 | Transport | 0.3 | All three packed together, then a bowl grasp lifts the filled bowl and carries it above or into the receiver |
-| Emptying | 0.2 | 1/15 per fruit observed leaving the mouth of the lifted, tilted, grasped bowl after transport |
+| Emptying | 0.2 | 1/15 per fruit observed leaving the tilted bowl's mouth after transport, while grasped or supported by the receiver |
 | Catching | 0.2 | 1/15 per poured fruit settled, released and supported inside the receiver for 0.5 s |
 
 Putting fruit directly into the receiver earns **zero**. Nesting the packed
@@ -105,19 +105,26 @@ or being carried. This tolerates contact-solver penetration after qualification.
 Its center leaving the bowl clears that fruit's partial credit. The fruits can
 qualify at different times; having all three qualified full spheres inside
 together completes the permanent packing milestone.
-Transport has a 0.2 s dwell; the filled bowl must first have been lifted
+Transport has a 0.1 s dwell; the filled bowl must first have been lifted
 at least 5 cm with a bowl grasp. Grasp acquisition requires both opposing
 fingers of one hand contacting the bowl for 50 ms, tolerating gaps of up to
 20 ms per finger during acquisition. Once acquired, either
 finger can carry load; losing both contacts for more than 20 ms ends the hold.
-Rim contact is measured independently and does not gate reward. Overhead
-placement requires the source floor's projected footprint inside the upright receiver's
-mouth and 2.5 cm above it. Nesting requires the source floor inside the receiver's
-flared cavity, upward support from the receiver, and both bowls upright and
-settled. These tests use the actual cylinder and cavity geometry.
+Rim contact is measured independently and does not gate reward. Transport
+allows a horizontal center distance up to the receiver's rim radius (17 cm),
+with the source mouth's center at least 1 cm above the upright receiver's rim.
+All fruit centers must remain inside during the dwell, and the bowl must be
+grasped or supported by the receiver. This allows base overhang and movement
+during placement. Nesting also qualifies when the source floor is inside the receiver's
+flared cavity, with upward support from the receiver and both bowls upright and
+settled.
 Pouring requires
-at least 45° tilt and passage through the mouth, with no direct robot-fruit
-contact. A spill can earn emptying credit but cannot earn catching credit
+at least 30° tilt and the fruit's center crossing the mouth plane, with no
+direct robot-fruit contact. The source must either remain grasped and lifted
+5 cm or be supported by the receiver within the transport zone. Receiver
+support means at least 30% of the empty source bowl's weight carried by the
+upright, table-supported receiver. This permits fruit to finish rolling out
+after release onto the receiver. A spill can earn emptying credit but cannot earn catching credit
 after contacting the table. Re-entering the small bowl clears a fruit's
 pouring credit. Removing a caught fruit clears its current catching credit.
 Containment accounts for the fruit's full sphere and each bowl's polygonal
@@ -138,7 +145,8 @@ are configurable evaluator options.
 Metrics report the four reward components, per-fruit packing/emptying/catching,
 stage milestones, retained packing masks, qualification masks and dwell times,
 bowl support/readiness, containment/support/pour masks, bowl/rim grasp, transport
-eligibility and dwell, receiver support and floor containment, and load/peak/
+eligibility and dwell, center-distance transport zone, receiver support,
+mouth crossings, qualified departures, floor containment, and load/peak/
 excess-dose/potential-penalty columns in order
 `[fruit_1, fruit_2, fruit_3, source_bowl, target_bowl]`.
 Potential force penalties describe the loss if all affected stages are earned.
