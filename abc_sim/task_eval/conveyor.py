@@ -18,8 +18,11 @@ class ConveyorPickObjectsInBinEvaluator:
     The bin interior comes from its collision geometry. Peak object count and
     ``ever_success`` remain latched for rollout progress and early stopping.
     An object the task runtime removed for going off the track (parked past
-    ``REMOVED_OBJECT_MIN_X``) never counts, so success is out of reach once
-    one is gone and ``ever_failed`` latches.
+    ``REMOVED_OBJECT_MIN_X``) never counts. ``ever_failed`` latches once no
+    object is left that could still raise the reward: every object is either
+    removed or in the bin, and not all are in the bin. Until then the policy can
+    still earn partial credit, so rollouts keep going after the first removal.
+    ``fail_when_nothing_left=False`` latches at the first removal instead.
     """
 
     def __init__(
@@ -30,8 +33,10 @@ class ConveyorPickObjectsInBinEvaluator:
         bin_body_name: str = "conveyor_bin",
         object_joint_regex: str = r"conveyor_object_(\d+)_joint",
         floor_tolerance_m: float = 0.01,
+        fail_when_nothing_left: bool = True,
     ) -> None:
         self.spec = spec
+        self.fail_when_nothing_left = bool(fail_when_nothing_left)
         self._bin_body_name = bin_body_name
         self._object_joint_regex = object_joint_regex
         self.floor_tolerance_m = float(floor_tolerance_m)
@@ -238,7 +243,11 @@ class ConveyorPickObjectsInBinEvaluator:
         self._max_objects_in_bin = np.maximum(self._max_objects_in_bin, num_objects)
         success = num_objects >= total
         self._ever_success |= success
-        self._ever_failed |= num_removed > 0
+        if self.fail_when_nothing_left:
+            # Nothing left on the track: the reward can no longer rise, so rollouts can stop.
+            self._ever_failed |= ~success & np.all(removed_mask | in_bin_mask, axis=1)
+        else:
+            self._ever_failed |= num_removed > 0
 
         objects_in_bin = [
             [name for name, inside in zip(self.object_names, world_mask) if bool(inside)]

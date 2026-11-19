@@ -124,6 +124,15 @@ and early termination. The default is `terminate_on_success=False`; callers can
 retain completed scenes through their fixed horizon. Record the chosen score
 aggregation, horizon, and termination settings with the training objective.
 
+Failure termination is on by default (`terminate_on_failure=True`): once the
+task reports `ever_failed`, its score can no longer rise (every conveyor object
+is off the track or in the bin; a sweep scrap was carried), and `step` returns
+`terminated=True`. With the final or maximum observed score as the return, the
+stop changes nothing but the episode length. With a summed per-step score it
+cuts off reward already earned (a conveyor episode that latched at `1/3` stops
+paying `1/3` per step), which rewards delaying the latch, so use
+`terminate_on_failure=False` there.
+
 Nonrandomized resets restore the current episode's recorded initial physical
 scene while clearing deposit and opening history. This includes stack poses,
 active-object collision masks, object/bin positions, and inactive placements;

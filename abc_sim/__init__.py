@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 __version__ = "0.1.0"
 
@@ -168,6 +168,8 @@ def make_env(
     enable_task_randomizer: bool = True,
     max_episode_steps: int | None = None,
     terminate_on_success: bool = False,
+    terminate_on_failure: bool = True,
+    evaluator_options: dict[str, Any] | None = None,
     physics_profile: str | PhysicsProfile | None = None,
     randomize_background: bool = False,
     background_seed: int | None = None,
@@ -200,6 +202,17 @@ def make_env(
             ``step`` returns ``truncated=True``.
         terminate_on_success: Whether ``step`` should return ``terminated=True``
             when the task evaluator reports success.
+        terminate_on_failure: Whether ``step`` should return ``terminated=True``
+            once the task evaluator reports ``ever_failed`` (on by default): the
+            reward can no longer rise, e.g. every conveyor object is off the track
+            or in the bin, or a sweep scrap was carried. This suits returns taken
+            from the final (or best) task score. ``step`` reports the current score
+            every step, so a return that sums it should pass ``False``, which keeps
+            stepping to the time limit.
+        evaluator_options: Extra keyword arguments for this task's evaluator, such
+            as the flags that restore an earlier scoring rule, e.g.
+            ``{"fail_when_nothing_left": False}``. They apply to ``task`` only:
+            a later ``env.set_task`` without options uses the defaults.
         physics_profile: Optional named or explicit contact profile, applied to
             every compiled model before simulation and rendering are initialized.
         randomize_background: Opt-in (default off). Replace the walls' and table's
@@ -287,6 +300,7 @@ def make_env(
             **kwargs,
             "max_episode_steps": max_episode_steps,
             "terminate_on_success": terminate_on_success,
+            "terminate_on_failure": terminate_on_failure,
         }
         env = MuJoCoYAMEnv(
             config=config,
@@ -300,7 +314,7 @@ def make_env(
             **physics_kwargs,
         )
         env.reload_from_xml(xml)
-        env.set_task(task)
+        env.set_task(task, evaluator_options=evaluator_options)
         env._inhand_category = category
         env._inhand_variant = variant_dir.name
 
@@ -340,6 +354,7 @@ def make_env(
         **kwargs,
         "max_episode_steps": max_episode_steps,
         "terminate_on_success": terminate_on_success,
+        "terminate_on_failure": terminate_on_failure,
     }
     try:
         env = MuJoCoYAMEnv(
@@ -356,7 +371,7 @@ def make_env(
     finally:
         if tmp_scene_xml_path is not None:
             tmp_scene_xml_path.unlink(missing_ok=True)
-    env.set_task(task)
+    env.set_task(task, evaluator_options=evaluator_options)
     env._scene_xml_transform_options = scene_xml_transform_options
     if scene_xml_string is not None:
         env._scene_xml_string = scene_xml_string
