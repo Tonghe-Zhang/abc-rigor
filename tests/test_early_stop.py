@@ -51,9 +51,10 @@ class ConveyorStopTest(unittest.TestCase):
         self.env.data.qvel[:] = 0.0
         mujoco.mj_forward(self.env.model, self.env.data)
         trace = self.removed_and_failed_over(12.0)
-        self.assertEqual(
-            trace[-1], (2, True)
-        )  # one in the bin, two removed: nothing left to pick
+        # One removed, one still on the track: keep going. The first-removal rule latched here.
+        self.assertIn((1, False), trace)
+        # One in the bin, two removed: nothing left to pick.
+        self.assertEqual(trace[-1], (2, True))
         self.assertAlmostEqual(
             float(self.env.evaluate_task().reward[0]), 1.0 / 3.0, places=6
         )
@@ -87,6 +88,20 @@ class EnvTerminationTest(unittest.TestCase):
         self.assertTrue(
             info["task_failed"]
         )  # still reported, just not ending the episode
+
+    def test_evaluator_options_belong_to_the_task_they_were_given_for(self):
+        env = make_env(
+            "conveyor_pick",
+            render_cameras=False,
+            evaluator_options={"fail_when_nothing_left": False},
+        )
+        self.addCleanup(env.close)
+        self.assertFalse(env._task_evaluator.fail_when_nothing_left)
+        env.reload_from_model(env.model)  # same task: kept
+        self.assertFalse(env._task_evaluator.fail_when_nothing_left)
+        # Another task (unscored, so nothing to bind to this scene): the options are not passed on.
+        env.set_task("build_wood_block_tower")
+        self.assertEqual(env._evaluator_options, {})
 
     def test_evaluator_options_restore_the_first_removal_rule(self):
         step, info = self.first_terminated(

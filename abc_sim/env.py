@@ -114,7 +114,6 @@ class MuJoCoYAMEnv(gym.Env):
         max_episode_steps: int | None = None,
         terminate_on_success: bool = False,
         terminate_on_failure: bool = True,
-        evaluator_options: dict[str, Any] | None = None,
         wrist_fov: float = 58.0,
         physics_profile: str | PhysicsProfile | None = None,
         background: BackgroundConfig | None = None,
@@ -147,10 +146,11 @@ class MuJoCoYAMEnv(gym.Env):
             )
         self.max_episode_steps = max_episode_steps
         self.terminate_on_success = bool(terminate_on_success)
-        # A failed task (``ever_failed``) can no longer raise its reward; ending the episode there keeps
-        # RL returns from padding with steps that cannot change them.
+        # A failed task (``ever_failed``) can no longer raise its reward. Ending the episode there suits
+        # returns taken from the final (or best) task score; a return that sums the per-step score
+        # should keep stepping (``terminate_on_failure=False``), or the stop cuts off reward already earned.
         self.terminate_on_failure = bool(terminate_on_failure)
-        self._evaluator_options = dict(evaluator_options or {})
+        self._evaluator_options: dict[str, Any] = {}
         self._scene_xml_string: str | None = None  # set directly for in-memory XML
         self._task_request: str | SimTaskSpec = ""
         self._task_reset_request: dict[str, Any] | None = None
@@ -998,12 +998,20 @@ class MuJoCoYAMEnv(gym.Env):
         """Return the current 14D policy-space state from MuJoCo qpos."""
         return self.project_state_from_qpos(self.data.qpos)
 
-    def set_task(self, task: str | SimTaskSpec) -> None:
+    def set_task(
+        self,
+        task: str | SimTaskSpec,
+        *,
+        evaluator_options: dict[str, Any] | None = None,
+    ) -> None:
         """Bind task reset options, prompt, and evaluator.
 
         An explicit constructor prompt remains the caller's override. Episode
         randomization and task runtimes can still supply a live prompt on reset.
+        ``evaluator_options`` are extra evaluator keyword arguments for this task;
+        they last until the next ``set_task`` (model reloads keep them).
         """
+        self._evaluator_options = dict(evaluator_options or {})
 
         resolved = resolve_task(task)
         env_task = resolved.env_task or task
