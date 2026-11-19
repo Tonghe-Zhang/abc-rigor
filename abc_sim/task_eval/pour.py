@@ -26,6 +26,13 @@ class PourBeadsInContainerEvaluator:
     """Score pouring by counting beads inside the receiving container.
 
     Membership uses a geometry-derived cylinder in the container's live frame.
+
+    ``ever_failed`` latches once no bead is left that could still raise the
+    reward: every bead is either in the receiving container or spilled, and the
+    success count was not reached. A spilled bead rests within
+    ``spilled_max_height_m`` of the table top (or below it, on the floor) and
+    outside both the receiving and the source container's cylinders, so beads
+    still in the source cup or in the air keep the rollout going.
     """
 
     def __init__(
@@ -39,9 +46,15 @@ class PourBeadsInContainerEvaluator:
         allowed_escapes: int = 1,
         target_upright_z_min: float = 0.5,
         radius_tolerance_frac: float = 0.05,
+        source_joint_name: str = "mug_1_jnt",
+        table_geom_name: str = "table_plane",
+        spilled_max_height_m: float = 0.03,
     ) -> None:
         self.spec = spec
         self._target_joint_name = target_joint_name
+        self._source_joint_name = source_joint_name
+        self._table_geom_name = table_geom_name
+        self.spilled_max_height_m = float(spilled_max_height_m)
         self._bead_joint_regex = bead_joint_regex
         self.radius_tolerance_frac = float(radius_tolerance_frac)
         self.allowed_escapes = int(allowed_escapes)
@@ -76,6 +89,19 @@ class PourBeadsInContainerEvaluator:
             self._container_rim_z,
         ) = self._resolve_container_bounds(model, self._target_joint_name)
         self._container_radius = self._wall_radius * (1.0 + self.radius_tolerance_frac)
+        self._source_qpos_adr = self._resolve_free_joint_qpos_adr(
+            model, self._source_joint_name
+        )
+        source_radius, self._source_floor_z, self._source_rim_z = (
+            self._resolve_container_bounds(model, self._source_joint_name)
+        )
+        self._source_radius = source_radius * (1.0 + self.radius_tolerance_frac)
+        table_geom = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, self._table_geom_name
+        )
+        if table_geom < 0:
+            raise ValueError(f"Geom {self._table_geom_name!r} not found in model")
+        self._table_z = float(model.geom_pos[table_geom][2])
         if self._success_count_override is None:
             # Allow one settling-related miss by default.
             self.success_count = max(1, len(self.bead_names) - self.allowed_escapes)
@@ -88,6 +114,16 @@ class PourBeadsInContainerEvaluator:
         self._nworld = int(nworld)
         self._max_beads_in_container = np.zeros((self._nworld,), dtype=np.int32)
         self._ever_success = np.zeros((self._nworld,), dtype=bool)
+        self._ever_failed = np.zeros((self._nworld,), dtype=bool)
+
+    @staticmethod
+    def _cylinder_local(
+        qpos_batch: np.ndarray, adr: int, bead_pos: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Bead positions in a container's live frame, and the frame's rotation."""
+        rot = _quat_to_rotmat_batch(qpos_batch[:, adr + 3 : adr + 7])
+        rel = bead_pos - qpos_batch[:, None, adr : adr + 3]
+        return np.einsum("bij,bnj->bni", np.swapaxes(rot, 1, 2), rel), rot
 
     def configure_from_randomization(
         self,
@@ -156,7 +192,9 @@ class PourBeadsInContainerEvaluator:
         the wall.
         """
 
-        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, target_joint_name)
+        joint_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_JOINT, target_joint_name
+        )
         if joint_id < 0:
             raise ValueError(f"Joint {target_joint_name!r} not found in model")
         root_body_id = int(model.jnt_bodyid[joint_id])
@@ -220,20 +258,15 @@ class PourBeadsInContainerEvaluator:
         if qpos_batch.shape[0] != self._nworld:
             self.reset(nworld=qpos_batch.shape[0])
 
-        adr = self._target_qpos_adr
-        target_pos = qpos_batch[:, adr : adr + 3]
-        target_quat = qpos_batch[:, adr + 3 : adr + 7]
         bead_pos = np.stack(
-            [qpos_batch[:, bead_adr : bead_adr + 3] for bead_adr in self._bead_qpos_addrs],
+            [
+                qpos_batch[:, bead_adr : bead_adr + 3]
+                for bead_adr in self._bead_qpos_addrs
+            ],
             axis=1,
         )
-
-        rot_world_from_target = _quat_to_rotmat_batch(target_quat)
-        rel_world = bead_pos - target_pos[:, None, :]
-        rel_local = np.einsum(
-            "bij,bnj->bni",
-            np.swapaxes(rot_world_from_target, 1, 2),
-            rel_world,
+        rel_local, rot_world_from_target = self._cylinder_local(
+            qpos_batch, self._target_qpos_adr, bead_pos
         )
 
         radial_xy = np.linalg.norm(rel_local[..., :2], axis=-1)
@@ -250,6 +283,26 @@ class PourBeadsInContainerEvaluator:
             & (lower_height_margin >= 0.0)
             & (upper_height_margin >= 0.0)
             & target_upright[:, None]
+        )
+
+        # Spilled: resting low and outside both cups' cylinders (upright or not).
+        in_target_cylinder = (
+            (radial_margin >= 0.0)
+            & (lower_height_margin >= 0.0)
+            & (upper_height_margin >= 0.0)
+        )
+        source_local, _ = self._cylinder_local(
+            qpos_batch, self._source_qpos_adr, bead_pos
+        )
+        in_source_cylinder = (
+            (np.linalg.norm(source_local[..., :2], axis=-1) <= self._source_radius)
+            & (source_local[..., 2] >= self._source_floor_z)
+            & (source_local[..., 2] <= self._source_rim_z)
+        )
+        spilled_mask = (
+            (bead_pos[..., 2] <= self._table_z + self.spilled_max_height_m)
+            & ~in_target_cylinder
+            & ~in_source_cylinder
         )
 
         num_beads = in_container_mask.sum(axis=1).astype(np.int32)
@@ -269,6 +322,8 @@ class PourBeadsInContainerEvaluator:
         )
         success = num_beads >= self.success_count
         self._ever_success |= success
+        # Nothing left to pour: the reward can no longer rise, so rollouts can stop.
+        self._ever_failed |= ~success & np.all(in_container_mask | spilled_mask, axis=1)
         beads_in_container = [
             [name for name, inside in zip(self.bead_names, world_mask) if bool(inside)]
             for world_mask in in_container_mask
@@ -279,6 +334,9 @@ class PourBeadsInContainerEvaluator:
             "num_active_beads": active_count,
             "max_beads_in_container_so_far": self._max_beads_in_container.copy(),
             "ever_success": self._ever_success.copy(),
+            "ever_failed": self._ever_failed.copy(),
+            "num_spilled_beads": spilled_mask.sum(axis=1).astype(np.int32),
+            "bead_spilled_mask": spilled_mask,
             "bead_fraction_in_container": (
                 num_beads.astype(np.float32) / active_count.astype(np.float32)
             ),
