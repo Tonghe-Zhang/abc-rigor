@@ -104,7 +104,7 @@ env.reset(seed=42, options={"randomization": {
 With no identity overrides, all assets are resampled each episode. The same seed
 in all worlds already produces matching models. Assets use their native sizes.
 
-Reward is the current fraction of independently standing, settled bottles.
+Reward combines upright placement and gentle handling for each bottle.
 Each bottle must satisfy all of these for **0.5 uninterrupted seconds**:
 
 - Cap-up axis within 14° of vertical, base origin within 8 mm of table height
@@ -118,6 +118,37 @@ simultaneously for success. Historical maximum/ever-success metrics are diagnost
 they do not preserve reward after a bottle falls. A bottle held upright, propped
 against clutter, bouncing, or supported inside a trash bin earns no credit.
 The table uses a finite collision box so objects pushed over the edge fall.
+
+Each qualified bottle can earn **1/3**, of which **0.1** depends on its episode's
+maximum contact load. At every physics tick, sum the magnitudes of the 3D contact
+forces against **all external bodies**, including normal and friction forces.
+Two opposing 8 N fingers contribute 16 N; table, clutter and other-bottle impacts
+also count. Torque components have units N·m and are excluded.
+
+```text
+peak_i = max over episode ticks of sum over contacts ||force_xyz||
+reward_i = qualified_i * (1/3 - 0.1 * clip((peak_i - 10 N) / 10 N, 0, 1))
+reward = sum_i reward_i
+```
+
+A peak at or below 10 N preserves the full 1/3. At 15 N the bottle can earn
+0.28333; at or above 20 N it can earn 0.23333. That loss cannot recover after
+release, waiting, falling or re-standing; only a new episode/reset clears it.
+Unqualified bottles earn zero, including their gentle-handling component.
+Binary success still means all three qualify; reward can be 0.7 at success if
+all three exhausted their gentle-handling credit. The evaluator accepts
+`force_penalty_start_n` and `force_penalty_end_n` through `evaluator_options`.
+Metrics expose `bottle_contact_force_n`, `bottle_peak_force_n`,
+`bottle_force_penalty`, and `bottle_reward`.
+
+`mj_contactForce` reads MuJoCo's solved contact forces in Newtons, the same source
+as the built-in `<contact>` sensor. Reading all contacts avoids a fixed sensor
+slot limit and reuses the support/release checks above. Regression tests compare
+the aggregate against that sensor under rest, a known load, and a balanced
+squeeze. A `<force>` sensor measures the body-to-parent wrench and can miss
+balanced compression; `<touch>` sums normal forces within a site but omits
+friction. These are simulator contact loads, sensitive to timestep, solver and
+collision/contact parameters; they are not calibrated physical bottle stress.
 
 The evaluator observes **every solved native physics tick** through `env.step`,
 `env.apply_action`, or `env.advance_physics`. Evaluation is a read of cached state;
