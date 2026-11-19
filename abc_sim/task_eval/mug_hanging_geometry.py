@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import mujoco
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
 
 from abc_sim.task_eval.contacts import subtree_geom_ids
 
@@ -166,6 +165,8 @@ class HandleAperture:
 
 def measure_handle_aperture(model, data, mug_body_id):
     """Measure the enclosed handle opening from the realized scaled mug meshes."""
+    from PIL import Image, ImageDraw, ImageFilter
+
     meshes = _collision_meshes(model, data, mug_body_id)
     vertices = np.concatenate([vertices for _, vertices, _ in meshes])
     resolution = 0.00025
