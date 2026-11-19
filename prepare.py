@@ -130,6 +130,8 @@ SIM_TASK_PACKAGES = {
     "pour": ("cup_stacking", "mug"),
     "chess": ("chess", "task_chess"),
     "blocks": ("blocks",),
+    "building_blocks": ("building_blocks",),
+    "drawer": ("drawer", "marker"),
 }
 # Policy-specific VLA releases use a distinct catalogue prefix so they cannot
 # replace the existing DiT checkpoint for the same simulator task.

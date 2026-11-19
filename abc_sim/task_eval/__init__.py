@@ -23,6 +23,7 @@ from abc_sim.task_eval.pour import PourBeadsInContainerEvaluator
 from abc_sim.task_eval.put_relative import PutRelativeEvaluator
 from abc_sim.task_eval.spell import SpellWordEvaluator
 from abc_sim.task_eval.spelling_placement import FreePlacementSpellingEvaluator
+from abc_sim.task_eval.spelling_placement_v2 import SpellingPlacementV2Evaluator
 from abc_sim.task_eval.sweep import SweepAwayEvaluator
 from abc_sim.task_eval.registry import make_task_evaluator
 
@@ -50,5 +51,6 @@ __all__ = [
     "PutRelativeEvaluator",
     "SpellWordEvaluator",
     "FreePlacementSpellingEvaluator",
+    "SpellingPlacementV2Evaluator",
     "make_task_evaluator",
 ]

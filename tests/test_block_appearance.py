@@ -542,11 +542,10 @@ class AppearanceSceneTests(unittest.TestCase):
     def test_shared_texture_batch_fails_before_gpu_initialization(self):
         env = make_env(task="spell_random_2_appearance", render_cameras=False)
         self.addCleanup(env.close)
-        batch = BatchedWarpYAMEnv(env, num_worlds=2, camera_height=64, camera_width=64)
-        with self.assertRaisesRegex(NotImplementedError, "shares texture buffers"):
-            batch.reset([31, 32])
-        self.assertIsNone(batch._runtime)
+        with self.assertRaisesRegex(NotImplementedError, "solved contacts"):
+            BatchedWarpYAMEnv(env, num_worlds=2, camera_height=64, camera_width=64)
         env.set_task("spell_cat")
+        batch = BatchedWarpYAMEnv(env, num_worlds=2, camera_height=64, camera_width=64)
         with self.assertRaisesRegex(NotImplementedError, "shares texture buffers"):
             batch.reset(
                 [31, 32],

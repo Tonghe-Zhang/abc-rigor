@@ -31,6 +31,7 @@ from abc_sim.task_eval.put_relative import PutRelativeEvaluator
 from abc_sim.task_eval.shape_matching import ShapeMatchingEvaluator
 from abc_sim.task_eval.spell import SpellWordEvaluator
 from abc_sim.task_eval.spelling_placement import FreePlacementSpellingEvaluator
+from abc_sim.task_eval.spelling_placement_v2 import SpellingPlacementV2Evaluator
 from abc_sim.task_eval.sweep import SweepAwayEvaluator
 from abc_sim.task_specs import SimTaskSpec, maybe_get_task_spec
 
@@ -62,6 +63,7 @@ _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
     "put_relative": PutRelativeEvaluator,
     "spell_word": SpellWordEvaluator,
     "abc-spelling-free-placement-v1": FreePlacementSpellingEvaluator,
+    "abc-spelling-placement-v2": SpellingPlacementV2Evaluator,
 }
 
 
