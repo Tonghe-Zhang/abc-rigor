@@ -6,6 +6,8 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from abc_sim.mug_inertia import MUG_INERTIA_REVISION
+
 from ..assets.mugs import (
     _MUG_BASE_SCENE_XMLS,
     _MUG_DEFAULT_VARIANT,
@@ -85,6 +87,7 @@ class MugVariantRandomizer(SceneRandomizer):
             data = self._env_ref.data
 
         metadata = {
+            "mug_inertia_revision": MUG_INERTIA_REVISION,
             "mug_variant": mug_variants[0],
             "mug_variants": list(mug_variants),
             "mug_count": len(mug_variants),
@@ -105,6 +108,8 @@ class MugVariantRandomizer(SceneRandomizer):
         return state
 
     def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
+        if state.metadata.get("mug_inertia_revision") != MUG_INERTIA_REVISION:
+            raise ValueError("Mug replay requires the recorded whole-visual-shell inertia revision")
         mug_variants = self._mug_variants_from_state(state)
         self._set_active_mug_count(len(mug_variants))
         self._current_scale_states = dict(state.scale_states)
@@ -508,6 +513,7 @@ class MugTreeRandomizer(MugVariantRandomizer):
                 data = self._env_ref.data
 
             metadata: dict[str, Any] = {
+                "mug_inertia_revision": MUG_INERTIA_REVISION,
                 "mug_variant": mug_variants[0],
                 "mug_variants": list(mug_variants),
                 "mug_count": len(mug_variants),
@@ -552,6 +558,7 @@ class MugTreeRandomizer(MugVariantRandomizer):
             rng=rng,
             scale_states=last_scale_states,
             metadata={
+                "mug_inertia_revision": MUG_INERTIA_REVISION,
                 "mug_variant": mug_variants[0],
                 "mug_variants": list(mug_variants),
                 "mug_count": len(mug_variants),
@@ -664,6 +671,7 @@ class MugFlipRandomizer(MugVariantRandomizer):
                 data = self._env_ref.data
 
             metadata: dict[str, Any] = {
+                "mug_inertia_revision": MUG_INERTIA_REVISION,
                 "mug_variant": mug_variants[0],
                 "mug_variants": list(mug_variants),
                 "mug_count": len(mug_variants),
@@ -716,6 +724,7 @@ class MugFlipRandomizer(MugVariantRandomizer):
             rng=rng,
             scale_states=last_scale_states,
             metadata={
+                "mug_inertia_revision": MUG_INERTIA_REVISION,
                 "mug_variant": mug_variants[0],
                 "mug_variants": list(mug_variants),
                 "mug_count": len(mug_variants),
