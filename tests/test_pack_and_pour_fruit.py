@@ -6,12 +6,15 @@ import copy
 import json
 import unittest
 import xml.etree.ElementTree as ET
+from dataclasses import replace
+from pathlib import Path
 
 import abc_sim
 import mujoco
 import numpy as np
 from abc_sim.randomization.assets.fruit_bowls import (
     BOWL_COLORS,
+    BOWL_SEGMENTS,
     FRUIT_CATEGORIES,
     FruitSpec,
     build_bowl,
@@ -29,24 +32,34 @@ class PourFixture:
     """A scripted wrist positions the bowl; fruits move only through solved physics."""
 
     def __init__(self, *, radius=0.024, force_allowance_n=15.0):
+        self.source = source_bowl_spec()
+        self.target = target_bowl_spec()
         root = ET.Element("mujoco")
         ET.SubElement(root, "compiler", angle="radian")
         ET.SubElement(root, "option", timestep=".002", integrator="implicitfast")
         asset, world = ET.SubElement(root, "asset"), ET.SubElement(root, "worldbody")
         ET.SubElement(world, "geom", name="table_plane", type="plane", size="1 1 .1", pos="0 0 .75")
         for name, spec, pos in (
-            ("source_bowl", source_bowl_spec(), ".6 -.2 .75"),
-            ("target_bowl", target_bowl_spec(), ".6 .2 .75"),
+            ("source_bowl", self.source, ".6 -.2 .75"),
+            ("target_bowl", self.target, ".6 .2 .75"),
         ):
             assets, body = build_bowl(name, spec)
             body.set("pos", pos)
             asset.extend(assets)
             world.append(body)
         ET.SubElement(world, "body", name="carrier", mocap="true", pos=".6 -.2 .75")
+        rim_radius = self.source.wall / 2
+        rim_center = self.source.rim_radius + rim_radius
+        finger_offset = np.sqrt((0.006 + rim_radius - 0.0001) ** 2 - rim_radius**2)
         for side in ("left", "right"):
             arm = ET.SubElement(world, "body", name=f"{side}_arm", mocap="true", pos="-2 0 2")
-            for suffix, x in (("left", -0.09962), ("right", -0.11638)):
-                finger = ET.SubElement(arm, "body", name=f"{side}_link_{suffix}_finger", pos=f"{x} 0 .083")
+            for suffix, x in (("left", -rim_center + finger_offset), ("right", -rim_center - finger_offset)):
+                finger = ET.SubElement(
+                    arm,
+                    "body",
+                    name=f"{side}_link_{suffix}_finger",
+                    pos=f"{x} 0 {self.source.height + rim_radius}",
+                )
                 ET.SubElement(
                     finger, "geom", type="sphere", size=".006", friction=".6 .005 .0005", solref=".08 1", priority="2"
                 )
@@ -56,7 +69,7 @@ class PourFixture:
                 world,
                 "body",
                 name=f"fruit_{i}",
-                pos=f"{0.6 + 0.031 * np.cos(angle)} {-0.2 + 0.031 * np.sin(angle)} {0.756 + radius}",
+                pos=f"{0.6 + 0.031 * np.cos(angle)} {-0.2 + 0.031 * np.sin(angle)} {0.75 + self.source.floor + radius}",
             )
             ET.SubElement(body, "freejoint", name=f"fruit_{i}_joint")
             ET.SubElement(
@@ -195,9 +208,14 @@ class PourPhysicsTest(unittest.TestCase):
 
     def test_wall_grasp_can_transport_the_filled_bowl(self):
         fixture = PourFixture(force_allowance_n=1e6)
-        for suffix, x in (("left", -0.0808), ("right", -0.0978)):
+        source = fixture.source
+        z = (source.floor + source.height) / 2
+        inner_radius = (source.bottom_radius + source.rim_radius) / 2
+        slope = (source.rim_radius - source.bottom_radius) / (source.height - source.floor)
+        offset = 0.0059 * np.sqrt(1 + slope**2)
+        for suffix, x in (("left", -inner_radius + offset), ("right", -inner_radius - source.wall - offset)):
             body = fixture.model.body(f"left_link_{suffix}_finger").id
-            fixture.model.body_pos[body] = [x, 0, 0.04]
+            fixture.model.body_pos[body] = [x, 0, z]
         result = fixture.transport()
         self.assertFalse(result.metrics["rim_held"][0])
         self.assertTrue(result.metrics["bowl_held"][0])
@@ -227,7 +245,7 @@ class PourPhysicsTest(unittest.TestCase):
         fixture = PourFixture(force_allowance_n=1e6)
         fixture.steps(600)
         fixture.grip()
-        # Carry just above the receiver rim, below the overhead dwell threshold.
+        # Carry clear of the receiver rim before lowering.
         fixture.move(np.array([0.6, -0.2, 0.835]), steps=750)
         fixture.move(np.array([0.668, 0.2, 0.835]), steps=1000)
         fixture.move(np.array([0.668, 0.2, 0.7562]), steps=750)
@@ -273,9 +291,9 @@ class PourPhysicsTest(unittest.TestCase):
         fixture.data.mocap_pos[fixture.hand] = [-2, 0, 2]
         fixture.steps(500)
         # Model residual fruit momentum from a rough delivery; MuJoCo solves its exit and landing.
-        fixture.data.joint("fruit_1_joint").qvel[:3] = [1.0, 0, 0.7]
+        fixture.data.joint("fruit_1_joint").qvel[:3] = [1.1, 0, 0.9]
         departures = 0
-        for _ in range(1500):
+        for _ in range(2000):
             result = fixture.steps(1)
             if result.metrics["fruit_departure_mask"].any():
                 self.assertFalse(result.metrics["bowl_held"][0])
@@ -366,9 +384,11 @@ class PourPhysicsTest(unittest.TestCase):
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
         self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
         fixture.put_fruit(3, third_position)
+        protruding = fixture.data.joint("fruit_1_joint").qpos[:3].copy()
+        protruding[2] = 0.75 + fixture.source.height - 0.012
         for _ in range(600):
             # Its center is inside, but the top protrudes above the bowl's mouth.
-            fixture.put_fruit(1, [0.6, -0.2, 0.820])
+            fixture.put_fruit(1, protruding)
             result = fixture.steps(1)
         self.assertTrue(result.metrics["fruit_packed_mask"].all())
         self.assertFalse(result.metrics["fruit_in_source_mask"][0, 0])
@@ -395,7 +415,8 @@ class PourPhysicsTest(unittest.TestCase):
         right = fixture.model.body("right_arm").mocapid[0]
         for i in range(1, 4):
             xyz = fixture.data.joint(f"fruit_{i}_joint").qpos[:3].copy()
-            fixture.data.mocap_pos[right] = xyz + [0.09962, 0, -0.083]
+            finger = fixture.model.body("right_link_left_finger").id
+            fixture.data.mocap_pos[right] = xyz - fixture.model.body_pos[finger]
             fixture.steps(1)
             fixture.data.mocap_pos[right] = [-2, 0, 2]
             fixture.put_fruit(i, [0.6, 0.2 + (i - 2) * 0.06, 0.780])
@@ -508,6 +529,64 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertTrue(fixture.result().metrics["rim_held"][0])
 
 
+class BowlMaterialTest(unittest.TestCase):
+    @staticmethod
+    def compile_bowl(spec):
+        root = ET.Element("mujoco")
+        assets, body = build_bowl("bowl", spec)
+        ET.SubElement(root, "asset").extend(assets)
+        ET.SubElement(root, "worldbody").append(body)
+        return mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+
+    def test_mass_matches_polypropylene_volume_of_floor_walls_and_rim(self):
+        for spec in (source_bowl_spec(), target_bowl_spec()):
+            with self.subTest(spec=spec):
+                model = self.compile_bowl(spec)
+                self.assertEqual(spec.density, 900)
+                angle = np.pi / BOWL_SEGMENTS
+                floor_volume = np.pi * ((spec.bottom_radius + spec.wall) / np.cos(angle)) ** 2 * spec.floor
+                wall_volume = (
+                    BOWL_SEGMENTS
+                    * np.tan(angle)
+                    * (spec.height - spec.floor)
+                    * (spec.wall * (spec.bottom_radius + spec.rim_radius) + spec.wall**2)
+                )
+                capsule_radius = spec.wall / 2
+                capsule_length = 2 * (spec.rim_radius + capsule_radius) * np.tan(angle)
+                rim_volume = BOWL_SEGMENTS * np.pi * (capsule_radius**2 * capsule_length + 4 / 3 * capsule_radius**3)
+                expected = spec.density * (floor_volume + wall_volume + rim_volume)
+                np.testing.assert_allclose(model.body("bowl").mass[0], expected, rtol=1e-6)
+                self.assertTrue((model.body("bowl").inertia > 0).all())
+                self.assertGreater(model.body("bowl").ipos[2], spec.floor)
+                self.assertLess(model.body("bowl").ipos[2], spec.height)
+
+    def test_mass_and_inertia_follow_density_and_size(self):
+        spec = source_bowl_spec()
+        reference = self.compile_bowl(spec).body("bowl")
+        denser = self.compile_bowl(replace(spec, density=1800)).body("bowl")
+        np.testing.assert_allclose(denser.mass, reference.mass * 2)
+        np.testing.assert_allclose(denser.inertia, reference.inertia * 2)
+        np.testing.assert_allclose(denser.ipos, reference.ipos, atol=1e-12)
+        scale = 0.8
+        smaller = self.compile_bowl(
+            replace(
+                spec,
+                bottom_radius=spec.bottom_radius * scale,
+                rim_radius=spec.rim_radius * scale,
+                height=spec.height * scale,
+                floor=spec.floor * scale,
+                wall=spec.wall * scale,
+            )
+        ).body("bowl")
+        np.testing.assert_allclose(smaller.mass, reference.mass * scale**3, rtol=1e-6)
+        # Thin float32 wall meshes incur compiler roundoff in their inertia frames.
+        np.testing.assert_allclose(smaller.inertia, reference.inertia * scale**5, rtol=1e-4)
+        np.testing.assert_allclose(smaller.ipos, reference.ipos * scale, atol=1e-8)
+        for density in (0, -900, np.nan):
+            with self.assertRaises(ValueError):
+                replace(spec, density=density)
+
+
 class PourSceneTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -541,6 +620,18 @@ class PourSceneTest(unittest.TestCase):
         self.assertEqual(categories, set(FRUIT_CATEGORIES))
         self.assertEqual(len(layouts), 32)
         self.assertGreaterEqual(len(prompts), 5)
+
+    def test_static_scene_and_randomization_use_the_same_plastic_bowls(self):
+        scene = Path(abc_sim.__file__).parent / "models" / "yam_pack_and_pour_fruit_scene.xml"
+        baseline = mujoco.MjModel.from_xml_path(str(scene))
+        self.env.reset(seed=6)
+        for name, spec in (("source_bowl", source_bowl_spec()), ("target_bowl", target_bowl_spec())):
+            np.testing.assert_allclose(baseline.body(name).mass, self.env.model.body(name).mass)
+            np.testing.assert_allclose(baseline.body(name).inertia, self.env.model.body(name).inertia)
+            np.testing.assert_allclose(self.env.model.site(f"{name}_cavity_rim").pos, [0, 0, spec.height])
+            self.assertEqual(self.env.model.site(f"{name}_cavity_rim").size[0], spec.rim_radius)
+        self.assertAlmostEqual(self.env.model.body("source_bowl").mass[0], 0.079662, places=5)
+        self.assertAlmostEqual(self.env.model.body("target_bowl").mass[0], 0.330931, places=5)
 
     def test_replay_and_independent_instances_are_identical(self):
         self.env.reset(seed=9)

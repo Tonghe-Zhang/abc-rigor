@@ -65,8 +65,8 @@ env.close()
 
 ### Pack and pour fruit
 
-`pack_and_pour_fruit` starts with three 42–50 mm fruits, a 21 cm bowl with a
-6 mm rounded rim, and a shallow 34 cm receiving bowl. Apple, orange, lemon,
+`pack_and_pour_fruit` starts with three 42–50 mm fruits, a bowl with a 16 cm
+opening and 6 cm height, and a shallow 34 cm receiving bowl. Apple, orange, lemon,
 and tomato asset variants have textured visuals enclosed by spherical
 collision geometry. Both bowls have solid floors and open, outward-flaring
 walls. The receiver is large enough to catch all three fruits together.
@@ -78,6 +78,13 @@ print(env.prompt)
 ```
 
 Install assets with `uv run prepare.py --sim-task pack_and_pour_fruit`.
+
+Both bowls use polypropylene density **900 kg/m³**, **2.5 mm walls** and a
+**3 mm base**. MuJoCo infers their mass, center of mass and inertia from the
+floor, convex wall segments and rounded rim geoms. The empty source bowl is
+approximately **79.7 g**, and the receiver is **330.9 g**. The source's outer
+diameter is about **16.6 cm**. Force allowances and support thresholds use the
+compiled body weights.
 The seed controls identities, fruit radii, five separated poses, two distinct
 named colors from eight choices, and six prompt templates. Prompts name the
 realized colors, such as “Place all the fruits into the blue bowl, then pour

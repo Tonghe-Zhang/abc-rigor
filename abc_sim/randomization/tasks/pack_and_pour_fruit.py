@@ -13,6 +13,7 @@ from abc_sim.task_specs import PACK_AND_POUR_FRUIT_TEMPLATES
 
 from ..assets.fruit_bowls import (
     BOWL_COLORS,
+    BOWL_SEGMENTS,
     FRUIT_CATEGORIES,
     FruitSpec,
     build_bowl,
@@ -66,7 +67,8 @@ class PackAndPourFruitRandomizer(SceneRandomizer):
             for elem in list(parent):
                 if elem.get("name", "").startswith(("source_bowl", "target_bowl", "fruit_")):
                     parent.remove(elem)
-        for name, spec in (("source_bowl", source_bowl_spec(source)), ("target_bowl", target_bowl_spec(target))):
+        bowls = (("source_bowl", source_bowl_spec(source)), ("target_bowl", target_bowl_spec(target)))
+        for name, spec in bowls:
             assets, body = build_bowl(name, spec)
             asset.extend(assets)
             world.append(body)
@@ -81,8 +83,7 @@ class PackAndPourFruitRandomizer(SceneRandomizer):
             env.reload_from_xml(xml)
         env._set_robot_qpos(robot_qpos)
         self._radii = {
-            "source_bowl_joint": 0.115,
-            "target_bowl_joint": 0.180,
+            **{f"{name}_joint": (spec.rim_radius + spec.wall) / np.cos(np.pi / BOWL_SEGMENTS) for name, spec in bowls},
             **{f"fruit_{i}_joint": fruit.radius for i, fruit in enumerate(fruits, 1)},
         }
 

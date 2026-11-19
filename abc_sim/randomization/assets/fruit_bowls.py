@@ -14,6 +14,7 @@ from ..core import _format_float_list, _scale_body_subtree
 from .tabletop_distractors import DistractorSpec, build_distractor, distractor_variants
 
 BOWL_SEGMENTS = 32
+POLYPROPYLENE_DENSITY_KG_M3 = 900.0
 BOWL_COLORS = {
     "blue": (0.06, 0.25, 0.80),
     "white": (0.92, 0.92, 0.89),
@@ -33,26 +34,26 @@ class BowlSpec:
     bottom_radius: float
     rim_radius: float
     height: float
-    wall: float = 0.006
-    floor: float = 0.006
-    mass: float = 0.22
+    wall: float = 0.0025
+    floor: float = 0.003
+    density: float = POLYPROPYLENE_DENSITY_KG_M3
 
     def __post_init__(self):
         if self.color not in BOWL_COLORS:
             raise ValueError(f"Unknown bowl color: {self.color!r}.")
-        values = (self.bottom_radius, self.rim_radius, self.height, self.wall, self.floor, self.mass)
+        values = (self.bottom_radius, self.rim_radius, self.height, self.wall, self.floor, self.density)
         if not np.isfinite(values).all() or min(values) <= 0:
-            raise ValueError("Bowl dimensions and mass must be finite and positive.")
+            raise ValueError("Bowl dimensions and density must be finite and positive.")
         if not self.floor < self.height or not self.bottom_radius < self.rim_radius:
             raise ValueError("An open bowl requires a rising, outward-flaring wall.")
 
 
 def source_bowl_spec(color="blue"):
-    return BowlSpec(color, bottom_radius=0.070, rim_radius=0.105, height=0.080)
+    return BowlSpec(color, bottom_radius=0.050, rim_radius=0.080, height=0.060)
 
 
 def target_bowl_spec(color="white"):
-    return BowlSpec(color, bottom_radius=0.145, rim_radius=0.170, height=0.065, mass=0.40)
+    return BowlSpec(color, bottom_radius=0.145, rim_radius=0.170, height=0.065)
 
 
 def build_bowl(name: str, spec: BowlSpec) -> tuple[list[ET.Element], ET.Element]:
@@ -68,21 +69,14 @@ def build_bowl(name: str, spec: BowlSpec) -> tuple[list[ET.Element], ET.Element]
     )
     body = ET.Element("body", name=name, pos="0.60 0 0.75")
     ET.SubElement(body, "freejoint", name=f"{name}_joint")
-    inertia = spec.mass * np.array(
-        [
-            (3 * spec.rim_radius**2 + spec.height**2) / 12,
-            (3 * spec.rim_radius**2 + spec.height**2) / 12,
-            spec.rim_radius**2 / 2,
-        ]
+    # MuJoCo infers mass, center of mass, and inertia from the compound shell.
+    geom = dict(
+        material=f"{name}_color",
+        density=str(spec.density),
+        friction="0.6 0.005 0.0005",
+        solref="0.004 1",
+        condim="6",
     )
-    ET.SubElement(
-        body,
-        "inertial",
-        pos=f"0 0 {spec.height * 0.35}",
-        mass=str(spec.mass),
-        diaginertia=_format_float_list(inertia),
-    )
-    geom = dict(material=f"{name}_color", friction="0.6 0.005 0.0005", solref="0.004 1", condim="6")
     apothem_scale = 1 / np.cos(np.pi / BOWL_SEGMENTS)
     ET.SubElement(
         body,
