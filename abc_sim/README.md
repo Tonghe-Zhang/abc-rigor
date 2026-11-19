@@ -66,8 +66,15 @@ env.close()
 ### Stand three water bottles upright
 
 `lift_bottles_upright` uses the ABC station with exactly three water bottles and
-no bin. Bottles start lying on their sides at separated, seed-randomized positions
-and headings. Install its assets with
+1–3 household distractors. Each bottle is sampled independently from 14 water-bottle
+variants (`bottle_5` through `bottle_18`) and starts lying on its side.
+Distractors come from 20 categories / 75 variants: mugs, bowls, coffee cups, cans,
+canned food, food boxes, drink cartons, cereal, jars, yogurt, soap bars, sponges,
+apples, lemons, oranges, tomatoes, potatoes, donuts, cupcakes, and trash bins.
+The trash bins include the round orange bin and the blue mesh bin from the bottle
+tasks. Categories are sampled without replacement; bins are distractors, not goals.
+Full visual/collision footprints fit the table, with clearance from other objects
+and the reset arm pose. Install its assets with
 `uv run prepare.py --sim-task lift_bottles_upright`, then select the task through
 `abc_sim.make_env(task="lift_bottles_upright")`.
 
@@ -75,13 +82,50 @@ Seed 0 prompts “lift the bottles upright”. Consecutive seeds cycle through
 sixteen equivalent instructions, including “stand all three water bottles
 upright” and “lift each bottle and set it down upright”. Each instruction is
 also a task alias; reset records the selected wording in the episode metadata.
+The seed controls bottle variants, distractor count/identities, positions, headings,
+and wording. Repeating a seed reproduces the scene; serialized randomization
+states restore all object identities and poses, including across changed counts.
 
-Reward is the fraction of bottles standing cap-up on the table. Success requires
-all three: axes within 14° of vertical, base origins within 8 mm of table height,
-and inside the tabletop with an edge margin. This is a pose rubric without a
-release or dwell-time requirement; airborne, inverted, sideways, and off-table
-bottles do not count. The task has a finite table collision box so objects pushed
-over the edge fall.
+To vary placement while retaining the same objects, pin the three bottle variants
+and distractor identities through reset options:
+
+```python
+env.reset(seed=42, options={"randomization": {
+    "bottle_variants": ["bottle_5", "bottle_11", "bottle_18"],
+    "distractors": [
+        {"category": "trash_bin", "variant": "blue_mesh"},
+        {"category": "apple", "variant": "apple_10"},
+    ],
+}})
+```
+
+`distractor_variants(category)` in
+`abc_sim.randomization.assets.tabletop_distractors` lists installed choices.
+With no identity overrides, all assets are resampled each episode. The same seed
+in all worlds already produces matching models. Assets use their native sizes.
+
+Reward is the current fraction of independently standing, settled bottles.
+Each bottle must satisfy all of these for **0.5 uninterrupted seconds**:
+
+- Cap-up axis within 14° of vertical, base origin within 8 mm of table height
+  (0.75 m), x in [0.34, 0.84] and y in [-0.53, 0.53].
+- Upward solved tabletop contact at its base carrying at least 80% of its weight.
+- No contact with the robot, other bottles, or distractors.
+- Linear speed at most 0.03 m/s and angular speed at most 0.25 rad/s.
+
+Any interruption clears that bottle's dwell and credit. All three must qualify
+simultaneously for success. Historical maximum/ever-success metrics are diagnostics;
+they do not preserve reward after a bottle falls. A bottle held upright, propped
+against clutter, bouncing, or supported inside a trash bin earns no credit.
+The table uses a finite collision box so objects pushed over the edge fall.
+
+The evaluator observes **every solved native physics tick** through `env.step`,
+`env.apply_action`, or `env.advance_physics`. Evaluation is a read of cached state;
+repeated reads cannot accumulate dwell. Direct `mujoco.mj_step` callers must also
+invoke the observer exactly once per tick. Qpos-only scoring is explicitly
+unsupported. Independent native environments support seeded RL workers, including
+identical scene seeds across 16 workers. ABC's current batched MJWarp backend does
+not support these physics observers and rejects this task.
 
 For a runnable example:
 

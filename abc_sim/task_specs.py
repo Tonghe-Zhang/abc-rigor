@@ -106,7 +106,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="lift_bottles_upright",
         env_task="lift_bottles_upright",
         prompt=LIFT_BOTTLES_UPRIGHT_PROMPTS[0],
-        description="Stand three side-lying water bottles upright on the table.",
+        description="Stand three side-lying water bottles upright among household distractors.",
         evaluator_name="bottles_upright",
         aliases=LIFT_BOTTLES_UPRIGHT_PROMPTS[1:],
     ),

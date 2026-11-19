@@ -106,7 +106,7 @@ SIM_BASE_PACKAGES = ("i2rt_yam",)
 SIM_TASK_PACKAGES = {
     "bottles": (),
     "put_bottles": ("task_water_bottles",),
-    "lift_bottles_upright": ("task_water_bottles",),
+    "lift_bottles_upright": ("task_water_bottles", "task_grab_clutter"),
     "dishrack": ("task_dishrack",),
     "mug_flip": ("mug", "tray", "task_mug_flip"),
     "sweep": ("brush_flat", "dustpan", "garbage_can", "paper_ball"),
