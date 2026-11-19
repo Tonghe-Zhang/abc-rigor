@@ -25,9 +25,11 @@ released from both entire arm subtrees, directly supported by table contact
 carrying at least half its weight, and moving no faster than 1 cm/s and 0.1 rad/s.
 
 Row detection uses all cubes, including unrequested, untouched and held
-occupants. A row has at least two cubes, at most 3 cm of lateral spread and
-2.5–6 cm spacing per occupied or empty slot. Among connected candidate rows,
-the row with the most deliberately placed cubes supplies the output; ties
+occupants. A row has at least two distinct projected slots, at most 3 cm of
+lateral spread and 2.5–6 cm spacing per occupied or empty slot. Only components
+with admissible row geometry compete. The row with the most deliberately
+populated slots supplies the output; stacked multiplicity does not increase
+that count. A separate discarded pile cannot suppress a valid row. Ties
 retain only credit common to every candidate, without choosing by letter identity.
 Reading starts at the first occupied position toward decreasing scene Y.
 Thus an incomplete `ZXB` prefix earns 0.75, and `Z_BI` with an unambiguous empty

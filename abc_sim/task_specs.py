@@ -472,7 +472,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
             ("margin_m", 0.05),
             ("height_min_m", -0.06),
             ("height_max_m", 0.45),
-            ("upright_normal_z_max", 0.55),
+            ("upright_normal_z_max", 2**-0.5),  # At most 45 degrees from vertical.
             ("horizontal_normal_z_min", 0.75),
         ),
         aliases=(

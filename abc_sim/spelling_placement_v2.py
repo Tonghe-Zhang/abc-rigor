@@ -71,8 +71,8 @@ def score_spelling_placement(
 ) -> dict:
     """Score one assembled row, retaining wrong and ineligible occupants.
 
-    Rows are connected geometric components with at least two occupants.
-    The component with the most deliberately placed blocks is the output row;
+    Rows are admissible connected components with at least two distinct slots.
+    The row with the most deliberately populated slots is the output row;
     tied components retain only credit common to every interpretation.
     Reading starts at the first occupied position, toward decreasing scene Y.
     Longer gaps admit empty slots. An overlong row has ambiguous endpoints.
@@ -116,10 +116,8 @@ def score_spelling_placement(
             candidates.append(indices)
 
     progress = np.zeros(count)
-    diagnostics, interpretations = [], []
-    largest = max((int(placed[row].sum()) for row in candidates), default=0)
+    diagnostics, interpretations, ranked_rows = [], [], []
     for row in candidates:
-        selected = int(placed[row].sum()) == largest
         groups = []
         for index in row:
             if groups and positions[groups[-1][0], 1] - positions[index, 1] <= cfg.slot_overlap_m:
@@ -133,7 +131,7 @@ def score_spelling_placement(
             for gap in gaps
         ]
         row_scores = []
-        if np.ptp(positions[row, 0]) <= cfg.row_width_m:
+        if len(groups) >= 2 and np.ptp(positions[row, 0]) <= cfg.row_width_m:
             for jumps in product(*options):
                 span = 1 + sum(jumps)
                 if span > max_span:
@@ -150,12 +148,20 @@ def score_spelling_placement(
                                 1.0 if 0 <= slot < length and letters[index] == word[slot] else cfg.misplaced_fraction
                             )
                     row_scores.append(values)
-        diagnostics.append(
-            {"occupants": [letters[index] for index in row], "selected": selected, "interpretations": len(row_scores)}
-        )
-        if selected:
-            # A selected malformed row has no admissible placement interpretation.
-            interpretations.extend(row_scores if row_scores else [np.zeros(count)])
+        diagnostic = {
+            "occupants": [letters[index] for index in row],
+            "selected": False,
+            "interpretations": len(row_scores),
+        }
+        diagnostics.append(diagnostic)
+        if row_scores:
+            populated_slots = sum(bool(placed[group].any()) for group in groups)
+            ranked_rows.append((populated_slots, row_scores, diagnostic))
+    largest = max((rank for rank, _, _ in ranked_rows), default=0)
+    for rank, row_scores, diagnostic in ranked_rows:
+        if rank == largest:
+            diagnostic["selected"] = True
+            interpretations.extend(row_scores)
     if interpretations:
         progress = np.min(interpretations, axis=0)
     return {

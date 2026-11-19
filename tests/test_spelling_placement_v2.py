@@ -5,7 +5,6 @@ import string
 import unittest
 
 import numpy as np
-
 from abc_sim.spelling_placement_v2 import SpellingPlacementV2Cfg, score_spelling_placement
 
 
@@ -105,6 +104,38 @@ class SpellingPlacementV2Tests(unittest.TestCase):
             sample["placed"][j] = True
             sample["positions"][j] = [0.2, 0.1 - 0.04 * index, 0.765]
         self.assertEqual(self.score(sample)["reward"], 0)
+
+    def test_discarded_stack_does_not_erase_complete_or_partial_spelling(self):
+        for row, expected in (("ZXBI", 1), ("ZXBL", 0.75), ("ZXB", 0.75), ("ZX", 0.5)):
+            for pile_size in (len(row), 5):
+                with self.subTest(row=row, pile_size=pile_size):
+                    sample = frame(row)
+                    for height, letter in enumerate("ACDEF"[:pile_size]):
+                        index = sample["letters"].index(letter)
+                        sample["positions"][index] = [0.65, 0.2, 0.765 + 0.03 * height]
+                        sample["placed"][index] = True
+                        sample["eligible"][index] = height == 0
+                    self.assertEqual(self.score(sample)["reward"], expected)
+
+    def test_row_ranking_counts_admissible_slots_without_stacked_multiplicity(self):
+        for row, expected in (("ZXBI", 1), ("ZXBL", 0.75), ("ZXB", 0.75)):
+            for layout in ("two_slots", "too_wide", "too_close"):
+                with self.subTest(row=row, layout=layout):
+                    sample = frame(row)
+                    for offset, letter in enumerate("ACDEF"):
+                        index = sample["letters"].index(letter)
+                        x, y, z = 0.65, 0.2, 0.765
+                        if layout == "two_slots":
+                            y -= 0.04 * (offset % 2)
+                            z += 0.03 * (offset // 2)
+                        elif layout == "too_wide":
+                            x += 0.015 * offset
+                            y -= 0.04 * offset
+                        else:
+                            y -= 0.01 * offset
+                        sample["positions"][index] = [x, y, z]
+                        sample["placed"][index] = True
+                    self.assertEqual(self.score(sample)["reward"], expected)
 
     def test_credit_is_current_and_order_independent_of_inventory_or_translation(self):
         sample = frame("ZXBI")
