@@ -203,8 +203,17 @@ class MugRevisionTest(unittest.TestCase):
                         randomizer, "_reload_mug_variant_scene"
                     ) as reload:
                         with self.assertRaisesRegex(ValueError, "inertia revision"):
-                            randomizer._restore_scene(None, None, state)
+                            randomizer.apply(None, None, state)
                         reload.assert_not_called()
+
+    def test_matching_revision_passes_scene_validation(self):
+        state = RandomizationState(
+            seed=1,
+            object_states={},
+            metadata={"mug_inertia_revision": MUG_INERTIA_REVISION},
+        )
+        for cls in (MugVariantRandomizer, MugTreeRandomizer, MugFlipRandomizer):
+            cls()._validate_scene(None, state)
 
     def test_generated_metadata_declares_revision_for_each_family(self):
         for cls in (MugVariantRandomizer, MugTreeRandomizer, MugFlipRandomizer):

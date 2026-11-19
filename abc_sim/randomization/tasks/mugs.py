@@ -107,9 +107,11 @@ class MugVariantRandomizer(SceneRandomizer):
             self._apply_plain_mug_colors(model, mug_colors, mug_variants)
         return state
 
-    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
+    def _validate_scene(self, model: Any, state: RandomizationState) -> None:
         if state.metadata.get("mug_inertia_revision") != MUG_INERTIA_REVISION:
             raise ValueError("Mug replay requires the recorded whole-visual-shell inertia revision")
+
+    def _restore_scene(self, model: Any, data: Any, state: RandomizationState) -> RandomizationState:
         mug_variants = self._mug_variants_from_state(state)
         self._set_active_mug_count(len(mug_variants))
         self._current_scale_states = dict(state.scale_states)
