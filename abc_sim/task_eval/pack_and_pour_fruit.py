@@ -104,6 +104,8 @@ class PackAndPourFruitEvaluator:
         self._previous_released_support = np.zeros(3, dtype=bool)
         self._fruit_support_gaps = np.full(3, self.contact_gap_seconds + self.model.opt.timestep)
         self._packed_fruits = np.zeros(3, dtype=bool)
+        self._carried_fruits = np.zeros(3, dtype=bool)
+        self._transported_fruits = np.zeros(3, dtype=bool)
         self._packed_stage = self._transport_complete = self._ever_success = False
         self._carried_filled = False
         self._transport_time = 0.0
@@ -300,10 +302,13 @@ class PackAndPourFruitEvaluator:
         self._previous_source = source_eligible
         source_qualified = source_eligible & (self._source_time >= self.settling_seconds)
         # Center containment retains earned credit through rolling and solver penetration.
-        # Completing the stage requires collision containment and a supported pile.
+        # Each fruit must qualify in a supported pile or already have been carried.
         self._packed_fruits = (self._packed_fruits | source_qualified) & source_resident
         packing_completed_now = (
-            bool(self._packed_fruits.all() and inside[0].all() and geometric_support[0].all())
+            bool(
+                (self._packed_fruits | self._carried_fruits).all()
+                and np.all(self._carried_fruits | (inside[0] & geometric_support[0]))
+            )
             and not self._packed_stage
         )
         self._packed_stage |= packing_completed_now
@@ -320,7 +325,16 @@ class PackAndPourFruitEvaluator:
         self._holds &= self._contact_gaps[None] <= self.contact_gap_seconds
         held = bool(self._holds[0].any())
         source_lift = float(bowl_pos[0, 2] - self._initial_source_z)
-        self._carried_filled |= bool(self._packed_stage and inside[0].all() and held and source_lift >= 0.05)
+        lift_load = (
+            (self._packed_fruits | self._packed_stage)
+            & inside[0]
+            & (self._fruit_support_gaps <= self.contact_gap_seconds)
+        )
+        if held and source_lift >= 0.05 and lift_load.any() and np.array_equal(lift_load, source_resident):
+            # Remember every qualified fruit lifted in the bowl. Spills cannot
+            # shrink the load against which emptying is measured.
+            self._carried_fruits |= lift_load
+        self._carried_filled = bool(self._carried_fruits.any())
         overhead_distance = float(np.linalg.norm(bowl_pos[0, :2] - bowl_pos[1, :2]))
         above, floor_inside = self._source_floor_placement(data, bowl_pos, bowl_rot)
         in_transport_zone = self._source_in_transport_zone(bowl_pos, bowl_rot)
@@ -337,17 +351,21 @@ class PackAndPourFruitEvaluator:
             and settled[3]
             and bowl_ok[1]
         )
+        pending_load = self._carried_fruits & ~self._emptied
         transport = (
-            self._carried_filled
-            and source_resident.all()
+            bool(pending_load.any())
+            and np.all(~pending_load | source_resident)
             and (source_nested or (in_transport_zone and (held or receiver_supported)))
         )
         self._transport_time = self._transport_time + elapsed if transport and self._previous_transport else 0.0
         self._previous_transport = bool(transport)
-        self._transport_complete |= bool(transport and self._transport_time >= self.transport_seconds)
+        transported_now = bool(transport and self._transport_time >= self.transport_seconds)
+        self._transport_complete |= transported_now
+        self._transported_fruits |= pending_load & transported_now
         # A brushed fruit can re-arm after being released onto the supported pile.
         source_rearmed = released_support & (self._released_support_time >= self.fruit_rearm_seconds)
-        self._armed |= ((source_qualified | source_rearmed) & self._packed_stage) | (
+        packing_credit = self._packed_fruits | self._carried_fruits | self._packed_stage
+        self._armed |= ((source_qualified | source_rearmed) & packing_credit) | (
             self._packed_fruits & packing_completed_now
         )
         self._armed &= ~touching_robot[:3] & ~fruit_table
@@ -371,7 +389,7 @@ class PackAndPourFruitEvaluator:
                 & opening
                 & self._armed
                 & ~touching_robot[:3]
-                & self._transport_complete
+                & self._transported_fruits
                 & pouring_support
                 & (tilt_deg >= self.pour_tilt_degrees)
             )
@@ -387,8 +405,11 @@ class PackAndPourFruitEvaluator:
         self._target_time = np.where(target_eligible & self._previous_target, self._target_time + elapsed, 0)
         self._previous_target = target_eligible
         caught = target_eligible & (self._target_time >= self.settling_seconds)
+        source_empty_after_pour = bool(
+            self._carried_filled and np.all(~self._carried_fruits | self._emptied) and not source_resident.any()
+        )
         return_eligible = bool(
-            self._transport_complete and self._emptied.all() and bowl_ok[0] and not touching_robot[3]
+            self._transport_complete and source_empty_after_pour and bowl_ok[0] and not touching_robot[3]
         )
         self._return_time = self._return_time + elapsed if return_eligible and self._previous_return else 0.0
         self._previous_return = return_eligible
@@ -397,14 +418,15 @@ class PackAndPourFruitEvaluator:
         self._force_dose_ns += excess * elapsed
         self._peak_force_n = np.maximum(self._peak_force_n, loads)
         damage = np.minimum(self._force_dose_ns / self.force_dose_budget_ns, 1)
-        packing = (
-            (self._packed_fruits | self._packed_stage)
-            * self.packing_reward
-            / 3
-            * (1 - self.gentle_fraction * damage[:3])
+        emptying_shares = np.full(3, self.emptying_reward / 3)
+        if self._carried_filled:
+            emptying_shares = self._carried_fruits * self.emptying_reward / self._carried_fruits.sum()
+        self._gentle_credit[:3] = self.gentle_fraction * (
+            self.packing_reward / 3 + (emptying_shares + self.catching_reward / 3) / 2
         )
+        packing = packing_credit * self.packing_reward / 3 * (1 - self.gentle_fraction * damage[:3])
         transporting = self._transport_complete * self.transport_reward * (1 - self.gentle_fraction * damage[3])
-        emptying = self._emptied * self.emptying_reward / 3 * (1 - self.gentle_fraction / 2 * (damage[:3] + damage[3]))
+        emptying = self._emptied * emptying_shares * (1 - self.gentle_fraction / 2 * (damage[:3] + damage[3]))
         catching = caught * self.catching_reward / 3 * (1 - self.gentle_fraction / 2 * (damage[:3] + damage[4]))
         returning = returned * self.return_reward * (1 - self.gentle_fraction * damage[3])
         success = bool(returned and caught.all())
@@ -419,6 +441,7 @@ class PackAndPourFruitEvaluator:
                 "catching_reward": np.array([catching.sum()]),
                 "return_reward": np.array([returning]),
                 "source_return_eligible": np.array([return_eligible]),
+                "source_empty_after_pour": np.array([source_empty_after_pour]),
                 "source_return_settling_seconds": np.array([self._return_time]),
                 "source_returned": np.array([returned]),
                 "fruit_packing_reward": packing[None],
@@ -429,12 +452,18 @@ class PackAndPourFruitEvaluator:
                 "filled_bowl_carried": np.array([self._carried_filled]),
                 "source_nested_in_target": np.array([source_nested]),
                 "num_packed_fruits": np.array([int(self._packed_fruits.sum())]),
+                "num_carried_fruits": np.array([int(self._carried_fruits.sum())]),
+                "num_transported_fruits": np.array([int(self._transported_fruits.sum())]),
                 "num_emptied_fruits": np.array([int(self._emptied.sum())]),
                 "num_caught_fruits": np.array([int(caught.sum())]),
                 "fruit_in_source_mask": inside[0:1],
                 "fruit_source_resident_mask": source_resident[None],
                 "fruit_in_target_mask": inside[1:2],
                 "fruit_packed_mask": self._packed_fruits[None].copy(),
+                "fruit_packing_credit_mask": packing_credit[None],
+                "fruit_carried_mask": self._carried_fruits[None].copy(),
+                "fruit_transported_mask": self._transported_fruits[None].copy(),
+                "fruit_emptying_capacity": emptying_shares[None],
                 "fruit_source_eligible_mask": source_eligible[None],
                 "fruit_source_qualified_mask": source_qualified[None],
                 "fruit_source_settling_seconds": self._source_time[None].copy(),
@@ -483,6 +512,7 @@ class PackAndPourFruitEvaluator:
                 "excess_force_n": excess[None],
                 "force_dose_ns": self._force_dose_ns[None].copy(),
                 "force_penalty": (self._gentle_credit * damage)[None],
+                "force_gentle_credit": self._gentle_credit[None].copy(),
                 "ever_success": np.array([self._ever_success]),
             },
         )

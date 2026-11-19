@@ -102,36 +102,51 @@ Reward stages are chronological:
 | Stage | Maximum | Qualification |
 | --- | ---: | --- |
 | Packing | 0.2 | 0.2/3 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
-| Transport | 0.2 | All three packed together, then a bowl grasp lifts the filled bowl and carries it above or into the receiver |
-| Emptying | 0.25 | 0.25/3 per fruit observed leaving the tilted bowl's opening after transport, while grasped or supported by the receiver |
+| Transport | 0.2 | At least one qualified fruit lifted in the grasped bowl, then the load carried above or into the receiver |
+| Emptying | 0.25 | Fraction of the carried load observed leaving the tilted bowl's opening after transport, while grasped or supported by the receiver |
 | Catching | 0.25 | 0.25/3 per poured fruit settled, released and supported in the receiver for 0.5 s |
-| Return | 0.1 | All three fruits poured out, then small bowl upright, released and directly supported by the table for 0.5 s |
+| Return | 0.1 | The carried load validly poured out and the small bowl empty, upright, released and directly supported by the table for 0.5 s |
 
 Putting fruit directly into the receiver earns **zero**. Nesting the packed
 small bowl inside the receiver earns **0.4 before force deductions** and
-no pouring credit. Packing and transport retain their completed milestones.
+no pouring credit. Packing and catching remain proportional to all three fruits.
+Packing two, transporting them, pouring both into the receiver, and returning
+the empty bowl earns **0.85 before force deductions**:
+`0.2 * 2/3 + 0.2 + 0.25 + 0.25 * 2/3 + 0.1`.
+One fruit completing the same sequence earns 0.7. These are partial completions;
+binary success still requires all three caught and the source bowl returned.
+Transporting an empty bowl earns zero.
+
+Packing and transport retain their completed milestones.
 Before all three are packed, each qualified fruit retains its partial packing
 credit while its center stays inside the small bowl, including while rolling
 or being carried. This tolerates contact-solver penetration after qualification.
-Its center leaving the bowl clears that fruit's partial credit. The fruits can
-qualify at different times; having all three qualified fruits contained and
-supported together completes the permanent packing milestone. Fruits may
+Its center leaving the bowl clears that fruit's partial credit until a qualified
+bowl lift records it in the carried load; packing credit for carried fruit
+persists through pouring. The fruits can
+qualify at different times or on separate trips. Each fruit must be qualified,
+contained and supported, or already recorded in a carried load, to complete
+the permanent packing milestone. Fruits may
 protrude above either bowl's rim or stack on other fruits, with a contact-support
 path to that bowl. Above-rim fruit centers must stay over the opening; unsupported
 fruit hovering over it cannot qualify.
-Transport has a 0.1 s dwell; the filled bowl must first have been lifted
-at least 5 cm with a bowl grasp. Grasp acquisition requires both opposing
+Transport has a 0.1 s dwell; a nonempty bowl of qualified fruit must first have
+been lifted at least 5 cm with a bowl grasp. Grasp acquisition requires both opposing
 fingers of one hand contacting the bowl for 50 ms, tolerating gaps of up to
 20 ms per finger during acquisition. Once acquired, either
 finger can carry load; losing both contacts for more than 20 ms ends the hold.
 Rim contact is measured independently and does not gate reward. Transport
 allows a horizontal center distance up to the receiver's rim radius (17 cm),
 with the source mouth's center at least 1 cm above the upright receiver's rim.
-All fruit centers must remain inside during the dwell, and the bowl must be
+All fruit in the pending carried load must remain inside during the dwell, and the bowl must be
 grasped or supported by the receiver. This allows base overhang and movement
 during placement. Nesting also qualifies when the source floor is inside the receiver's
 flared cavity, with upward support from the receiver and both bowls upright and
-settled.
+settled. The observer remembers fruit membership from qualified lifts; spilling
+or manually removing one cannot shrink the emptying denominator. Later loads
+add their fruit to this set and must earn transport proof for those fruits.
+Emptying is normalized across this remembered set. A fruit placed directly
+in the receiver cannot use another fruit's transport proof to earn catching.
 Pouring requires
 at least 30° tilt and the fruit's center leaving the opening's upper column, with no
 direct robot-fruit contact. The source must either remain grasped and lifted
@@ -150,14 +165,18 @@ allowing 1 mm of side-wall solver penetration. The opening's vertical column
 admits above-rim piles; contact support is required for packing and catching.
 Fruit settling limits `linear_speed + radius * angular_speed` to 3 cm/s;
 bowls must move slower than 3 cm/s and 0.25 rad/s.
-Return credit requires the small bowl's base to receive at least 60% of its
+Return credit requires every fruit in the carried load to have validly poured
+out and no fruit remaining in the small bowl. Its base must receive at least 60% of its
 own weight from the table, its upright axis within about 11.5° of vertical,
 and no robot contact throughout the 0.5 s dwell. Any table location qualifies.
 Lifting or touching the bowl again revokes only this component. Catching every
 fruit is independent of return credit; full task success requires both.
 
-Gentle handling reserves 0.045 per fruit, 0.1275 for the small bowl and 0.0375
-for the receiver. Every solved native tick sums the magnitudes of all
+For a three-fruit load, gentle handling reserves 0.045 per fruit, 0.1275 for the
+small bowl and 0.0375 for the receiver. A smaller load divides the fruit half
+of emptying's force-sensitive share among its members; packing and catching
+retain their three-fruit denominators. The `force_gentle_credit` metric reports
+the current per-entity shares, totaling 0.3. Every solved native tick sums the magnitudes of all
 external contact forces, including friction; opposing forces add. Dose is
 `max(load - allowance, 0) * dt`, and 5 N·s consumes an entity's entire
 gentle-handling share. Fruit allowance is 15 N. Bowls add their own weight
