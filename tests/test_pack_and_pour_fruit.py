@@ -614,6 +614,17 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(result.metrics["catching_reward"][0], 0)
         self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
 
+    def test_prior_transport_cannot_credit_dumping_away_from_receiver(self):
+        fixture = PourFixture()
+        self.assertTrue(fixture.transport().metrics["transport_complete"][0])
+        fixture.move(np.array([0.6, -0.2, 0.98]))
+        fixture.move(np.array([0.57, -0.2, 0.98]), tilt=np.deg2rad(110), steps=1250)
+        result = fixture.steps(2000)
+        self.assertFalse(result.metrics["fruit_source_resident_mask"].any())
+        self.assertEqual(result.metrics["emptying_reward"][0], 0)
+        self.assertEqual(result.metrics["catching_reward"][0], 0)
+        self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
+
     def test_landing_credit_is_per_fruit_and_revoked_when_one_leaves(self):
         fixture = PourFixture()
         fixture.transport()

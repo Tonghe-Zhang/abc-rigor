@@ -103,7 +103,7 @@ Reward stages are chronological:
 | --- | ---: | --- |
 | Packing | 0.2 | 0.2/3 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
 | Transport | 0.2 | At least one qualified fruit lifted in the grasped bowl, then the load carried above or into the receiver |
-| Emptying | 0.25 | Fraction of the carried load observed leaving the tilted bowl's opening after transport, while grasped or supported by the receiver |
+| Emptying | 0.25 | Fraction of the carried load leaving the tilted bowl's opening in the transport zone, while grasped or supported by the receiver |
 | Catching | 0.25 | 0.25/3 per poured fruit settled, released and supported in the receiver for 0.5 s |
 | Return | 0.1 | The carried load validly poured out and the small bowl empty, upright, released and directly supported by the table for 0.5 s |
 
@@ -149,8 +149,9 @@ Emptying is normalized across this remembered set. A fruit placed directly
 in the receiver cannot use another fruit's transport proof to earn catching.
 Pouring requires
 at least 30° tilt and the fruit's center leaving the opening's upper column, with no
-direct robot-fruit contact. The source must either remain grasped and lifted
-5 cm or be supported by the receiver within the transport zone. Receiver
+direct robot-fruit contact. The source must remain in the transport zone,
+either grasped and lifted 5 cm or supported by the receiver. Prior transport
+does not qualify a later dump away from the receiver. Receiver
 support means at least 30% of the empty source bowl's weight carried by the
 upright, table-supported receiver. This permits fruit to finish rolling out
 after release onto the receiver; support gaps up to 20 ms are tolerated while
@@ -256,9 +257,11 @@ difference, independent of the lid angle. Translation keeps full credit through
 **5 cm**, then decreases linearly to zero at **20 cm**. Rotation keeps full
 credit through **5 degrees**, then decreases linearly to zero at **45 degrees**.
 The staying reward is `0.3 * min(translation_fraction, rotation_fraction)`,
-available only while the lid is **within 3 degrees of closed**. Opening the lid
-removes this component immediately. It reflects the current/final pose:
-returning the case restores pose credit while closed. An open reset scene earns zero.
+available only with the same fully packed, released, supported and settled
+closure required for lid credit. Empty closure, holding the case, lifting it,
+or reopening the lid removes this component. It reflects the current/final pose:
+returning the case restores pose credit once closure qualifies again.
+An untouched reset scene earns zero.
 Binary success requires packing, settled closure, and the case within both
 pose deadbands.
 

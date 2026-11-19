@@ -290,12 +290,13 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertGreater(result.scalar_reward(), 0.99)
         self.assertTrue(self.result().scalar_success())
 
-    def test_closed_empty_or_missing_object_never_gets_closure_credit(self):
+    def test_closed_empty_or_missing_object_never_gets_closure_or_staying_credit(self):
         self.pack(0, close=True)
-        self.assertAlmostEqual(self.steps(700).scalar_reward(), 0.3)
+        self.assertAlmostEqual(self.steps(700).scalar_reward(), 0)
         self.pack(2, close=True)
         result = self.steps(700)
-        self.assertAlmostEqual(result.scalar_reward(), 0.5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.2)
+        self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
         self.assertFalse(result.scalar_success())
 
     def test_current_credit_revokes_on_removal_or_reopening_and_history_resets(self):
@@ -391,6 +392,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         result = self.steps(1)
         self.assertTrue(result.metrics["object_touching_robot"][0, 0])
         self.assertTrue(result.metrics["object_packed_mask"][0, 0])
+        self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
         self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3 - result.metrics["force_penalty"][0, :3].sum())
         self.assertFalse(result.scalar_success())
         self.data.mocap_pos[0] = [-2, 0, 2]
@@ -399,6 +401,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.data.mocap_pos[0] = self.data.xpos[self.model.body("suitcase_lid").id] + [-CASE_HALF_XY[0], 0, 0.025]
         result = self.steps(1)
         self.assertTrue(result.metrics["suitcase_touching_robot"][0])
+        self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
         self.assertFalse(result.scalar_success())
 
     def test_dwell_requires_real_time_and_every_tick(self):
@@ -425,7 +428,8 @@ class SuitcaseRewardTest(unittest.TestCase):
             self.data.joint(f"packing_object_{i}_joint").qpos[2] += 0.1
         result = self.steps(1)
         self.assertFalse(result.metrics["suitcase_supported_and_settled"][0])
-        self.assertAlmostEqual(result.scalar_reward(), 0.5, places=3)
+        self.assertAlmostEqual(result.scalar_reward(), 0.3, places=3)
+        self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
         self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3)
         self.assertEqual(result.metrics["lid_reward"][0], 0)
 
@@ -503,11 +507,17 @@ class SuitcaseRewardTest(unittest.TestCase):
                 mujoco.mj_forward(self.model, self.data)
                 result = self.steps(1)
                 self.assertEqual(result.metrics["lid_is_closed"][0], closed)
-                self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 if closed else 0)
+                self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
                 np.testing.assert_array_equal(result.metrics["object_packed_mask"], True)
                 self.assertAlmostEqual(
                     result.metrics["packing_reward"][0], 0.3 - result.metrics["force_penalty"][0, :3].sum()
                 )
+        self.data.joint("suitcase_hinge").qpos[0] = 0
+        self.data.qvel[:] = 0
+        self.assertEqual(self.steps(100).metrics["suitcase_staying_reward"][0], 0)
+        self.assertAlmostEqual(self.steps(700).metrics["suitcase_staying_reward"][0], 0.3)
+        self.data.joint("suitcase_hinge").qpos[0] = np.deg2rad(20)
+        self.assertEqual(self.steps(1).metrics["suitcase_staying_reward"][0], 0)
         self.evaluator.reset()
         self.evaluator.after_reset(self.model, self.data)
         self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0)
@@ -517,11 +527,13 @@ class SuitcaseRewardTest(unittest.TestCase):
             with self.subTest(distance=distance):
                 result = self.pose((distance, 0, 0))
                 self.assertAlmostEqual(result.metrics["suitcase_translation_m"][0], distance)
-                self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 * fraction)
+                self.assertAlmostEqual(result.metrics["suitcase_staying_fraction"][0], fraction)
+                self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
         result = self.pose((0.04, 0.04, 0))
         distance = np.sqrt(2) * 0.04
         self.assertAlmostEqual(result.metrics["suitcase_translation_m"][0], distance)
-        self.assertAlmostEqual(result.scalar_reward(), 0.3 * (0.2 - distance) / 0.15)
+        self.assertAlmostEqual(result.metrics["suitcase_staying_fraction"][0], (0.2 - distance) / 0.15)
+        self.assertEqual(result.scalar_reward(), 0)
 
     def test_staying_credit_rotation_deadband_taper_and_worst_fraction(self):
         for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1)):
@@ -529,19 +541,21 @@ class SuitcaseRewardTest(unittest.TestCase):
                 with self.subTest(axis=axis, angle=angle):
                     result = self.pose(rotation_deg=angle, axis=axis)
                     self.assertAlmostEqual(result.metrics["suitcase_rotation_deg"][0], angle)
-                    self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 * fraction)
+                    self.assertAlmostEqual(result.metrics["suitcase_staying_fraction"][0], fraction)
+                    self.assertEqual(result.metrics["suitcase_staying_reward"][0], 0)
         for displacement, angle, fraction in ((0.125, 15, 0.5), (0.08, 25, 0.5), (0.2, 0, 0), (0, 45, 0)):
             result = self.pose((displacement, 0, 0), rotation_deg=angle)
-            self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 * fraction)
+            self.assertAlmostEqual(result.metrics["suitcase_staying_fraction"][0], fraction)
 
     def test_staying_credit_uses_reset_pose_and_shortest_quaternion_rotation(self):
         self.pose((0.1, 0.04, 0), rotation_deg=170)
         self.evaluator.reset()
         self.evaluator.after_reset(self.model, self.data)
-        self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0.3)
+        self.assertEqual(self.result().metrics["suitcase_staying_fraction"][0], 1)
+        self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0)
         result = self.pose(rotation_deg=15)
         self.assertAlmostEqual(result.metrics["suitcase_rotation_deg"][0], 15)
-        self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.225)
+        self.assertAlmostEqual(result.metrics["suitcase_staying_fraction"][0], 0.75)
         self.data.joint("suitcase_joint").qpos[3:] *= -1
         self.data.qvel[:] = 0
         mujoco.mj_forward(self.model, self.data)
@@ -549,10 +563,11 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertAlmostEqual(result.metrics["suitcase_rotation_deg"][0], 15, places=5)
         self.pose((0.2, 0, 0))
         self.assertAlmostEqual(self.result().metrics["suitcase_staying_reward"][0], 0)
-        self.assertEqual(self.pose().metrics["suitcase_staying_reward"][0], 0.3)
+        self.assertEqual(self.pose().metrics["suitcase_staying_fraction"][0], 1)
         self.evaluator.reset()
         self.evaluator.after_reset(self.model, self.data)
-        self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0.3)
+        self.assertEqual(self.result().metrics["suitcase_staying_fraction"][0], 1)
+        self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0)
 
     def test_displaced_packed_closed_case_keeps_handling_credit_but_loses_pose_credit(self):
         self.pack(close=True)

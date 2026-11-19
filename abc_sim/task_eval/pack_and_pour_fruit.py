@@ -374,8 +374,8 @@ class PackAndPourFruitEvaluator:
         tilt_deg = float(np.rad2deg(np.arccos(np.clip(bowl_rot[0, 2, 2], -1, 1))))
         rim = self._bounds[0][1] + self.containment_tolerance_m
         pouring_support = bool(
-            (held and source_lift >= 0.05)
-            or (self._receiver_support_gap <= self.contact_gap_seconds and in_transport_zone)
+            in_transport_zone
+            and ((held and source_lift >= 0.05) or self._receiver_support_gap <= self.contact_gap_seconds)
         )
         crossed = np.zeros(3, dtype=bool)
         departure = np.zeros(3, dtype=bool)
