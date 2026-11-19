@@ -99,6 +99,12 @@ Reward stages are chronological:
 Putting fruit directly into the receiver earns **zero**. Nesting the packed
 small bowl inside the receiver earns **0.6 before force deductions** and
 no pouring credit. Packing and transport retain their completed milestones.
+Before all three are packed, each qualified fruit retains its partial packing
+credit while its center stays inside the small bowl, including while rolling
+or being carried. This tolerates contact-solver penetration after qualification.
+Its center leaving the bowl clears that fruit's partial credit. The fruits can
+qualify at different times; having all three qualified full spheres inside
+together completes the permanent packing milestone.
 Transport has a 0.2 s dwell; the filled bowl must first have been lifted
 at least 5 cm with a rim grasp. Grasp acquisition requires both opposing
 fingers of one hand for 50 ms. Once acquired, either finger can carry load;
@@ -123,7 +129,8 @@ binary task completion. `force_allowance_n` and `force_dose_budget_ns`
 are configurable evaluator options.
 
 Metrics report the four reward components, per-fruit packing/emptying/catching,
-stage milestones, containment/support/pour masks, rim grasp, and load/peak/
+stage milestones, retained packing masks, qualification masks and dwell times,
+bowl support/readiness, containment/support/pour masks, rim grasp, and load/peak/
 excess-dose/potential-penalty columns in order
 `[fruit_1, fruit_2, fruit_3, source_bowl, target_bowl]`.
 Potential force penalties describe the loss if all affected stages are earned.

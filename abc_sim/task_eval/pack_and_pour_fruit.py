@@ -95,6 +95,7 @@ class PackAndPourFruitEvaluator:
         self._target_time = np.zeros(3)
         self._previous_source = np.zeros(3, dtype=bool)
         self._previous_target = np.zeros(3, dtype=bool)
+        self._packed_fruits = np.zeros(3, dtype=bool)
         self._packed_stage = self._transport_complete = self._ever_success = False
         self._carried_filled = False
         self._transport_time = 0.0
@@ -134,15 +135,16 @@ class PackAndPourFruitEvaluator:
     def evaluate_qpos_batch(self, qpos_batch):
         raise NotImplementedError("Fruit pouring requires solved contacts and chronological physics.")
 
-    def _containment(self, local, bowl):
+    def _containment(self, local, bowl, *, full_sphere=True):
         floor, rim, bottom_radius, rim_radius = self._bounds[bowl]
         slope = (rim_radius - bottom_radius) / (rim - floor)
         plane_distance = local[:, :2] @ self._normals_xy.T - slope * (local[:, 2:3] - floor)
-        sphere_extent = self._radii[:, None] * np.sqrt(1 + slope * slope)
+        radii = self._radii if full_sphere else np.zeros_like(self._radii)
+        sphere_extent = radii[:, None] * np.sqrt(1 + slope * slope)
         return (
             np.all(plane_distance + sphere_extent <= bottom_radius + self.containment_tolerance_m, axis=1)
-            & (local[:, 2] - self._radii >= floor - 0.002)
-            & (local[:, 2] + self._radii <= rim + self.containment_tolerance_m)
+            & (local[:, 2] - radii >= floor - 0.002)
+            & (local[:, 2] + radii <= rim + self.containment_tolerance_m)
         )
 
     def _observe(self, data, *, elapsed):
@@ -154,6 +156,7 @@ class PackAndPourFruitEvaluator:
         bowl_rot = data.xmat[self._bodies[3:]].reshape(2, 3, 3)
         local = [(centers - bowl_pos[i]) @ bowl_rot[i] for i in range(2)]
         inside = np.array([self._containment(local[i], i) for i in range(2)])
+        source_resident = self._containment(local[0], 0, full_sphere=False)
         loads = np.zeros(5)
         touching_robot = np.zeros(5, dtype=bool)
         fruit_table = np.zeros(3, dtype=bool)
@@ -214,7 +217,11 @@ class PackAndPourFruitEvaluator:
         self._source_time = np.where(source_eligible & self._previous_source, self._source_time + elapsed, 0)
         self._previous_source = source_eligible
         source_qualified = source_eligible & (self._source_time >= self.settling_seconds)
-        self._packed_stage |= bool(source_qualified.all())
+        # Center containment retains earned credit through rolling and solver penetration.
+        # Completing the stage still requires all three full spheres inside together.
+        self._packed_fruits = (self._packed_fruits | source_qualified) & source_resident
+        packing_completed_now = bool(self._packed_fruits.all() and inside[0].all()) and not self._packed_stage
+        self._packed_stage |= packing_completed_now
         paired_contacts = fingers.all(axis=1)
         self._grasp_times = np.where(paired_contacts & self._previous_grasps, self._grasp_times + elapsed, 0)
         self._previous_grasps = paired_contacts
@@ -257,7 +264,7 @@ class PackAndPourFruitEvaluator:
         self._transport_time = self._transport_time + elapsed if transport and self._previous_transport else 0.0
         self._previous_transport = bool(transport)
         self._transport_complete |= bool(transport and self._transport_time >= self.transport_seconds)
-        self._armed |= source_qualified & self._packed_stage
+        self._armed |= (source_qualified & self._packed_stage) | (self._packed_fruits & packing_completed_now)
         self._armed &= ~touching_robot[:3] & ~fruit_table
         self._emptied &= ~inside[0]
         self._pour_valid &= ~inside[0] & ~touching_robot[:3] & ~fruit_table
@@ -293,7 +300,10 @@ class PackAndPourFruitEvaluator:
         self._peak_force_n = np.maximum(self._peak_force_n, loads)
         damage = np.minimum(self._force_dose_ns / self.force_dose_budget_ns, 1)
         packing = (
-            (source_qualified | self._packed_stage) * self.packing_reward / 3 * (1 - self.gentle_fraction * damage[:3])
+            (self._packed_fruits | self._packed_stage)
+            * self.packing_reward
+            / 3
+            * (1 - self.gentle_fraction * damage[:3])
         )
         transporting = self._transport_complete * self.transport_reward * (1 - self.gentle_fraction * damage[3])
         emptying = self._emptied * self.emptying_reward / 3 * (1 - self.gentle_fraction / 2 * (damage[:3] + damage[3]))
@@ -315,11 +325,17 @@ class PackAndPourFruitEvaluator:
                 "transport_complete": np.array([self._transport_complete]),
                 "filled_bowl_carried": np.array([self._carried_filled]),
                 "source_nested_in_target": np.array([source_nested]),
-                "num_packed_fruits": np.array([int(source_qualified.sum())]),
+                "num_packed_fruits": np.array([int(self._packed_fruits.sum())]),
                 "num_emptied_fruits": np.array([int(self._emptied.sum())]),
                 "num_caught_fruits": np.array([int(caught.sum())]),
                 "fruit_in_source_mask": inside[0:1],
+                "fruit_source_resident_mask": source_resident[None],
                 "fruit_in_target_mask": inside[1:2],
+                "fruit_packed_mask": self._packed_fruits[None].copy(),
+                "fruit_source_eligible_mask": source_eligible[None],
+                "fruit_source_qualified_mask": source_qualified[None],
+                "fruit_source_settling_seconds": self._source_time[None].copy(),
+                "fruit_target_settling_seconds": self._target_time[None].copy(),
                 "fruit_source_supported_mask": supported[0:1],
                 "fruit_target_supported_mask": supported[1:2],
                 "fruit_armed_mask": self._armed[None].copy(),
@@ -334,6 +350,9 @@ class PackAndPourFruitEvaluator:
                 "source_tilt_deg": np.array([tilt_deg]),
                 "source_over_target": np.array([above]),
                 "source_target_distance_xy_m": np.array([overhead_distance]),
+                "settled_mask": settled[None],
+                "bowl_table_load_n": bowl_table_load[None],
+                "bowl_ready_for_packing_mask": bowl_ok[None],
                 "touching_robot": touching_robot[None],
                 "contact_force_n": loads[None],
                 "peak_force_n": self._peak_force_n[None].copy(),

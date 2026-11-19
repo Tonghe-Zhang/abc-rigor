@@ -188,9 +188,58 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertAlmostEqual(result.scalar_reward(), 0.2, places=5)
         self.assertFalse(result.metrics["packing_stage_complete"][0])
         result = fixture.transport()
+        np.testing.assert_array_equal(result.metrics["fruit_in_source_mask"], [[True, True, False]])
+        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=5)
         self.assertFalse(result.metrics["transport_complete"][0])
         self.assertEqual(result.metrics["emptying_reward"][0], 0)
         self.assertEqual(result.metrics["catching_reward"][0], 0)
+
+    def test_partial_packing_credit_clears_on_exit_and_reset(self):
+        fixture = PourFixture()
+        fixture.put_fruit(3, [0.4, -0.4, 0.774])
+        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
+        fixture.put_fruit(1, [0.4, -0.2, 0.774])
+        result = fixture.steps(1)
+        self.assertAlmostEqual(result.scalar_reward(), 0.1, places=5)
+        np.testing.assert_array_equal(result.metrics["fruit_packed_mask"], [[False, True, False]])
+        fixture.evaluator.reset()
+        fixture.evaluator.after_reset(fixture.model, fixture.data)
+        self.assertEqual(fixture.result().scalar_reward(), 0)
+        self.assertFalse(fixture.result().metrics["fruit_packed_mask"].any())
+
+    def test_fruits_can_qualify_at_different_times_before_pouring(self):
+        fixture = PourFixture()
+        third_position = fixture.data.joint("fruit_3_joint").qpos[:3].copy()
+        fixture.put_fruit(3, [0.4, -0.4, 0.774])
+        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
+        fixture.put_fruit(3, third_position)
+        for _ in range(600):
+            # The first fruit rolls in place while the last fruit settles.
+            fixture.data.joint("fruit_1_joint").qvel[5] = 5
+            result = fixture.steps(1)
+        self.assertTrue(result.metrics["packing_stage_complete"][0], result.metrics)
+        self.assertAlmostEqual(result.scalar_reward(), 0.3, places=5)
+        self.assertTrue(result.metrics["fruit_armed_mask"].all())
+        self.assertFalse(result.metrics["fruit_source_qualified_mask"][0, 0])
+        fixture.transport()
+        self.assertTrue(fixture.pour().scalar_success())
+
+    def test_retained_credit_does_not_relax_full_packing_containment(self):
+        fixture = PourFixture()
+        third_position = fixture.data.joint("fruit_3_joint").qpos[:3].copy()
+        fixture.put_fruit(3, [0.4, -0.4, 0.774])
+        self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
+        fixture.put_fruit(3, third_position)
+        for _ in range(600):
+            # Its center is inside, but the top protrudes above the bowl's mouth.
+            fixture.put_fruit(1, [0.6, -0.2, 0.820])
+            result = fixture.steps(1)
+        self.assertTrue(result.metrics["fruit_packed_mask"].all())
+        self.assertFalse(result.metrics["fruit_in_source_mask"][0, 0])
+        self.assertFalse(result.metrics["packing_stage_complete"][0])
+        result = fixture.steps(800)
+        self.assertTrue(result.metrics["fruit_in_source_mask"].all())
+        self.assertTrue(result.metrics["packing_stage_complete"][0])
 
     def test_pouring_before_transport_cannot_earn_the_last_four_tenths(self):
         fixture = PourFixture()
