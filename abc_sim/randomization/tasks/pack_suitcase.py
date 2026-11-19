@@ -12,6 +12,8 @@ import numpy as np
 from abc_sim.task_specs import PACK_SUITCASE_PROMPTS
 
 from ..assets.suitcase import (
+    CASE_HALF_XY,
+    LID_LIMIT_RAD,
     PACKING_CATEGORIES,
     SHELL_PALETTES,
     SHELL_PATTERNS,
@@ -92,8 +94,11 @@ class PackSuitcaseRandomizer(SceneRandomizer):
         center = np.asarray(pose["pos"][:2])
         if joint == "suitcase_joint":
             # Include the front handle and the open lid's swept projection.
-            center = center + np.array([np.cos(yaw), np.sin(yaw)]) * 0.04
-            half = (0.21, 0.20)
+            hx, hy = CASE_HALF_XY
+            front = -hx - 0.036
+            back = hx - (2 * hx + 0.03) * np.cos(LID_LIMIT_RAD) + 0.016 * np.sin(LID_LIMIT_RAD)
+            center = center + np.array([np.cos(yaw), np.sin(yaw)]) * (front + back) / 2
+            half = ((back - front) / 2 + 0.005, hy + 0.01)
         else:
             half = np.asarray(packing_object_dimensions(self._objects[joint])[1][:2]) / 2
         return center, half, yaw

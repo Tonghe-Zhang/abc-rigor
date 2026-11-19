@@ -13,8 +13,8 @@ from ..core import _format_float_list, _scale_body_subtree
 from .tabletop_distractors import DistractorSpec, build_distractor, distractor_variants
 from .xml_common import _dishrack_compiled_model_bounds
 
-CASE_HALF_XY = (0.13, 0.19)
-CASE_INNER_XY = (0.118, 0.178)
+CASE_HALF_XY = (0.10, 0.15)
+CASE_INNER_XY = tuple(half - 0.012 for half in CASE_HALF_XY)
 CASE_FLOOR_Z = 0.012
 CASE_RIM_Z = 0.09
 LID_LIMIT_RAD = float(np.deg2rad(110))
@@ -44,6 +44,8 @@ class SuitcaseTexture:
 
 def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Element]:
     """Build a free case with a passive 0–110 degree lid and solid cavity walls."""
+    hx, hy = CASE_HALF_XY
+    ix, iy = CASE_INNER_XY
     first, second = SHELL_PALETTES[texture.palette]
     repeat = {"solid": (1, 1), "checker": (3, 4), "fine_checker": (12, 16), "bands": (1, 12)}[texture.pattern]
     asset = ET.Element("asset")
@@ -71,7 +73,15 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
     ET.SubElement(asset, "material", name="suitcase_trim", rgba="0.055 0.06 0.07 1")
     case = ET.Element("body", name="suitcase", pos="0.62 0 0.75")
     ET.SubElement(case, "freejoint", name="suitcase_joint")
-    ET.SubElement(case, "inertial", pos="0 0 0.035", mass="1.2", diaginertia="0.016 0.008 0.022")
+    ET.SubElement(
+        case,
+        "inertial",
+        pos="0 0 0.035",
+        mass="1.2",
+        diaginertia=_format_float_list(
+            1.2 / 12 * np.array([(2 * hy) ** 2 + CASE_RIM_Z**2, (2 * hx) ** 2 + CASE_RIM_Z**2, 4 * (hx**2 + hy**2)])
+        ),
+    )
 
     def box(parent, name, pos, size, material="suitcase_shell", **attrs):
         if material == "suitcase_shell":
@@ -144,16 +154,22 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
             **attrs,
         )
 
-    box(case, "suitcase_floor", (0, 0, 0.006), (0.13, 0.19, 0.006), "suitcase_lining")
+    box(case, "suitcase_floor", (0, 0, 0.006), (hx, hy, 0.006), "suitcase_lining")
     for sign, label in ((-1, "front"), (1, "back")):
-        box(case, f"suitcase_{label}", (sign * 0.124, 0, 0.051), (0.006, 0.19, 0.039))
+        box(case, f"suitcase_{label}", (sign * (hx - 0.006), 0, 0.051), (0.006, hy, 0.039))
     for sign, label in ((-1, "right"), (1, "left")):
-        box(case, f"suitcase_{label}", (0, sign * 0.184, 0.051), (0.118, 0.006, 0.039))
+        box(case, f"suitcase_{label}", (0, sign * (hy - 0.006), 0.051), (ix, 0.006, 0.039))
     # A carrying handle is attached to the front of the lower shell.
     for sign in (-1, 1):
-        box(case, f"suitcase_handle_post_{sign}", (-0.144, sign * 0.048, 0.044), (0.014, 0.008, 0.008), "suitcase_trim")
-    box(case, "suitcase_handle", (-0.158, 0, 0.044), (0.008, 0.056, 0.008), "suitcase_trim")
-    lid = ET.SubElement(case, "body", name="suitcase_lid", pos="0.13 0 0.09")
+        box(
+            case,
+            f"suitcase_handle_post_{sign}",
+            (-hx - 0.014, sign * 0.048, 0.044),
+            (0.014, 0.008, 0.008),
+            "suitcase_trim",
+        )
+    box(case, "suitcase_handle", (-hx - 0.028, 0, 0.044), (0.008, 0.056, 0.008), "suitcase_trim")
+    lid = ET.SubElement(case, "body", name="suitcase_lid", pos=_format_float_list((hx, 0, CASE_RIM_Z)))
     ET.SubElement(
         lid,
         "joint",
@@ -167,13 +183,21 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
         solreflimit="0.004 1",
         solimplimit="0.99 0.99 0.001",
     )
-    ET.SubElement(lid, "inertial", pos="-0.13 0 0.008", mass="0.15", diaginertia="0.00181 0.00085 0.00265")
-    box(lid, "suitcase_lid_panel", (-0.13, 0, 0.008), (0.13, 0.19, 0.008))
+    ET.SubElement(
+        lid,
+        "inertial",
+        pos=_format_float_list((-hx, 0, 0.008)),
+        mass="0.15",
+        diaginertia=_format_float_list(
+            0.15 / 12 * np.array([(2 * hy) ** 2 + 0.016**2, (2 * hx) ** 2 + 0.016**2, 4 * (hx**2 + hy**2)])
+        ),
+    )
+    box(lid, "suitcase_lid_panel", (-hx, 0, 0.008), (hx, hy, 0.008))
     box(
         lid,
         "suitcase_lid_lining",
-        (-0.13, 0, -0.0005),
-        (0.118, 0.178, 0.0005),
+        (-hx, 0, -0.0005),
+        (ix, iy, 0.0005),
         "suitcase_lining",
         contype="0",
         conaffinity="0",
@@ -183,14 +207,14 @@ def build_suitcase(texture: SuitcaseTexture) -> tuple[list[ET.Element], ET.Eleme
         box(
             lid,
             f"suitcase_lid_strap_{sign}",
-            (-0.13, sign * 0.065, -0.0015),
-            (0.116, 0.009, 0.0005),
+            (-hx, sign * hy / 3, -0.0015),
+            (ix - 0.002, 0.009, 0.0005),
             "suitcase_trim",
             contype="0",
             conaffinity="0",
             density="0",
         )
-    box(lid, "suitcase_lid_pull", (-0.275, 0, 0.008), (0.015, 0.025, 0.008), "suitcase_trim")
+    box(lid, "suitcase_lid_pull", (-2 * hx - 0.015, 0, 0.008), (0.015, 0.025, 0.008), "suitcase_trim")
     return list(asset), case
 
 

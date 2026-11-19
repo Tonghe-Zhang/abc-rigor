@@ -12,6 +12,7 @@ import mujoco
 import numpy as np
 from abc_sim.randomization.assets.suitcase import (
     CASE_FLOOR_Z,
+    CASE_HALF_XY,
     CASE_INNER_XY,
     CASE_RIM_Z,
     LID_LIMIT_RAD,
@@ -195,7 +196,7 @@ class SuitcaseRewardTest(unittest.TestCase):
 
     def pack(self, count=3, close=False):
         for i in range(1, count + 1):
-            self.data.joint(f"packing_object_{i}_joint").qpos[:] = [0.62, (i - 2) * 0.105, 0.766, 1, 0, 0, 0]
+            self.data.joint(f"packing_object_{i}_joint").qpos[:] = [0.62, (i - 2) * 0.09, 0.766, 1, 0, 0, 0]
         if close:
             self.data.joint("suitcase_hinge").qpos[0] = 0
         self.data.qvel[:] = 0
@@ -238,7 +239,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.pack()
         self.assertEqual(self.steps(600).scalar_reward(), 0.5)
         original = self.data.joint("packing_object_1_joint").qpos.copy()
-        for displacement in ((0.11, 0, 0), (0, 0, 0.08), (0, 0, -0.06)):
+        for displacement in ((0.075, 0, 0), (0, 0, 0.08), (0, 0, -0.06)):
             self.data.joint("packing_object_1_joint").qpos[:] = original
             self.data.joint("packing_object_1_joint").qpos[:3] += displacement
             self.data.qvel[:] = 0
@@ -267,7 +268,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.data.mocap_pos[0] = [-2, 0, 2]
         self.pack(close=True)
         self.assertTrue(self.steps(700).scalar_success())
-        self.data.mocap_pos[0] = self.data.xpos[self.model.body("suitcase_lid").id] + [-0.13, 0, 0.025]
+        self.data.mocap_pos[0] = self.data.xpos[self.model.body("suitcase_lid").id] + [-CASE_HALF_XY[0], 0, 0.025]
         result = self.steps(1)
         self.assertTrue(result.metrics["suitcase_touching_robot"][0])
         self.assertFalse(result.scalar_success())
