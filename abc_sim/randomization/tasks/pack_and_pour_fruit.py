@@ -37,15 +37,33 @@ class PackAndPourFruitRandomizer(SceneRandomizer):
             raise ValueError(
                 "Fruit pouring requires a randomized reset or saved-state replay; reuse a seed for a fixed scene."
             )
-        self._identities(request, np.random.default_rng(0))
+        self._validate_request(request)
 
-    def _identities(self, request, rng):
+    @staticmethod
+    def _validate_request(request):
         options = {} if request is None else dict(request)
         unknown = set(options) - {"fruits", "source_color", "target_color", "prompt_index"}
         if unknown:
             raise ValueError(f"Unknown fruit-pouring reset options: {sorted(unknown)}")
+        if "fruits" in options:
+            options["fruits"] = [FruitSpec(**item) for item in options["fruits"]]
+            if len(options["fruits"]) != 3:
+                raise ValueError("Fruit pouring requires exactly three fruits.")
+        for key in ("source_color", "target_color"):
+            if key in options and options[key] not in BOWL_COLORS:
+                raise ValueError("Choose two distinct, named bowl colors.")
+        if "source_color" in options and options["source_color"] == options.get("target_color"):
+            raise ValueError("Choose two distinct, named bowl colors.")
+        if "prompt_index" in options:
+            index = options["prompt_index"]
+            if type(index) is not int or not 0 <= index < len(PACK_AND_POUR_FRUIT_TEMPLATES):
+                raise ValueError("Unknown fruit-pouring prompt_index.")
+        return options
+
+    def _identities(self, request, rng):
+        options = self._validate_request(request)
         fruits = (
-            [FruitSpec(**item) for item in options["fruits"]]
+            options["fruits"]
             if "fruits" in options
             else [
                 FruitSpec(
@@ -56,15 +74,21 @@ class PackAndPourFruitRandomizer(SceneRandomizer):
                 for category in rng.choice(FRUIT_CATEGORIES, size=3, replace=False)
             ]
         )
-        if len(fruits) != 3:
-            raise ValueError("Fruit pouring requires exactly three fruits.")
-        source = options.get("source_color", str(rng.choice(tuple(BOWL_COLORS))))
-        target = options.get("target_color", str(rng.choice([c for c in BOWL_COLORS if c != source])))
-        if source not in BOWL_COLORS or target not in BOWL_COLORS or source == target:
-            raise ValueError("Choose two distinct, named bowl colors.")
-        index = options.get("prompt_index", int(rng.integers(len(PACK_AND_POUR_FRUIT_TEMPLATES))))
-        if type(index) is not int or not 0 <= index < len(PACK_AND_POUR_FRUIT_TEMPLATES):
-            raise ValueError("Unknown fruit-pouring prompt_index.")
+        source = (
+            options["source_color"]
+            if "source_color" in options
+            else str(rng.choice([c for c in BOWL_COLORS if c != options.get("target_color")]))
+        )
+        target = (
+            options["target_color"]
+            if "target_color" in options
+            else str(rng.choice([c for c in BOWL_COLORS if c != source]))
+        )
+        index = (
+            options["prompt_index"]
+            if "prompt_index" in options
+            else int(rng.integers(len(PACK_AND_POUR_FRUIT_TEMPLATES)))
+        )
         return fruits, source, target, index
 
     def _reload_scene(self, fruits, source, target):

@@ -8,6 +8,8 @@ import unittest
 import abc_sim
 import mujoco
 import numpy as np
+from abc_sim.randomization.assets.fruit_bowls import BOWL_COLORS
+from abc_sim.randomization.tasks.pack_and_pour_fruit import PackAndPourFruitRandomizer
 
 TASKS = {
     "lift_bottles_upright": (
@@ -20,12 +22,50 @@ TASKS = {
     ),
     "pack_and_pour_fruit": (
         {"force_allowance_n": 0},
-        ({"source_color": "bad"}, {"fruits": []}, {"prompt_index": 6}),
+        (
+            {"source_color": "bad"},
+            {"target_color": "bad"},
+            {"source_color": "red", "target_color": "red"},
+            {"fruits": []},
+            {"prompt_index": 6},
+        ),
     ),
 }
 
 
 class ManipulationResetTest(unittest.TestCase):
+    def test_each_pinned_bowl_color_leaves_a_distinct_valid_partner_for_every_seed(self):
+        randomizer = PackAndPourFruitRandomizer()
+        for key in ("source_color", "target_color"):
+            for color in BOWL_COLORS:
+                request = {key: color}
+                randomizer.prepare_reset(request=request)
+                for seed in range(32):
+                    with self.subTest(key=key, color=color, seed=seed):
+                        _, source, target, _ = randomizer._identities(request, np.random.default_rng(seed))
+                        self.assertEqual(source if key == "source_color" else target, color)
+                        self.assertIn(source, BOWL_COLORS)
+                        self.assertIn(target, BOWL_COLORS)
+                        self.assertNotEqual(source, target)
+
+    def test_pinned_receiver_colors_reset_deterministically_without_losing_observation(self):
+        env = abc_sim.make_env(task="pack_and_pour_fruit", render_cameras=False)
+        try:
+            for color in BOWL_COLORS:
+                with self.subTest(color=color):
+                    request = {"target_color": color}
+                    env.reset(seed=1, options={"randomization": request})
+                    expected = copy.deepcopy(env._last_randomization)
+                    self.assertEqual(expected.metadata["target_color"], color)
+                    self.assertNotEqual(expected.metadata["source_color"], color)
+                    env.advance_physics(1)
+                    self.assertAlmostEqual(env._task_evaluator._previous_time, env.data.time)
+                    env.reset(seed=1, options={"randomization": request})
+                    self.assertEqual(env._last_randomization, expected)
+                    self.assertEqual(env.evaluate_task().scalar_reward(), 0)
+        finally:
+            env.close()
+
     def assert_rejected_without_mutation(self, env, **kwargs):
         model, data = env.model, env.data
         observer, evaluator = env._physics_observer, env._task_evaluator
