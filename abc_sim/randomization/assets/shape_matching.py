@@ -5,9 +5,10 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import mujoco
 import numpy as np
 
-from ..core import _format_float_list
+from ..core import _format_float_list, _resolve_scene_xml_paths
 
 SHAPES = ("circle", "square", "triangle", "hexagon")
 COLORS = {
@@ -105,7 +106,7 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
     """Build all sixteen unique pieces, their recesses, and the reference image."""
     asset = ET.Element("asset")
     world = ET.Element("worldbody")
-    board = ET.SubElement(world, "body", name="shape_board", pos="0.59 0 0.752")
+    board = ET.SubElement(world, "body", name="shape_board", pos="0.59 0 0.75")
     ET.SubElement(board, "freejoint", name="shape_board_joint")
     common = {"friction": "0.7 0.01 0.001", "solref": "0.004 1", "density": "600"}
     wood_rgba = _format_float_list(WOOD_COLORS[wood])
@@ -228,6 +229,23 @@ def scene_xml(palette=("red", "blue", "yellow", "green"), order=tuple(range(16))
     """Generate a self-contained scene using only the shared YAM mesh package."""
     models = Path(__file__).resolve().parents[2] / "models"
     root = ET.parse(models / "yam_bimanual_empty.xml").getroot()
+    # Preserve the station's compiled inertias explicitly before allowing the
+    # small wooden pieces to use their geometry-derived rotational inertia.
+    station = mujoco.MjModel.from_xml_string(_resolve_scene_xml_paths(ET.tostring(root, encoding="unicode"), models))
+    for body in root.findall(".//body"):
+        body_id = station.body(body.attrib["name"]).id
+        inertial = body.find("inertial")
+        if inertial is not None:
+            body.remove(inertial)
+        ET.SubElement(
+            body,
+            "inertial",
+            pos=_format_float_list(station.body_ipos[body_id]),
+            quat=_format_float_list(station.body_iquat[body_id]),
+            mass=str(station.body_mass[body_id]),
+            diaginertia=_format_float_list(station.body_inertia[body_id]),
+        )
+    root.find("compiler").set("boundinertia", "0")
     root.set("model", "yam_shape_matching")
     assets, bodies = build_board(palette, order, wood)
     root.find("asset").extend(assets)

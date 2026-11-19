@@ -80,7 +80,7 @@ class ShapeMatchingRandomizer(SceneRandomizer):
         for _ in range(self.max_tries):
             states = {
                 "shape_board_joint": self._pose(
-                    rng.uniform(0.58, 0.60), rng.uniform(-0.015, 0.015), rng.uniform(-0.06, 0.06), 0.752
+                    rng.uniform(0.58, 0.60), rng.uniform(-0.015, 0.015), rng.uniform(-0.06, 0.06), 0.75
                 )
             }
             positions = []

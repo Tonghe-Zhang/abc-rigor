@@ -6,6 +6,7 @@ import copy
 import json
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import abc_sim
 import mujoco
@@ -94,6 +95,44 @@ class ShapeMatchingSceneTest(unittest.TestCase):
                 self.env._task_randomizer.apply(model, self.env.data, RandomizationState.from_dict(invalid))
         self.assertIs(self.env.model, model)
         np.testing.assert_array_equal(self.env.data.qpos, qpos)
+
+    def test_production_inertias_match_geometry_and_preserve_station(self):
+        self.env.reset(seed=11)
+        models = Path(abc_sim.__file__).parent / "models"
+        station = mujoco.MjModel.from_xml_path(str(models / "yam_bimanual_empty.xml"))
+        for body in range(1, station.nbody):
+            actual = self.env.model.body(station.body(body).name)
+            np.testing.assert_allclose(actual.mass, station.body_mass[body], rtol=1e-8)
+            np.testing.assert_allclose(actual.inertia, station.body_inertia[body], rtol=1e-8)
+        reference = ET.Element("mujoco")
+        assets, bodies = build_board(("red", "blue", "yellow", "green"), tuple(range(16)), 0)
+        ET.SubElement(reference, "asset").extend(assets)
+        ET.SubElement(reference, "worldbody").extend(bodies)
+        geometry = mujoco.MjModel.from_xml_string(ET.tostring(reference, encoding="unicode"))
+        for piece in range(16):
+            name = f"shape_piece_{piece:02d}"
+            actual, expected = self.env.model.body(name), geometry.body(name)
+            np.testing.assert_allclose(actual.mass, expected.mass, rtol=1e-8)
+            np.testing.assert_allclose(actual.inertia, expected.inertia, rtol=1e-8)
+            self.assertLess(actual.inertia.max(), 1e-5)
+
+    def test_production_scene_seats_all_pieces_with_equal_credit(self):
+        self.env.reset(seed=11)
+        model, data = self.env.model, self.env.data
+        self.env.advance_physics(200)
+        np.testing.assert_array_equal(self.env.evaluate_task().metrics["force_dose_ns"], 0)
+        board = data.body("shape_board")
+        for piece, joint in enumerate(PIECE_JOINTS):
+            target = model.site(f"shape_target_{piece:02d}").pos.copy()
+            target[2] += PIECE_HALF_HEIGHT + 0.0001
+            data.joint(joint).qpos[:3] = board.xpos + board.xmat.reshape(3, 3) @ target
+            data.joint(joint).qpos[3:] = board.xquat
+            data.joint(joint).qvel[:] = 0
+            mujoco.mj_forward(model, data)
+            self.env.advance_physics(200)
+        result = self.env.evaluate_task()
+        self.assertTrue(result.scalar_success())
+        np.testing.assert_allclose(result.metrics["piece_reward"], 1 / 16, atol=1e-7)
 
 
 class ShapeMatchingRewardTest(unittest.TestCase):
@@ -203,13 +242,16 @@ class ShapeMatchingRewardTest(unittest.TestCase):
             self.evaluator.after_physics_step(self.model, self.data)
 
     def test_opposing_finger_loads_add_and_robot_contact_prevents_qualification(self):
+        self.evaluator = ShapeMatchingEvaluator(
+            model=self.model, spec=get_task_spec("shape_matching"), force_allowance_n=1e9
+        )
         self.place(4)
         position = self.data.body("shape_piece_04").xpos.copy()
         arms = [self.model.body(f"{side}_arm").id for side in ("left", "right")]
         original = self.model.body_pos[arms].copy()
         try:
             for arm, sign in zip(arms, (-1, 1)):
-                self.model.body_pos[arm] = position + np.array((sign * 0.0305, 0, 0))
+                self.model.body_pos[arm] = position + np.array((sign * 0.03095, 0, 0.009))
             mujoco.mj_forward(self.model, self.data)
             self.evaluator.after_reset(self.model, self.data)
             result = self.evaluator.evaluate_model_data(self.model, self.data)
@@ -232,8 +274,15 @@ class ShapeMatchingRewardTest(unittest.TestCase):
             self.assertGreater(sum(loads), 2 * np.linalg.norm(net))
             self.assertTrue(result.metrics["piece_touching_robot"][0, 4])
             self.assertEqual(result.scalar_reward(), 0)
+            result = self.step(0.8)
+            self.assertTrue(result.metrics["piece_inside_mask"][0, 4])
+            self.assertTrue(result.metrics["piece_supported_mask"][0, 4])
+            self.assertTrue(result.metrics["piece_touching_robot"][0, 4])
+            self.assertLess(np.linalg.norm(self.data.joint(PIECE_JOINTS[4]).qvel), 0.025)
+            self.assertEqual(result.scalar_reward(), 0)
         finally:
             self.model.body_pos[arms] = original
+        self.assertEqual(self.step(0.15).scalar_reward(), 0)
         self.assertAlmostEqual(self.step(0.5).scalar_reward(), 1 / 16)
 
 
