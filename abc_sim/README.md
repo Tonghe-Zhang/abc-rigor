@@ -78,15 +78,17 @@ env.reset(seed=11)
 
 Only the shared YAM assets are required:
 `uv run prepare.py --sim-task shape_matching`.
-Each piece earns 1/16 after being fully seated in its own recess, released and
-supported by the board floor for 0.3 seconds. Wrong colors, hovering and stacked
+The slots pass completely through the board; convex wall segments preserve the
+openings in both rendering and collision. Each piece earns 1/16 after being fully
+seated in its own slot, released and supported by the table for 0.3 seconds.
+Wrong colors, hovering and stacked
 pieces receive no credit. Qualified pieces retain credit while contained;
 removing one clears its share. Every piece reserves 20% for gentle piece handling
 and 10% for gentle board handling. External contact-load magnitudes are summed
 without cancelling opposing forces, and excess above a 15 N allowance integrates
 over every physics tick. A 5 N·s dose consumes the reserve permanently for the
-episode. The board allowance additionally covers its own weight and the pieces'
-static support loads. Reset/replay clears history.
+episode. The board allowance additionally covers its own weight. Seated pieces
+load the table directly. Reset/replay clears history.
 
 The evaluator requires native MuJoCo contact observations per world; qpos-only
 and MuJoCo-Warp evaluation are unsupported. The caller owns episode timeouts;

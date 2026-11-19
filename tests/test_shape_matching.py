@@ -13,9 +13,9 @@ import mujoco
 import numpy as np
 
 from abc_sim.randomization.assets.shape_matching import (
-    FLOOR_HEIGHT,
     PIECE_HALF_HEIGHT,
     PIECE_JOINTS,
+    WALL_HEIGHT,
     build_board,
     slot_center,
 )
@@ -121,6 +121,17 @@ class ShapeMatchingSceneTest(unittest.TestCase):
         model, data = self.env.model, self.env.data
         self.env.advance_physics(200)
         np.testing.assert_array_equal(self.env.evaluate_task().metrics["force_dose_ns"], 0)
+        table = model.geom("table_plane").id
+        board_id = model.body("shape_board").id
+        support_contacts = []
+        for contact in data.contact:
+            if table in (contact.geom1, contact.geom2):
+                other = contact.geom2 if contact.geom1 == table else contact.geom1
+                if model.geom_bodyid[other] == board_id:
+                    support_contacts.append(other)
+        self.assertGreater(len(support_contacts), 0)
+        self.assertLessEqual(len(support_contacts), 32)
+        self.assertTrue(all(model.geom(geom).name.startswith("shape_board_border_") for geom in support_contacts))
         board = data.body("shape_board")
         for piece, joint in enumerate(PIECE_JOINTS):
             target = model.site(f"shape_target_{piece:02d}").pos.copy()
@@ -138,18 +149,35 @@ class ShapeMatchingSceneTest(unittest.TestCase):
 class ShapeMatchingRewardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.model = cls.make_model()
+
+    @staticmethod
+    def make_model(*, fixed_raised_board=False):
         root = ET.Element("mujoco")
         ET.SubElement(root, "option", timestep="0.002", integrator="implicitfast")
         asset = ET.SubElement(root, "asset")
         world = ET.SubElement(root, "worldbody")
-        ET.SubElement(world, "geom", name="table", type="plane", pos="0 0 0.75", size="2 2 0.1")
+        ET.SubElement(
+            world,
+            "geom",
+            name="table_plane",
+            type="box",
+            pos="0 0 0.745",
+            size="2 2 0.005",
+            contype="2",
+            conaffinity="1",
+        )
         for side in ("left", "right"):
             arm = ET.SubElement(world, "body", name=f"{side}_arm", pos="-2 0 2")
             ET.SubElement(arm, "geom", name=f"{side}_finger", type="box", size="0.01 0.01 0.01")
         assets, bodies = build_board(("red", "blue", "yellow", "green"), tuple(range(16)), 0)
         asset.extend(assets)
         world.extend(bodies)
-        cls.model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+        if fixed_raised_board:
+            board = world.find("./body[@name='shape_board']")
+            board.set("pos", "0.59 0 0.9")
+            board.remove(board.find("freejoint"))
+        return mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
 
     def setUp(self):
         self.data = mujoco.MjData(self.model)
@@ -167,7 +195,7 @@ class ShapeMatchingRewardTest(unittest.TestCase):
     def place(self, piece, *, slot=None, height=0.0005, yaw=0.0):
         board = self.data.body("shape_board")
         center = slot_center(piece if slot is None else slot)
-        position = np.array((*center, FLOOR_HEIGHT + PIECE_HALF_HEIGHT + height))
+        position = np.array((*center, PIECE_HALF_HEIGHT + height))
         qpos = self.data.joint(PIECE_JOINTS[piece]).qpos
         qpos[:3] = board.xpos + board.xmat.reshape(3, 3) @ position
         mujoco.mju_mulQuat(qpos[3:], board.xquat, np.array([np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]))
@@ -187,6 +215,27 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.place(1, slot=0)
         self.place(4, slot=5)
         self.assertEqual(self.step(0.5).scalar_reward(), 0)
+
+    def test_open_slots_pass_every_shape_through_a_raised_board(self):
+        self.model = self.make_model(fixed_raised_board=True)
+        self.data = mujoco.MjData(self.model)
+        self.evaluator = ShapeMatchingEvaluator(model=self.model, spec=get_task_spec("shape_matching"))
+        mujoco.mj_forward(self.model, self.data)
+        self.evaluator.after_reset(self.model, self.data)
+        for piece in (0, 4, 8, 12):
+            self.place(piece, height=WALL_HEIGHT + 0.02)
+        self.place(5, height=WALL_HEIGHT + 0.02, yaw=np.pi / 4)
+        result = self.step(0.7)
+        self.assertAlmostEqual(self.data.body("shape_board").xpos[2], 0.9, places=5)
+        for piece in (0, 4, 8, 12):
+            np.testing.assert_allclose(
+                self.data.body(f"shape_piece_{piece:02d}").xpos[2], 0.75 + PIECE_HALF_HEIGHT, rtol=0, atol=0.0002
+            )
+            self.assertTrue(result.metrics["piece_supported_mask"][0, piece])
+            self.assertFalse(result.metrics["piece_inside_mask"][0, piece])
+        self.assertGreater(self.data.body("shape_piece_05").xpos[2], 0.91)
+        self.assertFalse(result.metrics["piece_supported_mask"][0, 5])
+        self.assertEqual(result.scalar_reward(), 0)
 
     def test_symmetric_rotations_fit_and_misaligned_square_does_not(self):
         for piece, yaw in ((0, np.pi / 2), (4, np.pi / 2), (8, 2 * np.pi / 3), (12, np.pi / 3)):
@@ -229,9 +278,17 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.data.qfrc_applied[:] = 0
         released = self.step(0.5)
         self.assertGreaterEqual(released.metrics["force_dose_ns"][0, 0], loaded.metrics["force_dose_ns"][0, 0])
-        self.assertAlmostEqual(released.metrics["piece_reward"][0, 0], 0.7 / 16, places=5)
-        self.assertAlmostEqual(released.metrics["piece_reward"][0, 4], 0.9 / 16, places=5)
+        self.assertAlmostEqual(released.metrics["piece_reward"][0, 0], 0.8 / 16, places=5)
+        self.assertAlmostEqual(released.metrics["piece_reward"][0, 4], 1 / 16, places=5)
         self.assertEqual(released.metrics["num_matched_pieces"][0], 2)
+        board_dof = self.model.joint("shape_board_joint").dofadr[0]
+        self.data.qfrc_applied[board_dof + 2] = -80
+        self.step(0.2)
+        self.data.qfrc_applied[:] = 0
+        board_loaded = self.step(0.5)
+        self.assertGreater(board_loaded.metrics["force_dose_ns"][0, -1], 5)
+        self.assertAlmostEqual(board_loaded.metrics["piece_reward"][0, 0], 0.7 / 16, places=5)
+        self.assertAlmostEqual(board_loaded.metrics["piece_reward"][0, 4], 0.9 / 16, places=5)
 
     def test_contacts_and_single_world_history_are_required(self):
         with self.assertRaises(NotImplementedError):
@@ -251,7 +308,7 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         original = self.model.body_pos[arms].copy()
         try:
             for arm, sign in zip(arms, (-1, 1)):
-                self.model.body_pos[arm] = position + np.array((sign * 0.03095, 0, 0.009))
+                self.model.body_pos[arm] = position + np.array((sign * 0.03095, 0, 0.014))
             mujoco.mj_forward(self.model, self.data)
             self.evaluator.after_reset(self.model, self.data)
             result = self.evaluator.evaluate_model_data(self.model, self.data)

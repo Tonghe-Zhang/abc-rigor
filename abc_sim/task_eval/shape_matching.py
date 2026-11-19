@@ -8,7 +8,6 @@ import mujoco
 import numpy as np
 
 from abc_sim.randomization.assets.shape_matching import (
-    FLOOR_HEIGHT,
     PIECE_HALF_HEIGHT,
     SHAPES,
     hole_polygon,
@@ -21,7 +20,8 @@ from abc_sim.task_eval.contacts import subtree_geom_ids
 class ShapeMatchingEvaluator:
     """Score each correctly seated, released piece after 0.3 seconds of settling.
 
-    A piece keeps its qualified credit while fully inside its assigned recess.
+    A piece qualifies while resting on the table in its assigned through-hole.
+    It keeps its qualified credit while fully inside that hole.
     Removing it removes that piece's credit. Twenty percent of each piece's
     share reflects its own excess-force dose, and ten percent reflects the
     board's dose. Unrelated unplaced pieces do not gate achieved progress.
@@ -42,7 +42,7 @@ class ShapeMatchingEvaluator:
         self.force_entity_names = (*(f"shape_piece_{i:02d}" for i in range(16)), "shape_board")
         self._bodies = np.array([model.body(name).id for name in self.force_entity_names])
         self._board = int(self._bodies[-1])
-        self._floor = model.geom("shape_board_floor").id
+        self._table = model.geom("table_plane").id
         self._geoms = [subtree_geom_ids(model, int(body)) for body in self._bodies]
         self._owner = {geom: owner for owner, geoms in enumerate(self._geoms) for geom in geoms}
         self._robot = set().union(*(subtree_geom_ids(model, model.body(name).id) for name in ("left_arm", "right_arm")))
@@ -70,7 +70,7 @@ class ShapeMatchingEvaluator:
         if np.any(weights <= 0) or not np.isfinite(weights).all():
             raise ValueError("Shape matching requires positive masses and downward gravity.")
         self.force_threshold_n = np.full(17, float(force_allowance_n))
-        self.force_threshold_n[-1] += weights[-1] + 2 * weights[:-1].sum()
+        self.force_threshold_n[-1] += weights[-1]
         self.reset()
 
     def reset(self, *, nworld=1):
@@ -119,8 +119,8 @@ class ShapeMatchingEvaluator:
             relative = points - self._targets[i]
             inside[i] = (
                 np.all(relative[:, :2] @ self._normals[i].T <= self._offsets[i] + 0.0007)
-                and abs(points[:, 2].min() - FLOOR_HEIGHT) <= 0.0015
-                and points[:, 2].max() <= FLOOR_HEIGHT + 2 * PIECE_HALF_HEIGHT + 0.0015
+                and abs(points[:, 2].min()) <= 0.0015
+                and points[:, 2].max() <= 2 * PIECE_HALF_HEIGHT + 0.0015
             )
         touching = np.zeros(16, dtype=bool)
         supported = np.zeros(16, dtype=bool)
@@ -146,7 +146,7 @@ class ShapeMatchingEvaluator:
                 if owner < 16:
                     touching[owner] |= other in self._robot
                     supported[owner] |= (
-                        other == self._floor
+                        other == self._table
                         and force[0] > 0.001
                         and sign * np.dot(contact.frame[:3], board_rotation[:, 2]) > 0.5
                     )

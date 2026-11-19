@@ -25,7 +25,6 @@ WOOD_COLORS = ((0.67, 0.43, 0.22, 1), (0.79, 0.58, 0.34, 1), (0.53, 0.32, 0.16, 
 PIECE_COUNT = 16
 PITCH = 0.063
 BOARD_HALF = 0.140
-FLOOR_HEIGHT = 0.004
 WALL_HEIGHT = 0.013
 PIECE_HALF_HEIGHT = 0.011
 HOLE_CLEARANCE = 0.0015
@@ -103,28 +102,18 @@ def _ring_cells(vertices: np.ndarray):
 
 
 def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
-    """Build all sixteen unique pieces, their recesses, and the reference image."""
+    """Build sixteen unique pieces, through-holes, and the reference image."""
     asset = ET.Element("asset")
     world = ET.Element("worldbody")
     board = ET.SubElement(world, "body", name="shape_board", pos="0.59 0 0.75")
     ET.SubElement(board, "freejoint", name="shape_board_joint")
     common = {"friction": "0.7 0.01 0.001", "solref": "0.004 1", "density": "600"}
     wood_rgba = _format_float_list(WOOD_COLORS[wood])
-    ET.SubElement(
-        board,
-        "geom",
-        name="shape_board_floor",
-        type="box",
-        size=_format_float_list((BOARD_HALF, BOARD_HALF, FLOOR_HEIGHT / 2)),
-        pos=_format_float_list((0, 0, FLOOR_HEIGHT / 2)),
-        rgba=wood_rgba,
-        **common,
-    )
     grid_half = 2 * PITCH
     for axis in range(2):
         for sign in (-1, 1):
-            center = [0.0, 0.0, (FLOOR_HEIGHT + WALL_HEIGHT) / 2]
-            size = [grid_half, grid_half, (WALL_HEIGHT - FLOOR_HEIGHT) / 2]
+            center = [0.0, 0.0, WALL_HEIGHT / 2]
+            size = [grid_half, grid_half, WALL_HEIGHT / 2]
             center[axis] = sign * (BOARD_HALF + grid_half) / 2
             size[axis] = (BOARD_HALF - grid_half) / 2
             size[1 - axis] = BOARD_HALF if axis == 0 else grid_half
@@ -156,13 +145,13 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
             board,
             "site",
             name=f"shape_target_{piece:02d}",
-            pos=_format_float_list((*center, FLOOR_HEIGHT)),
+            pos=_format_float_list((*center, 0)),
             size="0.001",
             rgba="0 0 0 0",
             group="5",
         )
         for part, cell in enumerate(_ring_cells(hole_polygon(shape))):
-            mesh = prism_mesh(asset, f"shape_slot_{slot:02d}_{part}_mesh", cell, FLOOR_HEIGHT, WALL_HEIGHT)
+            mesh = prism_mesh(asset, f"shape_slot_{slot:02d}_{part}_mesh", cell, 0, WALL_HEIGHT)
             ET.SubElement(
                 board,
                 "geom",
@@ -171,6 +160,8 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
                 mesh=mesh,
                 pos=_format_float_list((*center, 0)),
                 rgba=wood_rgba,
+                contype="0",
+                conaffinity="1",
                 **common,
             )
         mesh = prism_mesh(asset, f"shape_reference_{slot:02d}_mesh", polygon(shape) * 0.46, 0.0011, 0.0013)
@@ -246,6 +237,13 @@ def scene_xml(palette=("red", "blue", "yellow", "green"), order=tuple(range(16))
             diaginertia=_format_float_list(station.body_inertia[body_id]),
         )
     root.find("compiler").set("boundinertia", "0")
+    # Slot walls accept ordinary piece/robot contacts on bit 1. The table's
+    # contact type leaves table support to the four outer frame geoms.
+    table = root.find("./worldbody/geom[@name='table_plane']")
+    surface = root.find("./worldbody/body[@name='play_table']/geom")
+    # A finite tabletop gives flat mesh pieces stable face contacts.
+    table.attrib.update({name: surface.attrib[name] for name in ("type", "size", "pos")})
+    table.attrib.update(contype="2", conaffinity="1")
     root.set("model", "yam_shape_matching")
     assets, bodies = build_board(palette, order, wood)
     root.find("asset").extend(assets)
