@@ -10,6 +10,7 @@ import numpy as np
 from abc_sim.randomization.assets.shape_matching import (
     PIECE_HALF_HEIGHT,
     SHAPES,
+    TARGET_COUNT,
     hole_polygon,
     polygon,
 )
@@ -20,7 +21,7 @@ from abc_sim.task_eval.contacts import subtree_geom_ids
 class ShapeMatchingEvaluator:
     """Score each correctly seated, released piece after 0.3 seconds of settling.
 
-    A piece qualifies while resting on the table in its assigned through-hole.
+    A requested piece qualifies while resting on the table in its assigned hole.
     It keeps its qualified credit while fully inside that hole.
     Removing it removes that piece's credit. Twenty percent of each piece's
     share reflects its own excess-force dose, and ten percent reflects the
@@ -47,6 +48,10 @@ class ShapeMatchingEvaluator:
         self._owner = {geom: owner for owner, geoms in enumerate(self._geoms) for geom in geoms}
         self._robot = set().union(*(subtree_geom_ids(model, model.body(name).id) for name in ("left_arm", "right_arm")))
         self._targets = np.array([model.site(f"shape_target_{i:02d}").pos.copy() for i in range(16)])
+        requested = np.array([model.site(f"shape_target_{i:02d}").user[0] for i in range(16)])
+        if not np.isin(requested, (0, 1)).all() or requested.sum() != TARGET_COUNT:
+            raise ValueError("Shape matching requires exactly eight requested pieces in the compiled scene.")
+        self._requested = requested.astype(bool)
         self._dofs = np.array([model.jnt_dofadr[model.body_jntadr[body]] for body in self._bodies[:16]])
         self._vertices, self._normals, self._offsets = [], [], []
         for i in range(16):
@@ -154,23 +159,26 @@ class ShapeMatchingEvaluator:
         settled = (np.linalg.norm(velocities[:, :3], axis=1) <= 0.025) & (
             np.linalg.norm(velocities[:, 3:], axis=1) <= 0.25
         )
-        eligible = inside & supported & settled & ~touching
+        eligible = self._requested & inside & supported & settled & ~touching
         self._settling = np.where(eligible & self._previous_eligible, self._settling + elapsed, 0.0)
         self._previous_eligible = eligible
-        self._matched = inside & (self._matched | (eligible & (self._settling >= self.settling_seconds)))
+        self._matched = (
+            self._requested & inside & (self._matched | (eligible & (self._settling >= self.settling_seconds)))
+        )
         excess = np.maximum(loads - self.force_threshold_n, 0)
         self._dose += excess * elapsed
         self._peak = np.maximum(self._peak, loads)
         damage = np.minimum(self._dose / self.force_dose_budget_ns, 1.0)
-        penalty = (0.2 * damage[:16] + 0.1 * damage[16]) / 16
-        rewards = self._matched * (1 / 16 - penalty)
-        success = bool(self._matched.all() and eligible.all())
+        penalty = (0.2 * damage[:16] + 0.1 * damage[16]) / TARGET_COUNT
+        rewards = self._matched * (1 / TARGET_COUNT - penalty)
+        success = bool(self._matched[self._requested].all() and eligible[self._requested].all())
         self._ever_success |= success
         self._result = TaskEvalResult(
             reward=np.array([rewards.sum()]),
             success=np.array([success]),
             metrics={
                 "num_matched_pieces": np.array([int(self._matched.sum())]),
+                "piece_requested_mask": self._requested[None, :].copy(),
                 "piece_reward": rewards[None, :],
                 "piece_matched_mask": self._matched[None, :].copy(),
                 "piece_inside_mask": inside[None, :],
@@ -182,7 +190,9 @@ class ShapeMatchingEvaluator:
                 "force_threshold_n": self.force_threshold_n[None, :].copy(),
                 "excess_force_n": excess[None, :],
                 "force_dose_ns": self._dose[None, :].copy(),
-                "force_penalty": np.concatenate((0.2 * damage[:16] / 16, [0.1 * damage[16]]))[None, :],
+                "force_penalty": np.concatenate(
+                    (0.2 * damage[:16] * self._requested / TARGET_COUNT, [0.1 * damage[16]])
+                )[None, :],
                 "ever_success": np.array([self._ever_success]),
             },
         )

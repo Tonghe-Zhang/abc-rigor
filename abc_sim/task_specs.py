@@ -13,12 +13,12 @@ from typing import Any
 DEFAULT_SCENE = "hybrid"
 
 SHAPE_MATCHING_PROMPTS = (
-    "Place all sixteen blocks into the board so that their shapes and colors match the picture.",
-    "Complete the shape matching board using the reference picture.",
-    "Arrange all the colored shapes in the board to match the picture on the card.",
-    "Fill the four by four board with the blocks in the positions shown in the reference image.",
-    "Match the picture by putting every colored block into its correct opening in the board.",
-    "Put all sixteen shapes into the board, matching both the shape and color in the picture.",
+    "Place the eight colored blocks shown in the picture into the matching board slots. Leave the gray slots empty.",
+    "Match the reference card by filling its eight colored positions and leaving the other board slots empty.",
+    "Arrange the eight colored shapes shown on the card in the board. Leave the gray positions empty.",
+    "Fill only the eight colored positions shown in the reference image, matching each block's shape and color.",
+    "Choose the eight blocks pictured in color and put them into their matching openings in the board.",
+    "Put the eight shapes shown in color into the board, matching the picture and leaving the gray slots empty.",
 )
 
 FRUIT_BOWL_COLOR_NAMES = ("blue", "white", "red", "yellow", "green", "purple", "orange", "pink")
@@ -150,7 +150,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         env_task="shape_matching",
         prompt=SHAPE_MATCHING_PROMPTS[0],
         max_chunks=240,
-        description="Fill a four-by-four shape board with sixteen scattered colored pieces to match a reference card.",
+        description="Select eight of sixteen scattered pieces to fill the colored positions on a reference card.",
         evaluator_name="shape_matching",
         aliases=("shape matching", *SHAPE_MATCHING_PROMPTS[1:]),
     ),

@@ -23,6 +23,9 @@ COLORS = {
 }
 WOOD_COLORS = ((0.67, 0.43, 0.22, 1), (0.79, 0.58, 0.34, 1), (0.53, 0.32, 0.16, 1))
 PIECE_COUNT = 16
+TARGET_COUNT = 8
+DEFAULT_SELECTED = (0, 1, 4, 5, 8, 9, 12, 13)
+EMPTY_SLOT_RGBA = (0.80, 0.80, 0.78, 1)
 PITCH = 0.063
 BOARD_HALF = 0.140
 WALL_HEIGHT = 0.013
@@ -101,8 +104,8 @@ def _ring_cells(vertices: np.ndarray):
         yield np.array((inner[i], outer[i], outer[j], inner[j]))
 
 
-def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
-    """Build sixteen unique pieces, through-holes, and the reference image."""
+def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int, selected: tuple[int, ...]):
+    """Build sixteen pieces and slots, with eight requested pieces on the card."""
     asset = ET.Element("asset")
     world = ET.Element("worldbody")
     board = ET.SubElement(world, "body", name="shape_board", pos="0.59 0 0.75")
@@ -149,6 +152,7 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
             size="0.001",
             rgba="0 0 0 0",
             group="5",
+            user=str(int(piece in selected)),
         )
         for part, cell in enumerate(_ring_cells(hole_polygon(shape))):
             mesh = prism_mesh(asset, f"shape_slot_{slot:02d}_{part}_mesh", cell, 0, WALL_HEIGHT)
@@ -172,7 +176,7 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
             type="mesh",
             mesh=mesh,
             pos=_format_float_list((*(center * 0.46), 0)),
-            rgba=_format_float_list(COLORS[palette[piece % 4]]),
+            rgba=_format_float_list(COLORS[palette[piece % 4]] if piece in selected else EMPTY_SLOT_RGBA),
             contype="0",
             conaffinity="0",
         )
@@ -216,7 +220,9 @@ def build_board(palette: tuple[str, ...], order: tuple[int, ...], wood: int):
     return list(asset), list(world)
 
 
-def scene_xml(palette=("red", "blue", "yellow", "green"), order=tuple(range(16)), wood=0) -> str:
+def scene_xml(
+    palette=("red", "blue", "yellow", "green"), order=tuple(range(16)), wood=0, selected=DEFAULT_SELECTED
+) -> str:
     """Generate a self-contained scene using only the shared YAM mesh package."""
     models = Path(__file__).resolve().parents[2] / "models"
     root = ET.parse(models / "yam_bimanual_empty.xml").getroot()
@@ -245,7 +251,7 @@ def scene_xml(palette=("red", "blue", "yellow", "green"), order=tuple(range(16))
     table.attrib.update({name: surface.attrib[name] for name in ("type", "size", "pos")})
     table.attrib.update(contype="2", conaffinity="1")
     root.set("model", "yam_shape_matching")
-    assets, bodies = build_board(palette, order, wood)
+    assets, bodies = build_board(palette, order, wood, selected)
     root.find("asset").extend(assets)
     root.find("worldbody").extend(bodies)
     root.find("./keyframe/key[@name='home']").attrib.pop("qpos", None)

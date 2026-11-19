@@ -9,7 +9,15 @@ import numpy as np
 
 from abc_sim.task_specs import SHAPE_MATCHING_PROMPTS
 
-from ..assets.shape_matching import COLORS, PIECE_HALF_HEIGHT, PIECE_JOINTS, WOOD_COLORS, build_board
+from ..assets.shape_matching import (
+    COLORS,
+    PIECE_COUNT,
+    PIECE_HALF_HEIGHT,
+    PIECE_JOINTS,
+    TARGET_COUNT,
+    WOOD_COLORS,
+    build_board,
+)
 from ..core import PerturbRange, RandomizationState, SceneRandomizer, _resolve_scene_xml_paths
 
 JOINTS = ("shape_board_joint", *PIECE_JOINTS)
@@ -17,8 +25,8 @@ JOINTS = ("shape_board_joint", *PIECE_JOINTS)
 
 def validate_options(request):
     options = {} if request is None else dict(request)
-    if set(options) - {"palette", "order", "wood"}:
-        raise ValueError("Shape matching accepts only palette, order, and wood options.")
+    if set(options) - {"palette", "order", "wood", "selected"}:
+        raise ValueError("Shape matching accepts only palette, order, wood, and selected options.")
     if "palette" in options:
         values = options["palette"]
         if len(values) != 4 or len(set(values)) != 4 or any(value not in COLORS for value in values):
@@ -29,6 +37,14 @@ def validate_options(request):
             raise ValueError("Shape matching order must be a permutation of the sixteen piece IDs.")
     if "wood" in options and (type(options["wood"]) is not int or not 0 <= options["wood"] < len(WOOD_COLORS)):
         raise ValueError("Unknown shape board wood color.")
+    if "selected" in options:
+        values = options["selected"]
+        if (
+            len(values) != TARGET_COUNT
+            or any(type(value) is not int or not 0 <= value < PIECE_COUNT for value in values)
+            or len(set(values)) != TARGET_COUNT
+        ):
+            raise ValueError("Shape matching needs eight distinct selected piece IDs from zero through fifteen.")
     return options
 
 
@@ -43,7 +59,7 @@ class ShapeMatchingRandomizer(SceneRandomizer):
             raise ValueError("Shape matching requires a seeded randomized reset or saved-state replay.")
         validate_options(request)
 
-    def _reload_scene(self, palette, order, wood):
+    def _reload_scene(self, palette, order, wood, selected):
         env = self._env_ref
         if env is None:
             raise RuntimeError("Shape matching randomization requires a bound environment.")
@@ -53,7 +69,7 @@ class ShapeMatchingRandomizer(SceneRandomizer):
             for element in list(parent):
                 if element.get("name", "").startswith("shape_"):
                     parent.remove(element)
-        assets, bodies = build_board(tuple(palette), tuple(order), wood)
+        assets, bodies = build_board(tuple(palette), tuple(order), wood, tuple(selected))
         asset.extend(assets)
         world.extend(bodies)
         root.find("./keyframe/key[@name='home']").attrib.pop("qpos", None)
@@ -75,7 +91,12 @@ class ShapeMatchingRandomizer(SceneRandomizer):
         )
         order = options["order"] if "order" in options else rng.permutation(16).tolist()
         wood = options["wood"] if "wood" in options else int(rng.integers(len(WOOD_COLORS)))
-        self._reload_scene(palette, order, wood)
+        selected = (
+            options["selected"]
+            if "selected" in options
+            else sorted(rng.choice(PIECE_COUNT, size=TARGET_COUNT, replace=False).tolist())
+        )
+        self._reload_scene(palette, order, wood, selected)
         model, data = self._env_ref.model, self._env_ref.data
         for _ in range(self.max_tries):
             states = {
@@ -105,13 +126,14 @@ class ShapeMatchingRandomizer(SceneRandomizer):
                         "palette": palette,
                         "order": order,
                         "wood": wood,
+                        "selected": list(selected),
                         "prompt": SHAPE_MATCHING_PROMPTS[(seed or 0) % len(SHAPE_MATCHING_PROMPTS)],
                     },
                 )
         self._raise_sampling_failure(seed)
 
     def _validate_scene(self, model, state):
-        validate_options({name: state.metadata[name] for name in ("palette", "order", "wood")})
+        validate_options({name: state.metadata[name] for name in ("palette", "order", "wood", "selected")})
         if state.scale_states or set(state.object_states) != set(JOINTS):
             raise ValueError("Shape board replay requires all seventeen free-body poses and no scales.")
         if state.metadata["prompt"] not in SHAPE_MATCHING_PROMPTS:
@@ -128,7 +150,7 @@ class ShapeMatchingRandomizer(SceneRandomizer):
                 raise ValueError("Shape matching orientations must be unit wxyz quaternions.")
 
     def _restore_scene(self, model, data, state):
-        self._reload_scene(*(state.metadata[name] for name in ("palette", "order", "wood")))
+        self._reload_scene(*(state.metadata[name] for name in ("palette", "order", "wood", "selected")))
         model, data = self._env_ref.model, self._env_ref.data
         self._apply_states(model, data, state.object_states)
         mujoco.mj_forward(model, data)

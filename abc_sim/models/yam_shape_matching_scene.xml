@@ -580,7 +580,7 @@
       <geom name="shape_board_border_0_1" type="box" pos="0.133 0 0.0065" size="0.007 0.14 0.0065" rgba="0.67 0.43 0.22 1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_board_border_1_-1" type="box" pos="0 -0.133 0.0065" size="0.126 0.007 0.0065" rgba="0.67 0.43 0.22 1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_board_border_1_1" type="box" pos="0 0.133 0.0065" size="0.126 0.007 0.0065" rgba="0.67 0.43 0.22 1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_00" pos="-0.0945 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_00" pos="-0.0945 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_00_0" type="mesh" mesh="shape_slot_00_0_mesh" pos="-0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_00_1" type="mesh" mesh="shape_slot_00_1_mesh" pos="-0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_00_2" type="mesh" mesh="shape_slot_00_2_mesh" pos="-0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -613,7 +613,7 @@
       <geom name="shape_slot_00_29" type="mesh" mesh="shape_slot_00_29_mesh" pos="-0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_00_30" type="mesh" mesh="shape_slot_00_30_mesh" pos="-0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_00_31" type="mesh" mesh="shape_slot_00_31_mesh" pos="-0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_01" pos="-0.0945 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_01" pos="-0.0945 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_01_0" type="mesh" mesh="shape_slot_01_0_mesh" pos="-0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_01_1" type="mesh" mesh="shape_slot_01_1_mesh" pos="-0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_01_2" type="mesh" mesh="shape_slot_01_2_mesh" pos="-0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -646,7 +646,7 @@
       <geom name="shape_slot_01_29" type="mesh" mesh="shape_slot_01_29_mesh" pos="-0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_01_30" type="mesh" mesh="shape_slot_01_30_mesh" pos="-0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_01_31" type="mesh" mesh="shape_slot_01_31_mesh" pos="-0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_02" pos="-0.0945 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_02" pos="-0.0945 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_02_0" type="mesh" mesh="shape_slot_02_0_mesh" pos="-0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_02_1" type="mesh" mesh="shape_slot_02_1_mesh" pos="-0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_02_2" type="mesh" mesh="shape_slot_02_2_mesh" pos="-0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -679,7 +679,7 @@
       <geom name="shape_slot_02_29" type="mesh" mesh="shape_slot_02_29_mesh" pos="-0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_02_30" type="mesh" mesh="shape_slot_02_30_mesh" pos="-0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_02_31" type="mesh" mesh="shape_slot_02_31_mesh" pos="-0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_03" pos="-0.0945 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_03" pos="-0.0945 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_03_0" type="mesh" mesh="shape_slot_03_0_mesh" pos="-0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_03_1" type="mesh" mesh="shape_slot_03_1_mesh" pos="-0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_03_2" type="mesh" mesh="shape_slot_03_2_mesh" pos="-0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -712,27 +712,27 @@
       <geom name="shape_slot_03_29" type="mesh" mesh="shape_slot_03_29_mesh" pos="-0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_03_30" type="mesh" mesh="shape_slot_03_30_mesh" pos="-0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_03_31" type="mesh" mesh="shape_slot_03_31_mesh" pos="-0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_04" pos="-0.0315 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_04" pos="-0.0315 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_04_0" type="mesh" mesh="shape_slot_04_0_mesh" pos="-0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_04_1" type="mesh" mesh="shape_slot_04_1_mesh" pos="-0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_04_2" type="mesh" mesh="shape_slot_04_2_mesh" pos="-0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_04_3" type="mesh" mesh="shape_slot_04_3_mesh" pos="-0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_05" pos="-0.0315 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_05" pos="-0.0315 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_05_0" type="mesh" mesh="shape_slot_05_0_mesh" pos="-0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_05_1" type="mesh" mesh="shape_slot_05_1_mesh" pos="-0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_05_2" type="mesh" mesh="shape_slot_05_2_mesh" pos="-0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_05_3" type="mesh" mesh="shape_slot_05_3_mesh" pos="-0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_06" pos="-0.0315 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_06" pos="-0.0315 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_06_0" type="mesh" mesh="shape_slot_06_0_mesh" pos="-0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_06_1" type="mesh" mesh="shape_slot_06_1_mesh" pos="-0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_06_2" type="mesh" mesh="shape_slot_06_2_mesh" pos="-0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_06_3" type="mesh" mesh="shape_slot_06_3_mesh" pos="-0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_07" pos="-0.0315 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_07" pos="-0.0315 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_07_0" type="mesh" mesh="shape_slot_07_0_mesh" pos="-0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_07_1" type="mesh" mesh="shape_slot_07_1_mesh" pos="-0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_07_2" type="mesh" mesh="shape_slot_07_2_mesh" pos="-0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_07_3" type="mesh" mesh="shape_slot_07_3_mesh" pos="-0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_08" pos="0.0315 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_08" pos="0.0315 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_08_0" type="mesh" mesh="shape_slot_08_0_mesh" pos="0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_08_1" type="mesh" mesh="shape_slot_08_1_mesh" pos="0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_08_2" type="mesh" mesh="shape_slot_08_2_mesh" pos="0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -740,7 +740,7 @@
       <geom name="shape_slot_08_4" type="mesh" mesh="shape_slot_08_4_mesh" pos="0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_08_5" type="mesh" mesh="shape_slot_08_5_mesh" pos="0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_08_6" type="mesh" mesh="shape_slot_08_6_mesh" pos="0.0315 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_09" pos="0.0315 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_09" pos="0.0315 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_09_0" type="mesh" mesh="shape_slot_09_0_mesh" pos="0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_09_1" type="mesh" mesh="shape_slot_09_1_mesh" pos="0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_09_2" type="mesh" mesh="shape_slot_09_2_mesh" pos="0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -748,7 +748,7 @@
       <geom name="shape_slot_09_4" type="mesh" mesh="shape_slot_09_4_mesh" pos="0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_09_5" type="mesh" mesh="shape_slot_09_5_mesh" pos="0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_09_6" type="mesh" mesh="shape_slot_09_6_mesh" pos="0.0315 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_10" pos="0.0315 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_10" pos="0.0315 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_10_0" type="mesh" mesh="shape_slot_10_0_mesh" pos="0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_10_1" type="mesh" mesh="shape_slot_10_1_mesh" pos="0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_10_2" type="mesh" mesh="shape_slot_10_2_mesh" pos="0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -756,7 +756,7 @@
       <geom name="shape_slot_10_4" type="mesh" mesh="shape_slot_10_4_mesh" pos="0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_10_5" type="mesh" mesh="shape_slot_10_5_mesh" pos="0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_10_6" type="mesh" mesh="shape_slot_10_6_mesh" pos="0.0315 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_11" pos="0.0315 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_11" pos="0.0315 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_11_0" type="mesh" mesh="shape_slot_11_0_mesh" pos="0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_11_1" type="mesh" mesh="shape_slot_11_1_mesh" pos="0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_11_2" type="mesh" mesh="shape_slot_11_2_mesh" pos="0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -764,7 +764,7 @@
       <geom name="shape_slot_11_4" type="mesh" mesh="shape_slot_11_4_mesh" pos="0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_11_5" type="mesh" mesh="shape_slot_11_5_mesh" pos="0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_11_6" type="mesh" mesh="shape_slot_11_6_mesh" pos="0.0315 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_12" pos="0.0945 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_12" pos="0.0945 -0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_12_0" type="mesh" mesh="shape_slot_12_0_mesh" pos="0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_12_1" type="mesh" mesh="shape_slot_12_1_mesh" pos="0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_12_2" type="mesh" mesh="shape_slot_12_2_mesh" pos="0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -775,7 +775,7 @@
       <geom name="shape_slot_12_7" type="mesh" mesh="shape_slot_12_7_mesh" pos="0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_12_8" type="mesh" mesh="shape_slot_12_8_mesh" pos="0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_12_9" type="mesh" mesh="shape_slot_12_9_mesh" pos="0.0945 -0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_13" pos="0.0945 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_13" pos="0.0945 -0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="1" />
       <geom name="shape_slot_13_0" type="mesh" mesh="shape_slot_13_0_mesh" pos="0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_13_1" type="mesh" mesh="shape_slot_13_1_mesh" pos="0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_13_2" type="mesh" mesh="shape_slot_13_2_mesh" pos="0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -786,7 +786,7 @@
       <geom name="shape_slot_13_7" type="mesh" mesh="shape_slot_13_7_mesh" pos="0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_13_8" type="mesh" mesh="shape_slot_13_8_mesh" pos="0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_13_9" type="mesh" mesh="shape_slot_13_9_mesh" pos="0.0945 -0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_14" pos="0.0945 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_14" pos="0.0945 0.0315 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_14_0" type="mesh" mesh="shape_slot_14_0_mesh" pos="0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_14_1" type="mesh" mesh="shape_slot_14_1_mesh" pos="0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_14_2" type="mesh" mesh="shape_slot_14_2_mesh" pos="0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -797,7 +797,7 @@
       <geom name="shape_slot_14_7" type="mesh" mesh="shape_slot_14_7_mesh" pos="0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_14_8" type="mesh" mesh="shape_slot_14_8_mesh" pos="0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_14_9" type="mesh" mesh="shape_slot_14_9_mesh" pos="0.0945 0.0315 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
-      <site name="shape_target_15" pos="0.0945 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" />
+      <site name="shape_target_15" pos="0.0945 0.0945 0" size="0.001" rgba="0 0 0 0" group="5" user="0" />
       <geom name="shape_slot_15_0" type="mesh" mesh="shape_slot_15_0_mesh" pos="0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_15_1" type="mesh" mesh="shape_slot_15_1_mesh" pos="0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
       <geom name="shape_slot_15_2" type="mesh" mesh="shape_slot_15_2_mesh" pos="0.0945 0.0945 0" rgba="0.67 0.43 0.22 1" contype="0" conaffinity="1" friction="0.7 0.01 0.001" solref="0.004 1" density="600" />
@@ -814,20 +814,20 @@
       <geom name="shape_reference_paper" type="box" size="0.070 0.070 0.001" rgba="0.99 0.99 0.97 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_00" type="mesh" mesh="shape_reference_00_mesh" pos="-0.04347 -0.04347 0" rgba="0.82 0.08 0.07 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_01" type="mesh" mesh="shape_reference_01_mesh" pos="-0.04347 -0.01449 0" rgba="0.06 0.25 0.82 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_02" type="mesh" mesh="shape_reference_02_mesh" pos="-0.04347 0.01449 0" rgba="0.96 0.75 0.04 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_03" type="mesh" mesh="shape_reference_03_mesh" pos="-0.04347 0.04347 0" rgba="0.12 0.6 0.16 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_02" type="mesh" mesh="shape_reference_02_mesh" pos="-0.04347 0.01449 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_03" type="mesh" mesh="shape_reference_03_mesh" pos="-0.04347 0.04347 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_04" type="mesh" mesh="shape_reference_04_mesh" pos="-0.01449 -0.04347 0" rgba="0.82 0.08 0.07 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_05" type="mesh" mesh="shape_reference_05_mesh" pos="-0.01449 -0.01449 0" rgba="0.06 0.25 0.82 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_06" type="mesh" mesh="shape_reference_06_mesh" pos="-0.01449 0.01449 0" rgba="0.96 0.75 0.04 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_07" type="mesh" mesh="shape_reference_07_mesh" pos="-0.01449 0.04347 0" rgba="0.12 0.6 0.16 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_06" type="mesh" mesh="shape_reference_06_mesh" pos="-0.01449 0.01449 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_07" type="mesh" mesh="shape_reference_07_mesh" pos="-0.01449 0.04347 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_08" type="mesh" mesh="shape_reference_08_mesh" pos="0.01449 -0.04347 0" rgba="0.82 0.08 0.07 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_09" type="mesh" mesh="shape_reference_09_mesh" pos="0.01449 -0.01449 0" rgba="0.06 0.25 0.82 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_10" type="mesh" mesh="shape_reference_10_mesh" pos="0.01449 0.01449 0" rgba="0.96 0.75 0.04 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_11" type="mesh" mesh="shape_reference_11_mesh" pos="0.01449 0.04347 0" rgba="0.12 0.6 0.16 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_10" type="mesh" mesh="shape_reference_10_mesh" pos="0.01449 0.01449 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_11" type="mesh" mesh="shape_reference_11_mesh" pos="0.01449 0.04347 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_12" type="mesh" mesh="shape_reference_12_mesh" pos="0.04347 -0.04347 0" rgba="0.82 0.08 0.07 1" contype="0" conaffinity="0" />
       <geom name="shape_reference_13" type="mesh" mesh="shape_reference_13_mesh" pos="0.04347 -0.01449 0" rgba="0.06 0.25 0.82 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_14" type="mesh" mesh="shape_reference_14_mesh" pos="0.04347 0.01449 0" rgba="0.96 0.75 0.04 1" contype="0" conaffinity="0" />
-      <geom name="shape_reference_15" type="mesh" mesh="shape_reference_15_mesh" pos="0.04347 0.04347 0" rgba="0.12 0.6 0.16 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_14" type="mesh" mesh="shape_reference_14_mesh" pos="0.04347 0.01449 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
+      <geom name="shape_reference_15" type="mesh" mesh="shape_reference_15_mesh" pos="0.04347 0.04347 0" rgba="0.8 0.8 0.78 1" contype="0" conaffinity="0" />
       <geom type="cylinder" size="0.00184 0.0002" pos="-0.06118 -0.06118 0.0015" rgba="0.10 0.07 0.04 1" contype="0" conaffinity="0" />
     </body>
     <body name="shape_piece_00" pos="0.39 -0.36 0.763">

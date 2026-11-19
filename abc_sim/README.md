@@ -67,9 +67,11 @@ env.close()
 
 `shape_matching` starts with an empty 28 cm four-by-four wooden board and all
 sixteen pieces scattered on the table. Circles, squares, triangles and hexagons
-each appear in four distinct colors. A visible reference card specifies their
-positions. Seeds randomize its permutation, palette, wood finish, board pose,
-piece poses and instruction.
+each appear in four distinct colors. Each episode selects eight pieces; the
+reference card shows their target positions in color and the other eight in
+gray. Seeds randomize the selection, permutation, palette, wood finish, board
+pose, piece poses and instruction. Saved-scene replay includes the selection.
+Pin eight distinct piece IDs with the `selected` randomization option.
 
 ```python
 env = abc_sim.make_env(task="shape_matching", render_cameras=False)
@@ -79,10 +81,12 @@ env.reset(seed=11)
 Only the shared YAM assets are required:
 `uv run prepare.py --sim-task shape_matching`.
 The slots pass completely through the board; convex wall segments preserve the
-openings in both rendering and collision. Each piece earns 1/16 after being fully
-seated in its own slot, released and supported by the table for 0.3 seconds.
-Wrong colors, hovering and stacked
-pieces receive no credit. Qualified pieces retain credit while contained;
+openings in both rendering and collision. Each requested piece earns 1/8 after
+being fully seated in its own slot, released and supported by the table for
+0.3 seconds. Wrong colors, hovering and stacked pieces receive no credit.
+Unrequested pieces earn no reward and do not reduce earned credit or prevent
+success. Only the eight requested placements are scored.
+Qualified pieces retain credit while contained;
 removing one clears its share. Every piece reserves 20% for gentle piece handling
 and 10% for gentle board handling. External contact-load magnitudes are summed
 without cancelling opposing forces, and excess above a 15 N allowance integrates

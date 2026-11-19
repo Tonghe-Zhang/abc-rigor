@@ -13,6 +13,8 @@ import mujoco
 import numpy as np
 
 from abc_sim.randomization.assets.shape_matching import (
+    DEFAULT_SELECTED,
+    EMPTY_SLOT_RGBA,
     PIECE_HALF_HEIGHT,
     PIECE_JOINTS,
     WALL_HEIGHT,
@@ -34,12 +36,15 @@ class ShapeMatchingSceneTest(unittest.TestCase):
         cls.env.close()
 
     def test_seeded_layouts_are_empty_collision_free_and_diverse(self):
-        signatures, palettes, prompts = set(), set(), set()
+        signatures, palettes, prompts, selections = set(), set(), set(), set()
         for seed in range(16):
             self.env.reset(seed=seed)
             state = self.env._last_randomization
             self.assertEqual(len(state.object_states), 17)
             self.assertEqual(set(state.metadata["order"]), set(range(16)))
+            selected = set(state.metadata["selected"])
+            self.assertEqual(len(selected), 8)
+            selections.add(tuple(sorted(selected)))
             self.assertTrue(self.env._task_randomizer._contacts_ok(self.env.model, self.env.data))
             self.assertEqual(self.env.evaluate_task().scalar_reward(), 0)
             self.assertEqual(get_task_spec(self.env.prompt).name, "shape_matching")
@@ -49,12 +54,20 @@ class ShapeMatchingSceneTest(unittest.TestCase):
             for piece in range(16):
                 slot = state.metadata["order"].index(piece)
                 np.testing.assert_allclose(self.env.model.site(f"shape_target_{piece:02d}").pos[:2], slot_center(slot))
-                np.testing.assert_array_equal(
-                    self.env.model.geom(f"shape_piece_{piece:02d}_geom").rgba,
-                    self.env.model.geom(f"shape_reference_{slot:02d}").rgba,
+                expected = (
+                    self.env.model.geom(f"shape_piece_{piece:02d}_geom").rgba
+                    if piece in selected
+                    else np.asarray(EMPTY_SLOT_RGBA, dtype=np.float32)
                 )
+                np.testing.assert_array_equal(expected, self.env.model.geom(f"shape_reference_{slot:02d}").rgba)
+                self.assertEqual(self.env.model.site(f"shape_target_{piece:02d}").user[0], piece in selected)
+            np.testing.assert_array_equal(
+                self.env.evaluate_task().metrics["piece_requested_mask"][0],
+                [piece in selected for piece in range(16)],
+            )
         self.assertEqual(len(signatures), 16)
         self.assertGreater(len(palettes), 10)
+        self.assertGreater(len(selections), 10)
         self.assertEqual(prompts, set(SHAPE_MATCHING_PROMPTS))
 
     def test_seed_and_json_replay_restore_meshes_poses_colors_and_prompt(self):
@@ -63,18 +76,21 @@ class ShapeMatchingSceneTest(unittest.TestCase):
         qpos = self.env.data.qpos.copy()
         meshes = self.env.model.mesh_vert.copy()
         colors = self.env.model.geom_rgba.copy()
+        requested = self.env.model.site_user.copy()
         for seed in (19, 7):
             self.env.reset(seed=seed)
             self.env._task_randomizer.apply(self.env.model, self.env.data, RandomizationState.from_dict(saved))
             np.testing.assert_array_equal(self.env.data.qpos, qpos)
             np.testing.assert_array_equal(self.env.model.mesh_vert, meshes)
             np.testing.assert_array_equal(self.env.model.geom_rgba, colors)
+            np.testing.assert_array_equal(self.env.model.site_user, requested)
             self.assertEqual(self.env._last_randomization.to_dict(), saved)
         other = abc_sim.make_env(task="shape_matching", render_cameras=False)
         try:
             other.reset(seed=19)
             np.testing.assert_array_equal(other.data.qpos, qpos)
             np.testing.assert_array_equal(other.model.mesh_vert, meshes)
+            np.testing.assert_array_equal(other.model.site_user, requested)
             self.assertEqual(other.prompt, self.env.prompt)
         finally:
             other.close()
@@ -83,12 +99,21 @@ class ShapeMatchingSceneTest(unittest.TestCase):
         self.env.reset(seed=4)
         saved = self.env._last_randomization.to_dict()
         model, qpos = self.env.model, self.env.data.qpos.copy()
-        for options in ({"palette": ["red"] * 4}, {"order": [0] * 16}, {"wood": -1}, {"unexpected": 1}):
+        for options in (
+            {"palette": ["red"] * 4},
+            {"order": [0] * 16},
+            {"wood": -1},
+            {"selected": [0] * 8},
+            {"selected": list(range(7))},
+            {"selected": list(range(7)) + [16]},
+            {"selected": list(range(7)) + [True]},
+            {"unexpected": 1},
+        ):
             with self.assertRaises(ValueError):
                 self.env.reset(seed=2, options={"randomization": options})
         with self.assertRaises(ValueError):
             self.env.reset(seed=2, randomize=False)
-        for key, value in (("order", [0] * 16), ("wood", 12), ("prompt", "wrong")):
+        for key, value in (("order", [0] * 16), ("wood", 12), ("selected", [0] * 8), ("prompt", "wrong")):
             invalid = copy.deepcopy(saved)
             invalid["metadata"][key] = value
             with self.assertRaises(ValueError):
@@ -105,7 +130,7 @@ class ShapeMatchingSceneTest(unittest.TestCase):
             np.testing.assert_allclose(actual.mass, station.body_mass[body], rtol=1e-8)
             np.testing.assert_allclose(actual.inertia, station.body_inertia[body], rtol=1e-8)
         reference = ET.Element("mujoco")
-        assets, bodies = build_board(("red", "blue", "yellow", "green"), tuple(range(16)), 0)
+        assets, bodies = build_board(("red", "blue", "yellow", "green"), tuple(range(16)), 0, DEFAULT_SELECTED)
         ET.SubElement(reference, "asset").extend(assets)
         ET.SubElement(reference, "worldbody").extend(bodies)
         geometry = mujoco.MjModel.from_xml_string(ET.tostring(reference, encoding="unicode"))
@@ -116,8 +141,13 @@ class ShapeMatchingSceneTest(unittest.TestCase):
             np.testing.assert_allclose(actual.inertia, expected.inertia, rtol=1e-8)
             self.assertLess(actual.inertia.max(), 1e-5)
 
-    def test_production_scene_seats_all_pieces_with_equal_credit(self):
-        self.env.reset(seed=11)
+    def test_production_scene_can_select_every_piece_with_equal_credit(self):
+        for selected in (list(range(8)), list(range(8, 16))):
+            with self.subTest(selected=selected):
+                self.check_production_selection(selected)
+
+    def check_production_selection(self, selected):
+        self.env.reset(seed=11, options={"randomization": {"selected": selected}})
         model, data = self.env.model, self.env.data
         self.env.advance_physics(200)
         np.testing.assert_array_equal(self.env.evaluate_task().metrics["force_dose_ns"], 0)
@@ -133,7 +163,8 @@ class ShapeMatchingSceneTest(unittest.TestCase):
         self.assertLessEqual(len(support_contacts), 32)
         self.assertTrue(all(model.geom(geom).name.startswith("shape_board_border_") for geom in support_contacts))
         board = data.body("shape_board")
-        for piece, joint in enumerate(PIECE_JOINTS):
+        for piece in selected:
+            joint = PIECE_JOINTS[piece]
             target = model.site(f"shape_target_{piece:02d}").pos.copy()
             target[2] += PIECE_HALF_HEIGHT + 0.0001
             data.joint(joint).qpos[:3] = board.xpos + board.xmat.reshape(3, 3) @ target
@@ -143,7 +174,8 @@ class ShapeMatchingSceneTest(unittest.TestCase):
             self.env.advance_physics(200)
         result = self.env.evaluate_task()
         self.assertTrue(result.scalar_success())
-        np.testing.assert_allclose(result.metrics["piece_reward"], 1 / 16, atol=1e-7)
+        expected = np.array([1 / 8 if piece in selected else 0 for piece in range(16)])
+        np.testing.assert_allclose(result.metrics["piece_reward"][0], expected, atol=1e-7)
 
 
 class ShapeMatchingRewardTest(unittest.TestCase):
@@ -170,7 +202,7 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         for side in ("left", "right"):
             arm = ET.SubElement(world, "body", name=f"{side}_arm", pos="-2 0 2")
             ET.SubElement(arm, "geom", name=f"{side}_finger", type="box", size="0.01 0.01 0.01")
-        assets, bodies = build_board(("red", "blue", "yellow", "green"), tuple(range(16)), 0)
+        assets, bodies = build_board(("red", "blue", "yellow", "green"), tuple(range(16)), 0, DEFAULT_SELECTED)
         asset.extend(assets)
         world.extend(bodies)
         if fixed_raised_board:
@@ -202,13 +234,39 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.data.joint(PIECE_JOINTS[piece]).qvel[:] = 0
         mujoco.mj_forward(self.model, self.data)
 
-    def test_every_piece_has_equal_independent_credit_and_all_complete(self):
-        for piece in range(16):
+    def test_requested_pieces_have_equal_independent_credit_and_complete(self):
+        for count, piece in enumerate(DEFAULT_SELECTED, 1):
             self.place(piece)
             result = self.step(0.45)
-            self.assertEqual(result.metrics["num_matched_pieces"][0], piece + 1)
-            self.assertAlmostEqual(result.scalar_reward(), (piece + 1) / 16, places=5)
+            self.assertEqual(result.metrics["num_matched_pieces"][0], count)
+            self.assertAlmostEqual(result.scalar_reward(), count / 8, places=5)
         self.assertTrue(result.scalar_success())
+
+    def test_unrequested_pieces_do_not_score_or_gate_requested_credit(self):
+        unrequested = sorted(set(range(16)) - set(DEFAULT_SELECTED))
+        for piece in unrequested:
+            self.place(piece)
+        result = self.step(0.5)
+        self.assertEqual(result.scalar_reward(), 0)
+        self.assertFalse(result.scalar_success())
+        np.testing.assert_array_equal(result.metrics["piece_matched_mask"], False)
+        for count, piece in enumerate(DEFAULT_SELECTED, 1):
+            self.place(piece)
+            result = self.step(0.45)
+            self.assertAlmostEqual(result.scalar_reward(), count / 8, places=5)
+            np.testing.assert_array_equal(result.metrics["piece_reward"][0, unrequested], 0)
+        self.assertTrue(result.scalar_success())
+
+    def test_compiled_goal_requires_exactly_eight_binary_selections(self):
+        site = self.model.site("shape_target_00")
+        original = site.user.copy()
+        try:
+            for value in (0, 0.5, 2):
+                site.user[0] = value
+                with self.assertRaisesRegex(ValueError, "exactly eight"):
+                    ShapeMatchingEvaluator(model=self.model, spec=get_task_spec("shape_matching"))
+        finally:
+            site.user[:] = original
 
     def test_color_swap_same_shape_and_wrong_slot_give_zero(self):
         self.place(0, slot=1)
@@ -243,7 +301,7 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.place(5, yaw=np.pi / 4, height=0.02)
         result = self.step(0.6)
         np.testing.assert_array_equal(np.flatnonzero(result.metrics["piece_matched_mask"]), [0, 4, 8, 12])
-        self.assertAlmostEqual(result.scalar_reward(), 4 / 16)
+        self.assertAlmostEqual(result.scalar_reward(), 4 / 8)
 
     def test_hovering_stacking_and_brief_contact_do_not_qualify(self):
         self.place(0, height=0.03)
@@ -252,25 +310,28 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.assertEqual(self.step(0.15).scalar_reward(), 0)
         self.place(1, slot=0, height=2 * PIECE_HALF_HEIGHT)
         result = self.step(0.5)
-        self.assertAlmostEqual(result.scalar_reward(), 1 / 16)
+        self.assertAlmostEqual(result.scalar_reward(), 1 / 8)
         self.assertFalse(result.metrics["piece_matched_mask"][0, 1])
 
     def test_removal_only_loses_that_piece_and_repeated_reads_are_pure(self):
+        original = self.data.joint(PIECE_JOINTS[0]).qpos.copy()
         self.place(0)
         self.place(4)
         self.step(0.5)
-        self.place(0, slot=2)
+        self.data.joint(PIECE_JOINTS[0]).qpos[:] = original
+        self.data.joint(PIECE_JOINTS[0]).qvel[:] = 0
+        mujoco.mj_forward(self.model, self.data)
         result = self.step(0.02)
-        self.assertAlmostEqual(result.scalar_reward(), 1 / 16)
+        self.assertAlmostEqual(result.scalar_reward(), 1 / 8)
         for _ in range(10):
-            self.assertAlmostEqual(self.evaluator.evaluate_model_data(self.model, self.data).scalar_reward(), 1 / 16)
+            self.assertAlmostEqual(self.evaluator.evaluate_model_data(self.model, self.data).scalar_reward(), 1 / 8)
         self.assertEqual(self.evaluator._settling[0], 0)
 
     def test_force_dose_is_irreversible_and_does_not_gate_other_pieces(self):
         self.place(0)
         self.place(4)
         result = self.step(0.5)
-        self.assertAlmostEqual(result.scalar_reward(), 2 / 16)
+        self.assertAlmostEqual(result.scalar_reward(), 2 / 8)
         dof = self.model.joint(PIECE_JOINTS[0]).dofadr[0]
         self.data.qfrc_applied[dof + 2] = -60
         loaded = self.step(0.4)
@@ -278,8 +339,8 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.data.qfrc_applied[:] = 0
         released = self.step(0.5)
         self.assertGreaterEqual(released.metrics["force_dose_ns"][0, 0], loaded.metrics["force_dose_ns"][0, 0])
-        self.assertAlmostEqual(released.metrics["piece_reward"][0, 0], 0.8 / 16, places=5)
-        self.assertAlmostEqual(released.metrics["piece_reward"][0, 4], 1 / 16, places=5)
+        self.assertAlmostEqual(released.metrics["piece_reward"][0, 0], 0.8 / 8, places=5)
+        self.assertAlmostEqual(released.metrics["piece_reward"][0, 4], 1 / 8, places=5)
         self.assertEqual(released.metrics["num_matched_pieces"][0], 2)
         board_dof = self.model.joint("shape_board_joint").dofadr[0]
         self.data.qfrc_applied[board_dof + 2] = -80
@@ -287,8 +348,8 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         self.data.qfrc_applied[:] = 0
         board_loaded = self.step(0.5)
         self.assertGreater(board_loaded.metrics["force_dose_ns"][0, -1], 5)
-        self.assertAlmostEqual(board_loaded.metrics["piece_reward"][0, 0], 0.7 / 16, places=5)
-        self.assertAlmostEqual(board_loaded.metrics["piece_reward"][0, 4], 0.9 / 16, places=5)
+        self.assertAlmostEqual(board_loaded.metrics["piece_reward"][0, 0], 0.7 / 8, places=5)
+        self.assertAlmostEqual(board_loaded.metrics["piece_reward"][0, 4], 0.9 / 8, places=5)
 
     def test_contacts_and_single_world_history_are_required(self):
         with self.assertRaises(NotImplementedError):
@@ -340,7 +401,7 @@ class ShapeMatchingRewardTest(unittest.TestCase):
         finally:
             self.model.body_pos[arms] = original
         self.assertEqual(self.step(0.15).scalar_reward(), 0)
-        self.assertAlmostEqual(self.step(0.5).scalar_reward(), 1 / 16)
+        self.assertAlmostEqual(self.step(0.5).scalar_reward(), 1 / 8)
 
 
 if __name__ == "__main__":
