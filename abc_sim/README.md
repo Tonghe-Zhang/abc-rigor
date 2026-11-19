@@ -63,6 +63,35 @@ obs, reward, terminated, truncated, step_info = env.step(env.action_space.sample
 env.close()
 ```
 
+### Shape matching
+
+`shape_matching` starts with an empty 28 cm four-by-four wooden board and all
+sixteen pieces scattered on the table. Circles, squares, triangles and hexagons
+each appear in four distinct colors. A visible reference card specifies their
+positions. Seeds randomize its permutation, palette, wood finish, board pose,
+piece poses and instruction.
+
+```python
+env = abc_sim.make_env(task="shape_matching", render_cameras=False)
+env.reset(seed=11)
+```
+
+Only the shared YAM assets are required:
+`uv run prepare.py --sim-task shape_matching`.
+Each piece earns 1/16 after being fully seated in its own recess, released and
+supported by the board floor for 0.3 seconds. Wrong colors, hovering and stacked
+pieces receive no credit. Qualified pieces retain credit while contained;
+removing one clears its share. Every piece reserves 20% for gentle piece handling
+and 10% for gentle board handling. External contact-load magnitudes are summed
+without cancelling opposing forces, and excess above a 15 N allowance integrates
+over every physics tick. A 5 N·s dose consumes the reserve permanently for the
+episode. The board allowance additionally covers its own weight and the pieces'
+static support loads. Reset/replay clears history.
+
+The evaluator requires native MuJoCo contact observations per world; qpos-only
+and MuJoCo-Warp evaluation are unsupported. The caller owns episode timeouts;
+the interactive environment is unlimited unless configured otherwise.
+
 ### Pack and pour fruit
 
 `pack_and_pour_fruit` starts with three 60–75 mm fruits, a bowl with a 16 cm
@@ -97,8 +126,8 @@ Reset options under `randomization` accept `fruits` (three
 `category`/`variant`/`radius` dictionaries), `source_color`, `target_color`,
 and `prompt_index`.
 
-The three manipulation tasks (`lift_bottles_upright`, `pack_suitcase`, and
-`pack_and_pour_fruit`) require randomized resets or saved-scene replay.
+Shape matching and the three manipulation tasks (`lift_bottles_upright`,
+`pack_suitcase`, and `pack_and_pour_fruit`) require randomized resets or saved-scene replay.
 Use the same seed to repeat a fixed initial scene. `randomize=False` and
 invalid task options raise before physics, reward history or observer binding
 changes. Asset-builder placeholder poses are not valid episode starts.

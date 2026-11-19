@@ -12,6 +12,15 @@ from typing import Any
 # The internal sim datasets record it, so exports have to carry it too.
 DEFAULT_SCENE = "hybrid"
 
+SHAPE_MATCHING_PROMPTS = (
+    "Place all sixteen blocks into the board so that their shapes and colors match the picture.",
+    "Complete the shape matching board using the reference picture.",
+    "Arrange all the colored shapes in the board to match the picture on the card.",
+    "Fill the four by four board with the blocks in the positions shown in the reference image.",
+    "Match the picture by putting every colored block into its correct opening in the board.",
+    "Put all sixteen shapes into the board, matching both the shape and color in the picture.",
+)
+
 FRUIT_BOWL_COLOR_NAMES = ("blue", "white", "red", "yellow", "green", "purple", "orange", "pink")
 PACK_AND_POUR_FRUIT_TEMPLATES = (
     "Place all the fruits into the {source_color} bowl, then pour the fruits from the "
@@ -136,6 +145,15 @@ def _normalize_key(value: str) -> str:
 
 
 _TASK_SPECS: tuple[SimTaskSpec, ...] = (
+    SimTaskSpec(
+        name="shape_matching",
+        env_task="shape_matching",
+        prompt=SHAPE_MATCHING_PROMPTS[0],
+        max_chunks=240,
+        description="Fill a four-by-four shape board with sixteen scattered colored pieces to match a reference card.",
+        evaluator_name="shape_matching",
+        aliases=("shape matching", *SHAPE_MATCHING_PROMPTS[1:]),
+    ),
     SimTaskSpec(
         name="pack_and_pour_fruit",
         env_task="pack_and_pour_fruit",

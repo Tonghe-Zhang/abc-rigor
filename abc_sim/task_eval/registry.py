@@ -28,6 +28,7 @@ from abc_sim.task_eval.pack_and_pour_fruit import PackAndPourFruitEvaluator
 from abc_sim.task_eval.pack_suitcase import PackSuitcaseEvaluator
 from abc_sim.task_eval.pour import PourBeadsInContainerEvaluator
 from abc_sim.task_eval.put_relative import PutRelativeEvaluator
+from abc_sim.task_eval.shape_matching import ShapeMatchingEvaluator
 from abc_sim.task_eval.spell import SpellWordEvaluator
 from abc_sim.task_eval.spelling_placement import FreePlacementSpellingEvaluator
 from abc_sim.task_eval.sweep import SweepAwayEvaluator
@@ -37,6 +38,7 @@ TaskEvaluatorFactory: TypeAlias = type[TaskEvaluator]
 
 
 _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
+    "shape_matching": ShapeMatchingEvaluator,
     "pack_and_pour_fruit": PackAndPourFruitEvaluator,
     "pack_suitcase": PackSuitcaseEvaluator,
     "bottles_upright": BottlesUprightEvaluator,
