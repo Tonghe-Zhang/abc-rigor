@@ -62,7 +62,7 @@ class SuitcaseSceneTest(unittest.TestCase):
             self.assertTrue(self.env._task_randomizer._contacts_ok(self.env.model, self.env.data))
             self.assertGreaterEqual(np.rad2deg(self.env.data.joint("suitcase_hinge").qpos[0]), 105)
             self.assertLessEqual(np.rad2deg(self.env.data.joint("suitcase_hinge").qpos[0]), 110)
-            self.assertEqual(self.env.evaluate_task().scalar_reward(), 0)
+            self.assertAlmostEqual(self.env.evaluate_task().scalar_reward(), 0.3)
             self.assertEqual(get_task_spec(self.env.prompt).name, "pack_suitcase")
         self.assertGreaterEqual(len(textures), 16)
         self.assertEqual(categories, set(PACKING_CATEGORIES))
@@ -115,7 +115,7 @@ class SuitcaseSceneTest(unittest.TestCase):
         self.assertGreater(data.joint("suitcase_hinge").qpos[0], np.deg2rad(104))
         self.assertLess(data.joint("suitcase_hinge").qpos[0], LID_LIMIT_RAD + 1e-4)
         self.assertAlmostEqual(data.joint("suitcase_joint").qpos[2], 0.75, places=3)
-        self.assertEqual(self.env.evaluate_task().scalar_reward(), 0)
+        self.assertAlmostEqual(self.env.evaluate_task().scalar_reward(), 0.3)
 
     def test_all_object_variants_compile_settle_and_fit_three_across(self):
         count = 0
@@ -205,7 +205,7 @@ class SuitcaseRewardTest(unittest.TestCase):
     def test_partial_credit_then_full_packed_closed_success(self):
         for count in range(4):
             self.pack(count)
-            self.assertAlmostEqual(self.steps(600).scalar_reward(), count / 6)
+            self.assertAlmostEqual(self.steps(600).scalar_reward(), 0.3 + count * 0.1)
             self.assertFalse(self.result().scalar_success())
         self.data.joint("suitcase_hinge").qpos[0] = 0
         result = self.steps(600)
@@ -215,10 +215,10 @@ class SuitcaseRewardTest(unittest.TestCase):
 
     def test_closed_empty_or_missing_object_never_gets_closure_credit(self):
         self.pack(0, close=True)
-        self.assertEqual(self.steps(700).scalar_reward(), 0)
+        self.assertAlmostEqual(self.steps(700).scalar_reward(), 0.3)
         self.pack(2, close=True)
         result = self.steps(700)
-        self.assertAlmostEqual(result.scalar_reward(), 1 / 3)
+        self.assertAlmostEqual(result.scalar_reward(), 0.5)
         self.assertFalse(result.scalar_success())
 
     def test_current_credit_revokes_on_removal_or_reopening_and_history_resets(self):
@@ -226,18 +226,18 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertTrue(self.steps(700).scalar_success())
         self.data.joint("suitcase_hinge").qpos[0] = np.deg2rad(30)
         self.assertFalse(self.steps(1).scalar_success())
-        self.assertEqual(self.result().scalar_reward(), 0.5)
+        self.assertAlmostEqual(self.result().scalar_reward(), 0.6)
         self.assertTrue(self.result().metrics["ever_success"][0])
         self.data.joint("packing_object_1_joint").qpos[0] = 0.4
-        self.assertAlmostEqual(self.steps(1).scalar_reward(), 1 / 3)
+        self.assertAlmostEqual(self.steps(1).scalar_reward(), 0.5)
         self.evaluator.reset()
         self.evaluator.after_reset(self.model, self.data)
         self.assertFalse(self.result().metrics["ever_success"][0])
-        self.assertEqual(self.result().scalar_reward(), 0)
+        self.assertAlmostEqual(self.result().scalar_reward(), 0.3)
 
     def test_full_bounds_reject_overhang_above_lid_and_below_floor(self):
         self.pack()
-        self.assertEqual(self.steps(600).scalar_reward(), 0.5)
+        self.assertAlmostEqual(self.steps(600).scalar_reward(), 0.6)
         original = self.data.joint("packing_object_1_joint").qpos.copy()
         for displacement in ((0.075, 0, 0), (0, 0, 0.08), (0, 0, -0.06)):
             self.data.joint("packing_object_1_joint").qpos[:] = original
@@ -253,7 +253,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         result = self.steps(1)
         self.assertTrue(result.metrics["object_contained_mask"][0, 0])
         self.assertFalse(result.metrics["object_supported_mask"][0, 0])
-        self.assertEqual(result.scalar_reward(), 0)
+        self.assertAlmostEqual(result.scalar_reward(), 0.3)
 
     def test_touching_robot_revokes_object_and_closed_case_credit(self):
         self.pack(close=True)
@@ -297,7 +297,9 @@ class SuitcaseRewardTest(unittest.TestCase):
             self.data.joint(f"packing_object_{i}_joint").qpos[2] += 0.1
         result = self.steps(1)
         self.assertFalse(result.metrics["suitcase_supported_and_settled"][0])
-        self.assertEqual(result.scalar_reward(), 0)
+        self.assertAlmostEqual(result.scalar_reward(), 0.2, places=3)
+        self.assertEqual(result.metrics["packing_reward"][0], 0)
+        self.assertEqual(result.metrics["lid_reward"][0], 0)
 
     def test_packed_resting_case_does_not_accumulate_force_penalty(self):
         self.pack(close=True)
@@ -315,12 +317,12 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.steps(700)
         self.data.xfrc_applied[self.evaluator._case, 2] = -50
         result = self.steps(600)
-        self.assertAlmostEqual(result.metrics["force_penalty"][0, 3], 0.15)
+        self.assertAlmostEqual(result.metrics["force_penalty"][0, 3], 0.12)
         np.testing.assert_allclose(result.metrics["force_penalty"][0, :3], 0, atol=1e-8)
         self.data.xfrc_applied[:] = 0
         result = self.steps(700)
         self.assertTrue(result.scalar_success())
-        self.assertAlmostEqual(result.scalar_reward(), 0.85)
+        self.assertAlmostEqual(result.scalar_reward(), 0.88)
         dose = result.metrics["force_dose_ns"].copy()
         for _ in range(100):
             np.testing.assert_array_equal(self.result().metrics["force_dose_ns"], dose)
@@ -344,12 +346,84 @@ class SuitcaseRewardTest(unittest.TestCase):
         np.testing.assert_allclose(result.metrics["force_dose_ns"][0], expected_dose, atol=1e-9)
         object_weight = self.model.body_subtreemass[body] * 9.81
         self.assertAlmostEqual(result.metrics["contact_force_n"][0, 0], object_weight + 20, delta=0.03)
-        self.assertAlmostEqual(result.metrics["force_penalty"][0, 0], 0.05)
-        self.assertAlmostEqual(result.metrics["force_penalty"][0, 3], 0.15)
+        self.assertAlmostEqual(result.metrics["force_penalty"][0, 0], 0.03)
+        self.assertAlmostEqual(result.metrics["force_penalty"][0, 3], 0.12)
         self.data.xfrc_applied[:] = 0
         result = self.steps(700)
         self.assertTrue(result.scalar_success())
-        self.assertAlmostEqual(result.scalar_reward(), 0.8)
+        self.assertAlmostEqual(result.scalar_reward(), 0.85)
+
+    def pose(self, displacement=(0, 0, 0), rotation_deg=0, axis=(0, 0, 1)):
+        joint = self.data.joint("suitcase_joint")
+        joint.qpos[:3] = self.evaluator._initial_case_pos + displacement
+        rotation = np.empty(4)
+        mujoco.mju_axisAngle2Quat(rotation, np.asarray(axis, dtype=float), np.deg2rad(rotation_deg))
+        mujoco.mju_mulQuat(joint.qpos[3:], self.evaluator._initial_case_quat, rotation)
+        self.data.qvel[:] = 0
+        mujoco.mj_forward(self.model, self.data)
+        return self.steps(1)
+
+    def test_staying_credit_translation_deadband_taper_and_distance(self):
+        for distance, fraction in ((0, 1), (0.049, 1), (0.05, 1), (0.125, 0.5), (0.2, 0), (0.25, 0)):
+            with self.subTest(distance=distance):
+                result = self.pose((distance, 0, 0))
+                self.assertAlmostEqual(result.metrics["suitcase_translation_m"][0], distance)
+                self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 * fraction)
+        result = self.pose((0.04, 0.04, 0))
+        distance = np.sqrt(2) * 0.04
+        self.assertAlmostEqual(result.metrics["suitcase_translation_m"][0], distance)
+        self.assertAlmostEqual(result.scalar_reward(), 0.3 * (0.2 - distance) / 0.15)
+
+    def test_staying_credit_rotation_deadband_taper_and_worst_fraction(self):
+        for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1)):
+            for angle, fraction in ((0, 1), (5, 1), (25, 0.5), (45, 0), (90, 0), (180, 0)):
+                with self.subTest(axis=axis, angle=angle):
+                    result = self.pose(rotation_deg=angle, axis=axis)
+                    self.assertAlmostEqual(result.metrics["suitcase_rotation_deg"][0], angle)
+                    self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 * fraction)
+        for displacement, angle, fraction in ((0.125, 15, 0.5), (0.08, 25, 0.5), (0.2, 0, 0), (0, 45, 0)):
+            result = self.pose((displacement, 0, 0), rotation_deg=angle)
+            self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3 * fraction)
+
+    def test_staying_credit_uses_reset_pose_and_shortest_quaternion_rotation(self):
+        self.pose((0.1, 0.04, 0), rotation_deg=170)
+        self.evaluator.reset()
+        self.evaluator.after_reset(self.model, self.data)
+        self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0.3)
+        result = self.pose(rotation_deg=15)
+        self.assertAlmostEqual(result.metrics["suitcase_rotation_deg"][0], 15)
+        self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.225)
+        self.data.joint("suitcase_joint").qpos[3:] *= -1
+        self.data.qvel[:] = 0
+        mujoco.mj_forward(self.model, self.data)
+        result = self.steps(1)
+        self.assertAlmostEqual(result.metrics["suitcase_rotation_deg"][0], 15, places=5)
+        self.pose((0.2, 0, 0))
+        self.assertAlmostEqual(self.result().metrics["suitcase_staying_reward"][0], 0)
+        self.assertEqual(self.pose().metrics["suitcase_staying_reward"][0], 0.3)
+        self.evaluator.reset()
+        self.evaluator.after_reset(self.model, self.data)
+        self.assertEqual(self.result().metrics["suitcase_staying_reward"][0], 0.3)
+
+    def test_displaced_packed_closed_case_keeps_handling_credit_but_loses_pose_credit(self):
+        self.pack(close=True)
+        self.assertTrue(self.steps(700).scalar_success())
+        for distance, pose_reward in ((0.125, 0.15), (0.2, 0), (0, 0.3)):
+            old_pos = self.data.joint("suitcase_joint").qpos[:3].copy()
+            new_pos = self.evaluator._initial_case_pos + [0, distance, 0]
+            translation = new_pos - old_pos
+            for name in ("suitcase_joint", *(f"packing_object_{i}_joint" for i in range(1, 4))):
+                self.data.joint(name).qpos[:3] += translation
+            self.data.qvel[:] = 0
+            mujoco.mj_forward(self.model, self.data)
+            result = self.steps(700)
+            self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3)
+            self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - result.metrics["force_penalty"][0, 3])
+            self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], pose_reward, places=4)
+            self.assertAlmostEqual(
+                result.scalar_reward(), 0.7 + pose_reward - result.metrics["force_penalty"].sum(), places=4
+            )
+            self.assertEqual(result.scalar_success(), distance == 0)
 
     def test_force_configuration_rejects_invalid_values(self):
         for kwargs in (
