@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
-import re
 from typing import Any
 
 # Every task in this catalogue is assembled from the one bimanual scene family, so the
@@ -15,14 +15,19 @@ DEFAULT_SCENE = "hybrid"
 FRUIT_BOWL_COLOR_NAMES = ("blue", "white", "red", "yellow", "green", "purple", "orange", "pink")
 PACK_AND_POUR_FRUIT_TEMPLATES = (
     "Place all the fruits into the {source_color} bowl, then pour the fruits from the "
-    "{source_color} bowl into the large {target_color} bowl.",
+    "{source_color} bowl into the large {target_color} bowl. "
+    "Finally, put the empty {source_color} bowl back on the table.",
     "Put the three fruits in the {source_color} bowl, then lift it by the rim and pour them "
-    "into the large {target_color} bowl.",
-    "Gather all three fruits in the small {source_color} bowl, then tip them into the large {target_color} bowl.",
-    "Fill the {source_color} bowl with the fruits, then hold its rim and pour everything into the large {target_color} bowl.",
+    "into the large {target_color} bowl. Finish by setting the empty {source_color} bowl upright on the table.",
+    "Gather all three fruits in the small {source_color} bowl, then tip them into the large {target_color} bowl. "
+    "Return the empty {source_color} bowl to the table.",
+    "Fill the {source_color} bowl with the fruits, then hold its rim and pour everything "
+    "into the large {target_color} bowl. "
+    "Set the empty {source_color} bowl back down on the table.",
     "First collect the fruits in the {source_color} bowl. Then pick up that bowl and empty it "
-    "into the large {target_color} bowl.",
-    "Pack all the fruit into the small {source_color} bowl and pour its contents into the large {target_color} bowl.",
+    "into the large {target_color} bowl. Put the empty {source_color} bowl upright on the table when done.",
+    "Pack all the fruit into the small {source_color} bowl and pour its contents into the large {target_color} bowl. "
+    "Then place the empty {source_color} bowl upright on the table and let go.",
 )
 PACK_AND_POUR_FRUIT_PROMPTS = tuple(
     template.format(source_color=source, target_color=target)
@@ -108,12 +113,8 @@ class SimTaskSpec:
         resolved = {**dict(self.reset_request), **supplied}
         for key, required in self.reset_constraints:
             value = resolved.get(key)
-            if value is not None and (
-                type(value) is not type(required) or value != required
-            ):
-                raise ValueError(
-                    f"Task {self.name!r} requires {key}={required!r}; got {value!r}."
-                )
+            if value is not None and (type(value) is not type(required) or value != required):
+                raise ValueError(f"Task {self.name!r} requires {key}={required!r}; got {value!r}.")
             resolved[key] = required
         return resolved
 
@@ -122,9 +123,7 @@ class SimTaskSpec:
         values = {}
         for key, _ in self.reset_constraints:
             if key not in metadata or metadata[key] is None:
-                raise ValueError(
-                    f"Recording for task {self.name!r} must identify {key!r}."
-                )
+                raise ValueError(f"Recording for task {self.name!r} must identify {key!r}.")
             values[key] = metadata[key]
         self.resolve_reset_request(values)
 
@@ -142,7 +141,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         env_task="pack_and_pour_fruit",
         prompt=PACK_AND_POUR_FRUIT_PROMPTS[0],
         max_chunks=120,
-        description="Gather three fruits in a small bowl, then grasp its rim and pour them into a large bowl.",
+        description="Pack three fruits, pour them into a large bowl, and return the empty small bowl to the table.",
         evaluator_name="pack_and_pour_fruit",
         aliases=("pack and pour fruit", *PACK_AND_POUR_FRUIT_PROMPTS[1:]),
     ),
@@ -207,7 +206,8 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="count_into_opaque_box",
         env_task="count_into_opaque_box",
         prompt="put the prompted number of objects in the opaque box",
-        description="Follow a sampled counting directive into the opaque box; the scene randomizer writes the live prompt each episode.",
+        description="Follow a sampled counting directive into the opaque box; the scene randomizer "
+        "writes the live prompt each episode.",
         evaluator_name="count_into_opaque_box",
         aliases=("sim_count_into_opaque_box",),
     ),
@@ -285,7 +285,8 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="grab_specific_object_from_clutter",
         env_task="grab_clutter",
         prompt="grab the target object from the cluttered table and place it in the box",
-        description="Grab the prompted target object from a cluttered tabletop full of distractors and place it in the target box.",
+        description="Grab the prompted target object from a cluttered tabletop full of distractors "
+        "and place it in the target box.",
         evaluator_name="grab_clutter_target_in_box",
         aliases=(
             "grab_clutter",
@@ -301,7 +302,8 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="ball_tray_balancing",
         env_task="ball_tray_balancing",
         prompt="keep the ball balanced on the tray for 10 to 15 seconds, then gently place the tray on the table",
-        description="Hold the lifted tray with the ball balanced for 10–15 seconds, then gently place it on the table with the ball still on it.",
+        description="Hold the lifted tray with the ball balanced for 10–15 seconds, then gently "
+        "place it on the table with the ball still on it.",
         evaluator_name="ball_tray_balancing",
         aliases=(
             "ball tray balancing",
@@ -317,7 +319,8 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="inhand_transfer_item_to_other_side",
         env_task="inhand_transfer",
         prompt="inhand transfer the item to other side",
-        description="Pick the sampled kitchen tool with the near arm, pass it to the other hand, and set it down on the far side of the table.",
+        description="Pick the sampled kitchen tool with the near arm, pass it to the other hand, "
+        "and set it down on the far side of the table.",
         evaluator_name="inhand_transfer_other_side",
         aliases=(
             "inhand_transfer",
@@ -331,7 +334,8 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="multi_drawer_search",
         env_task="multi_drawer_search",
         prompt="find the target object hidden in one of the drawers and place it in the bin",
-        description="Remember objects seen across several drawers, then find and place a prompted sequence of them into the bin.",
+        description="Remember objects seen across several drawers, then find and place a prompted "
+        "sequence of them into the bin.",
         evaluator_name="multi_drawer_target_in_bin",
         aliases=(
             "drawer search",
@@ -349,7 +353,8 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         name="multi_drawer_search_2_shaped",
         env_task="multi_drawer_search",
         prompt="find two target objects in the drawers and place them in the bin one at a time",
-        description="Training variant with two ordered targets and episode-unique drawer-opening credit; the caller controls the horizon.",
+        description="Training variant with two ordered targets and episode-unique drawer-opening "
+        "credit; the caller controls the horizon.",
         evaluator_name="multi_drawer_search_shaped_v1",
         reset_constraints=(("target_count", 2),),
     ),

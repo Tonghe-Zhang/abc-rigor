@@ -21,11 +21,13 @@ class PackAndPourFruitEvaluator:
     pour_tilt_degrees = 30.0
     grasp_seconds = 0.05
     contact_gap_seconds = 0.02
+    fruit_rearm_seconds = 0.05
     containment_tolerance_m = 0.001
     packing_reward = 0.3
     transport_reward = 0.3
-    emptying_reward = 0.2
-    catching_reward = 0.2
+    emptying_reward = 0.15
+    catching_reward = 0.15
+    return_reward = 0.1
     gentle_fraction = 0.3
 
     def __init__(self, *, model, spec, force_allowance_n=15.0, force_dose_budget_ns=5.0):
@@ -84,7 +86,7 @@ class PackAndPourFruitEvaluator:
         self._gentle_credit = np.array(
             [fruit_credit] * 3
             + [
-                self.gentle_fraction * (self.transport_reward + self.emptying_reward / 2),
+                self.gentle_fraction * (self.transport_reward + self.emptying_reward / 2 + self.return_reward),
                 self.gentle_fraction * self.catching_reward / 2,
             ]
         )
@@ -98,21 +100,28 @@ class PackAndPourFruitEvaluator:
         self._target_time = np.zeros(3)
         self._previous_source = np.zeros(3, dtype=bool)
         self._previous_target = np.zeros(3, dtype=bool)
+        self._released_support_time = np.zeros(3)
+        self._previous_released_support = np.zeros(3, dtype=bool)
+        self._fruit_support_gaps = np.full(3, self.contact_gap_seconds + self.model.opt.timestep)
         self._packed_fruits = np.zeros(3, dtype=bool)
         self._packed_stage = self._transport_complete = self._ever_success = False
         self._carried_filled = False
         self._transport_time = 0.0
         self._previous_transport = False
+        self._return_time = 0.0
+        self._previous_return = False
         # Rows track bowl grasps and rim grasps; columns track the two hands.
         self._grasp_times = np.zeros((2, 2))
         self._previous_grasps = np.zeros((2, 2), dtype=bool)
         self._holds = np.zeros((2, 2), dtype=bool)
         self._contact_gaps = np.zeros(2)
         self._finger_contact_gaps = np.full((2, 2), self.contact_gap_seconds + self.model.opt.timestep)
+        self._receiver_support_gap = self.contact_gap_seconds + self.model.opt.timestep
         self._armed = np.zeros(3, dtype=bool)
         self._emptied = np.zeros(3, dtype=bool)
         self._pour_valid = np.zeros(3, dtype=bool)
         self._previous_local = None
+        self._previous_resident = np.zeros(3, dtype=bool)
         self._force_dose_ns = np.zeros(5)
         self._peak_force_n = np.zeros(5)
 
@@ -145,11 +154,22 @@ class PackAndPourFruitEvaluator:
         slope = (rim_radius - bottom_radius) / (rim - floor)
         plane_distance = local[:, :2] @ self._normals_xy.T - slope * (local[:, 2:3] - floor)
         radii = self._radii if full_sphere else np.zeros_like(self._radii)
-        sphere_extent = radii[:, None] * np.sqrt(1 + slope * slope)
+        # Check the portion of each sphere below the finite wall's upper edge.
+        # Above the rim, a supported pile may occupy the opening's vertical column.
+        wall_norm = np.sqrt(1 + slope * slope)
+        lowest = local[:, 2] - radii
+        support_z = local[:, 2] - radii * slope / wall_norm
+        clipped = (support_z > rim) & (lowest < rim)
+        slice_radius = np.sqrt(np.maximum(radii**2 - (rim - local[:, 2]) ** 2, 0))
+        sphere_extent = np.where(clipped, slice_radius + slope * (local[:, 2] - rim), radii * wall_norm)
+        below_wall = np.all(
+            plane_distance + sphere_extent[:, None] <= bottom_radius + self.containment_tolerance_m, axis=1
+        )
         return (
-            np.all(plane_distance + sphere_extent <= bottom_radius + self.containment_tolerance_m, axis=1)
-            & (local[:, 2] - radii >= floor - 0.002)
-            & (local[:, 2] + radii <= rim + self.containment_tolerance_m)
+            (below_wall | (lowest >= rim))
+            & np.all(local[:, :2] @ self._normals_xy.T <= rim_radius + self.containment_tolerance_m, axis=1)
+            & (lowest >= floor - 0.002)
+            & (local[:, 2] + radii <= floor + 2 * self._radii.sum() + self.containment_tolerance_m)
         )
 
     def _source_floor_placement(self, data, bowl_pos, bowl_rot):
@@ -262,6 +282,15 @@ class PackAndPourFruitEvaluator:
         # Surface speed gives the same settling tolerance to every fruit size.
         settled[:3] = linear_speed[:3] + self._radii * angular_speed[:3] <= 0.03
         candidates = inside & settled[None, :3] & ~touching_robot[None, :3]
+        geometric_support = supported & inside
+        for _ in range(3):
+            geometric_support |= inside & np.any(supports[None, :, :] & geometric_support[:, None, :], axis=2)
+        self._fruit_support_gaps = np.where(geometric_support[0], 0, self._fruit_support_gaps + elapsed)
+        released_support = inside[0] & ~touching_robot[:3] & (self._fruit_support_gaps <= self.contact_gap_seconds)
+        self._released_support_time = np.where(
+            released_support & self._previous_released_support, self._released_support_time + elapsed, 0
+        )
+        self._previous_released_support = released_support
         supported &= candidates
         for _ in range(3):
             supported |= candidates & np.any(supports[None, :, :] & supported[:, None, :], axis=2)
@@ -271,9 +300,12 @@ class PackAndPourFruitEvaluator:
         self._previous_source = source_eligible
         source_qualified = source_eligible & (self._source_time >= self.settling_seconds)
         # Center containment retains earned credit through rolling and solver penetration.
-        # Completing the stage still requires all three full spheres inside together.
+        # Completing the stage requires collision containment and a supported pile.
         self._packed_fruits = (self._packed_fruits | source_qualified) & source_resident
-        packing_completed_now = bool(self._packed_fruits.all() and inside[0].all()) and not self._packed_stage
+        packing_completed_now = (
+            bool(self._packed_fruits.all() and inside[0].all() and geometric_support[0].all())
+            and not self._packed_stage
+        )
         self._packed_stage |= packing_completed_now
         paired_contacts = np.array([fingers.all(axis=1), fingers.all(axis=1) & rim_fingers.any(axis=1)])
         self._finger_contact_gaps = np.where(fingers, 0, self._finger_contact_gaps + elapsed)
@@ -297,6 +329,7 @@ class PackAndPourFruitEvaluator:
             and bowl_rot[1, 2, 2] >= 0.98
             and bowl_table_load[1] >= 0.6 * self._weights[4]
         )
+        self._receiver_support_gap = 0.0 if receiver_supported else self._receiver_support_gap + elapsed
         source_nested = (
             floor_inside
             and nested_source_load >= 0.6 * self._weights[3]
@@ -312,18 +345,26 @@ class PackAndPourFruitEvaluator:
         self._transport_time = self._transport_time + elapsed if transport and self._previous_transport else 0.0
         self._previous_transport = bool(transport)
         self._transport_complete |= bool(transport and self._transport_time >= self.transport_seconds)
-        self._armed |= (source_qualified & self._packed_stage) | (self._packed_fruits & packing_completed_now)
+        # A brushed fruit can re-arm after being released onto the supported pile.
+        source_rearmed = released_support & (self._released_support_time >= self.fruit_rearm_seconds)
+        self._armed |= ((source_qualified | source_rearmed) & self._packed_stage) | (
+            self._packed_fruits & packing_completed_now
+        )
         self._armed &= ~touching_robot[:3] & ~fruit_table
         self._emptied &= ~source_resident
         self._pour_valid &= ~source_resident & ~touching_robot[:3] & ~fruit_table
         tilt_deg = float(np.rad2deg(np.arccos(np.clip(bowl_rot[0, 2, 2], -1, 1))))
         rim = self._bounds[0][1] + self.containment_tolerance_m
-        pouring_support = bool((held and source_lift >= 0.05) or (receiver_supported and in_transport_zone))
+        pouring_support = bool(
+            (held and source_lift >= 0.05)
+            or (self._receiver_support_gap <= self.contact_gap_seconds and in_transport_zone)
+        )
         crossed = np.zeros(3, dtype=bool)
         departure = np.zeros(3, dtype=bool)
         if self._previous_local is not None:
-            # A rolling fruit's center crosses the lip before its trailing surface.
-            crossed = (self._previous_local[:, 2] <= rim) & (local[0][:, 2] > rim)
+            # A pile can start above the rim. Its fruit leaves through the opening's
+            # upper column, crossing either its side boundary or its top.
+            crossed = self._previous_resident & ~source_resident & (local[0][:, 2] >= rim - 0.002)
             opening = np.linalg.norm(local[0][:, :2], axis=1) <= self._bounds[0][3] + self._radii + 0.005
             departure = (
                 crossed
@@ -341,10 +382,17 @@ class PackAndPourFruitEvaluator:
             local[0][:, 2] + self._radii >= self._bounds[0][0] - 0.002
         )
         self._previous_local = local[0].copy()
+        self._previous_resident = source_resident.copy()
         target_eligible = candidates[1] & supported[1] & bowl_ok[1] & ~touching_robot[4] & self._pour_valid
         self._target_time = np.where(target_eligible & self._previous_target, self._target_time + elapsed, 0)
         self._previous_target = target_eligible
         caught = target_eligible & (self._target_time >= self.settling_seconds)
+        return_eligible = bool(
+            self._transport_complete and self._emptied.all() and bowl_ok[0] and not touching_robot[3]
+        )
+        self._return_time = self._return_time + elapsed if return_eligible and self._previous_return else 0.0
+        self._previous_return = return_eligible
+        returned = return_eligible and self._return_time >= self.settling_seconds
         excess = np.maximum(loads - self.force_threshold_n, 0)
         self._force_dose_ns += excess * elapsed
         self._peak_force_n = np.maximum(self._peak_force_n, loads)
@@ -358,16 +406,21 @@ class PackAndPourFruitEvaluator:
         transporting = self._transport_complete * self.transport_reward * (1 - self.gentle_fraction * damage[3])
         emptying = self._emptied * self.emptying_reward / 3 * (1 - self.gentle_fraction / 2 * (damage[:3] + damage[3]))
         catching = caught * self.catching_reward / 3 * (1 - self.gentle_fraction / 2 * (damage[:3] + damage[4]))
-        success = bool(self._transport_complete and caught.all())
+        returning = returned * self.return_reward * (1 - self.gentle_fraction * damage[3])
+        success = bool(returned and caught.all())
         self._ever_success |= success
         self._result = TaskEvalResult(
-            reward=np.array([packing.sum() + transporting + emptying.sum() + catching.sum()]),
+            reward=np.array([packing.sum() + transporting + emptying.sum() + catching.sum() + returning]),
             success=np.array([success]),
             metrics={
                 "packing_reward": np.array([packing.sum()]),
                 "transport_reward": np.array([transporting]),
                 "emptying_reward": np.array([emptying.sum()]),
                 "catching_reward": np.array([catching.sum()]),
+                "return_reward": np.array([returning]),
+                "source_return_eligible": np.array([return_eligible]),
+                "source_return_settling_seconds": np.array([self._return_time]),
+                "source_returned": np.array([returned]),
                 "fruit_packing_reward": packing[None],
                 "fruit_emptying_reward": emptying[None],
                 "fruit_catching_reward": catching[None],
@@ -387,6 +440,9 @@ class PackAndPourFruitEvaluator:
                 "fruit_source_settling_seconds": self._source_time[None].copy(),
                 "fruit_target_settling_seconds": self._target_time[None].copy(),
                 "fruit_source_supported_mask": supported[0:1],
+                "fruit_source_geometric_support_mask": geometric_support[0:1],
+                "fruit_source_rearm_seconds": self._released_support_time[None].copy(),
+                "fruit_source_support_gap_seconds": self._fruit_support_gaps[None].copy(),
                 "fruit_target_supported_mask": supported[1:2],
                 "fruit_armed_mask": self._armed[None].copy(),
                 "fruit_emptied_mask": self._emptied[None].copy(),
@@ -412,6 +468,7 @@ class PackAndPourFruitEvaluator:
                 "source_in_transport_zone": np.array([in_transport_zone]),
                 "transport_radius_m": np.array([self._bounds[1][3]]),
                 "source_receiver_supported": np.array([receiver_supported]),
+                "source_receiver_support_gap_seconds": np.array([self._receiver_support_gap]),
                 "pouring_support_valid": np.array([pouring_support]),
                 "source_floor_inside_target": np.array([floor_inside]),
                 "source_target_support_n": np.array([nested_source_load]),

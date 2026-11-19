@@ -16,6 +16,8 @@ from abc_sim.randomization.assets.fruit_bowls import (
     BOWL_COLORS,
     BOWL_SEGMENTS,
     FRUIT_CATEGORIES,
+    FRUIT_DENSITY_KG_M3,
+    FRUIT_RADIUS_RANGE_M,
     FruitSpec,
     build_bowl,
     build_fruit,
@@ -65,11 +67,17 @@ class PourFixture:
                 )
         for i in range(1, 4):
             angle = (i - 1) * 2 * np.pi / 3
+            spacing = max(0.031, 2 * radius / np.sqrt(3) + 0.001)
+            slope = (self.source.rim_radius - self.source.bottom_radius) / (self.source.height - self.source.floor)
+            height = max(
+                self.source.floor + radius,
+                self.source.floor + (spacing + radius * np.sqrt(1 + slope**2) - self.source.bottom_radius) / slope,
+            )
             body = ET.SubElement(
                 world,
                 "body",
                 name=f"fruit_{i}",
-                pos=f"{0.6 + 0.031 * np.cos(angle)} {-0.2 + 0.031 * np.sin(angle)} {0.75 + self.source.floor + radius}",
+                pos=f"{0.6 + spacing * np.cos(angle)} {-0.2 + spacing * np.sin(angle)} {0.75 + height}",
             )
             ET.SubElement(body, "freejoint", name=f"fruit_{i}_joint")
             ET.SubElement(
@@ -140,6 +148,14 @@ class PourFixture:
         self.move(np.array([0.57, 0.2, 0.98]), tilt=np.deg2rad(110), steps=1250)
         return self.steps(2000)
 
+    def return_bowl(self):
+        self.gripping = True
+        self.move(np.array([0.6, -0.2, 0.98]), steps=750)
+        self.move(np.array([0.6, -0.2, 0.75]), steps=750)
+        self.gripping = False
+        self.data.mocap_pos[self.hand] = [-2, 0, 2]
+        return self.steps(800)
+
     def put_fruit(self, i, xyz):
         self.data.joint(f"fruit_{i}_joint").qpos[:] = [*xyz, 1, 0, 0, 0]
         self.data.joint(f"fruit_{i}_joint").qvel[:] = 0
@@ -147,16 +163,94 @@ class PourFixture:
 
 class PourPhysicsTest(unittest.TestCase):
     def test_physical_pack_transport_and_gravity_pour(self):
-        fixture = PourFixture()
+        fixture = PourFixture(force_allowance_n=1e6)
         packed = fixture.steps(600)
         self.assertAlmostEqual(packed.scalar_reward(), 0.3, places=5)
         carried = fixture.transport()
         self.assertTrue(carried.metrics["transport_complete"][0], carried.metrics)
         self.assertAlmostEqual(carried.scalar_reward(), 0.6, places=5)
         poured = fixture.pour()
-        self.assertTrue(poured.scalar_success(), poured.metrics)
-        self.assertGreater(poured.scalar_reward(), 0.98)
-        self.assertAlmostEqual(poured.scalar_reward(), 1 - poured.metrics["force_penalty"].sum(), places=5)
+        self.assertEqual(poured.metrics["num_caught_fruits"][0], 3)
+        self.assertFalse(poured.scalar_success())
+        self.assertEqual(poured.metrics["return_reward"][0], 0)
+        self.assertGreater(poured.scalar_reward(), 0.88)
+        returned = fixture.return_bowl()
+        self.assertTrue(returned.scalar_success(), returned.metrics)
+        self.assertGreater(returned.scalar_reward(), 0.98)
+        self.assertAlmostEqual(returned.scalar_reward(), 1 - returned.metrics["force_penalty"].sum(), places=5)
+        self.assertAlmostEqual(returned.scalar_reward() - poured.scalar_reward(), 0.1, places=5)
+        # Picking the bowl up again revokes only the return stage.
+        fixture.grip()
+        lifted = fixture.move(np.array([0.6, -0.2, 0.98]), steps=200)
+        self.assertEqual(lifted.metrics["return_reward"][0], 0)
+        self.assertFalse(lifted.scalar_success())
+        self.assertTrue(lifted.metrics["ever_success"][0])
+        for key in ("packing_reward", "transport_reward", "emptying_reward", "catching_reward"):
+            np.testing.assert_allclose(lifted.metrics[key], returned.metrics[key])
+        fixture.evaluator.reset()
+        fixture.evaluator.after_reset(fixture.model, fixture.data)
+        self.assertFalse(fixture.result().metrics["source_returned"][0])
+        self.assertEqual(fixture.result().metrics["source_return_settling_seconds"][0], 0)
+        self.assertFalse(fixture.result().metrics["ever_success"][0])
+
+    def test_returning_the_filled_bowl_before_pouring_has_no_return_credit(self):
+        fixture = PourFixture(force_allowance_n=1e6)
+        fixture.transport()
+        returned = fixture.return_bowl()
+        self.assertTrue(returned.metrics["bowl_ready_for_packing_mask"][0, 0])
+        self.assertFalse(returned.metrics["touching_robot"][0, 3])
+        self.assertAlmostEqual(returned.scalar_reward(), 0.6, places=5)
+        self.assertEqual(returned.metrics["return_reward"][0], 0)
+
+    def test_return_requires_upright_table_support_release_and_continuous_dwell(self):
+        fixture = PourFixture(force_allowance_n=1e6)
+        fixture.transport()
+        fixture.pour()
+        # An empty bowl resting upside down on its rim must not qualify.
+        fixture.move(np.array([0.6, -0.2, 0.98]), tilt=np.pi, steps=500)
+        fixture.move(np.array([0.6, -0.2, 0.75 + fixture.source.height + fixture.source.wall]), tilt=np.pi, steps=500)
+        fixture.gripping = False
+        fixture.data.mocap_pos[fixture.hand] = [-2, 0, 2]
+        inverted = fixture.steps(800)
+        self.assertTrue(inverted.metrics["settled_mask"][0, 3])
+        self.assertGreater(inverted.metrics["source_tilt_deg"][0], 170)
+        self.assertFalse(inverted.metrics["source_return_eligible"][0])
+        # Position upright on the table, retaining fingertip contact.
+        fixture.gripping = True
+        fixture.move(np.array([0.6, -0.2, 0.98]), steps=500)
+        fixture.move(np.array([0.6, -0.2, 0.75]), steps=500)
+        held = fixture.steps(400)
+        self.assertTrue(held.metrics["touching_robot"][0, 3])
+        self.assertFalse(held.metrics["source_return_eligible"][0])
+        fixture.gripping = False
+        fixture.data.mocap_pos[fixture.hand] = [-2, 0, 2]
+        short = fixture.steps(200)
+        self.assertTrue(short.metrics["source_return_eligible"][0])
+        self.assertEqual(short.metrics["return_reward"][0], 0)
+        self.assertGreater(short.metrics["source_return_settling_seconds"][0], 0)
+        # Touching the bowl breaks the dwell; a fresh half second is required.
+        fixture.data.mocap_pos[fixture.hand] = [0.6, -0.2, 0.75]
+        fixture.data.mocap_quat[fixture.hand] = [1, 0, 0, 0]
+        touched = fixture.steps(1)
+        self.assertTrue(touched.metrics["touching_robot"][0, 3])
+        self.assertEqual(touched.metrics["source_return_settling_seconds"][0], 0)
+        fixture.data.mocap_pos[fixture.hand] = [-2, 0, 2]
+        self.assertEqual(fixture.steps(200).metrics["return_reward"][0], 0)
+        returned = fixture.steps(400)
+        self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
+        self.assertTrue(returned.scalar_success())
+
+    def test_return_credit_does_not_depend_on_catching_every_fruit(self):
+        fixture = PourFixture(force_allowance_n=1e6)
+        fixture.transport()
+        fixture.pour()
+        fixture.put_fruit(1, [0.4, -0.4, 0.774])
+        returned = fixture.return_bowl()
+        self.assertEqual(returned.metrics["num_emptied_fruits"][0], 3)
+        self.assertEqual(returned.metrics["num_caught_fruits"][0], 2)
+        self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
+        self.assertAlmostEqual(returned.scalar_reward(), 0.95, places=5)
+        self.assertFalse(returned.scalar_success())
 
     def test_direct_placement_in_the_large_bowl_earns_zero(self):
         fixture = PourFixture()
@@ -274,11 +368,14 @@ class PourPhysicsTest(unittest.TestCase):
             result = fixture.steps(1)
             if result.metrics["fruit_departure_mask"].any():
                 self.assertFalse(result.metrics["bowl_held"][0])
-                self.assertTrue(result.metrics["source_receiver_supported"][0])
+                self.assertLessEqual(result.metrics["source_receiver_support_gap_seconds"][0], 0.02)
+                self.assertTrue(result.metrics["pouring_support_valid"][0])
                 departures += int(result.metrics["fruit_departure_mask"].sum())
         self.assertEqual(departures, 3)
-        self.assertTrue(result.scalar_success(), result.metrics)
-        self.assertAlmostEqual(result.scalar_reward(), 1.0, places=5)
+        self.assertEqual(result.metrics["num_caught_fruits"][0], 3)
+        self.assertFalse(result.scalar_success())
+        self.assertEqual(result.metrics["return_reward"][0], 0)
+        self.assertAlmostEqual(result.scalar_reward(), 0.9, places=5)
 
     def test_one_fruit_can_finish_a_low_angle_pour_after_release(self):
         fixture = PourFixture(force_allowance_n=1e6)
@@ -297,15 +394,18 @@ class PourPhysicsTest(unittest.TestCase):
             result = fixture.steps(1)
             if result.metrics["fruit_departure_mask"].any():
                 self.assertFalse(result.metrics["bowl_held"][0])
-                self.assertTrue(result.metrics["source_receiver_supported"][0])
+                self.assertLessEqual(result.metrics["source_receiver_support_gap_seconds"][0], 0.02)
+                self.assertTrue(result.metrics["pouring_support_valid"][0])
                 self.assertGreater(result.metrics["source_tilt_deg"][0], 30)
                 self.assertLess(result.metrics["source_tilt_deg"][0], 45)
                 departures += int(result.metrics["fruit_departure_mask"].sum())
         self.assertEqual(departures, 1)
         self.assertEqual(result.metrics["num_emptied_fruits"][0], 1)
         self.assertEqual(result.metrics["num_caught_fruits"][0], 1)
-        self.assertAlmostEqual(result.scalar_reward(), 0.6 + 0.4 / 3, places=5)
+        self.assertAlmostEqual(result.scalar_reward(), 0.7, places=5)
         self.assertFalse(result.scalar_success())
+        returned = fixture.return_bowl()
+        self.assertEqual(returned.metrics["return_reward"][0], 0)
 
     def test_fruit_ejected_from_an_upright_bowl_is_not_a_pour(self):
         fixture = PourFixture(force_allowance_n=1e6)
@@ -376,22 +476,24 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertTrue(result.metrics["fruit_armed_mask"].all())
         self.assertFalse(result.metrics["fruit_source_qualified_mask"][0, 0])
         fixture.transport()
-        self.assertTrue(fixture.pour().scalar_success())
+        self.assertEqual(fixture.pour().metrics["num_caught_fruits"][0], 3)
+        self.assertTrue(fixture.return_bowl().scalar_success())
 
-    def test_retained_credit_does_not_relax_full_packing_containment(self):
+    def test_retained_credit_does_not_qualify_an_unsupported_fruit_above_the_rim(self):
         fixture = PourFixture()
         third_position = fixture.data.joint("fruit_3_joint").qpos[:3].copy()
         fixture.put_fruit(3, [0.4, -0.4, 0.774])
         self.assertAlmostEqual(fixture.steps(600).scalar_reward(), 0.2, places=5)
         fixture.put_fruit(3, third_position)
         protruding = fixture.data.joint("fruit_1_joint").qpos[:3].copy()
-        protruding[2] = 0.75 + fixture.source.height - 0.012
+        protruding[2] = 0.75 + fixture.source.height + 0.030
         for _ in range(600):
-            # Its center is inside, but the top protrudes above the bowl's mouth.
+            # Its center is over the opening, but the pile does not support it.
             fixture.put_fruit(1, protruding)
             result = fixture.steps(1)
         self.assertTrue(result.metrics["fruit_packed_mask"].all())
-        self.assertFalse(result.metrics["fruit_in_source_mask"][0, 0])
+        self.assertTrue(result.metrics["fruit_in_source_mask"][0, 0])
+        self.assertFalse(result.metrics["fruit_source_geometric_support_mask"][0, 0])
         self.assertFalse(result.metrics["packing_stage_complete"][0])
         result = fixture.steps(800)
         self.assertTrue(result.metrics["fruit_in_source_mask"].all())
@@ -407,6 +509,7 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertFalse(result.metrics["transport_complete"][0])
         self.assertEqual(result.metrics["emptying_reward"][0], 0)
         self.assertEqual(result.metrics["catching_reward"][0], 0)
+        self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
 
     def test_hand_transfer_after_transport_does_not_count_as_pouring(self):
         fixture = PourFixture()
@@ -425,11 +528,13 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertTrue(result.metrics["fruit_in_target_mask"].all())
         self.assertEqual(result.metrics["emptying_reward"][0], 0)
         self.assertEqual(result.metrics["catching_reward"][0], 0)
+        self.assertEqual(fixture.return_bowl().metrics["return_reward"][0], 0)
 
     def test_landing_credit_is_per_fruit_and_revoked_when_one_leaves(self):
         fixture = PourFixture()
         fixture.transport()
-        completed = fixture.pour()
+        fixture.pour()
+        completed = fixture.return_bowl()
         self.assertTrue(completed.scalar_success(), completed.metrics)
         fixture.put_fruit(1, [0.4, -0.4, 0.774])
         result = fixture.steps(600)
@@ -486,15 +591,36 @@ class PourPhysicsTest(unittest.TestCase):
         carried = fixture.transport()
         self.assertTrue(carried.metrics["transport_complete"][0])
         self.assertAlmostEqual(carried.scalar_reward(), 0.51, places=5)
-        self.assertAlmostEqual(carried.metrics["force_penalty"][0, 3], 0.12)
+        self.assertAlmostEqual(carried.metrics["force_penalty"][0, 3], 0.1425)
+        fixture.pour()
+        returned = fixture.return_bowl()
+        self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.07)
+        self.assertTrue(returned.scalar_success())
+        self.assertAlmostEqual(returned.scalar_reward(), 1 - returned.metrics["force_penalty"].sum(), places=5)
 
     def test_smallest_and_largest_fruits_can_pack_and_pour(self):
-        for radius in (0.021, 0.025):
+        for radius in (*FRUIT_RADIUS_RANGE_M, 0.035):
             with self.subTest(radius=radius):
-                fixture = PourFixture(radius=radius)
+                fixture = PourFixture(radius=radius, force_allowance_n=1e6)
+                packed = fixture.steps(800)
+                self.assertAlmostEqual(packed.scalar_reward(), 0.3, places=5)
+                self.assertTrue(packed.metrics["fruit_source_geometric_support_mask"].all())
+                centers = fixture.data.geom_xpos[fixture.evaluator._fruit_geoms]
+                source = fixture.data.body("source_bowl").xpos
+                self.assertTrue(np.any(centers[:, 2] + radius > source[2] + fixture.source.height))
                 self.assertTrue(fixture.transport().metrics["transport_complete"][0])
                 result = fixture.pour()
-                self.assertTrue(result.scalar_success(), result.metrics)
+                self.assertEqual(result.metrics["num_caught_fruits"][0], 3, result.metrics)
+                self.assertTrue(fixture.return_bowl().scalar_success())
+
+    def test_fruit_stacked_on_other_fruit_above_the_rim_can_qualify(self):
+        fixture = PourFixture(radius=0.035, force_allowance_n=1e6)
+        for i in range(1, 4):
+            fixture.put_fruit(i, [0.6, -0.2, 0.75 + fixture.source.floor + 0.035 + (i - 1) * 0.070])
+        packed = fixture.steps(800)
+        self.assertTrue(packed.metrics["fruit_source_supported_mask"].all(), packed.metrics)
+        self.assertTrue(packed.metrics["packing_stage_complete"][0])
+        self.assertAlmostEqual(packed.scalar_reward(), 0.3)
 
     def test_rim_grasp_requires_opposing_fingers_and_expires_on_release(self):
         fixture = PourFixture()
@@ -610,8 +736,17 @@ class PourSceneTest(unittest.TestCase):
             self.assertNotEqual(meta["source_color"], meta["target_color"])
             self.assertIn(f"{meta['source_color']} bowl", self.env.prompt)
             self.assertIn(f"large {meta['target_color']} bowl", self.env.prompt)
+            self.assertIn(f"empty {meta['source_color']} bowl", self.env.prompt)
+            self.assertIn("table", self.env.prompt)
             self.assertEqual(get_task_spec(self.env.prompt).name, "pack_and_pour_fruit")
             self.assertEqual(len(meta["fruits"]), 3)
+            for i, fruit in enumerate(meta["fruits"], 1):
+                radius = fruit["radius"]
+                self.assertGreaterEqual(radius, FRUIT_RADIUS_RANGE_M[0])
+                self.assertLessEqual(radius, FRUIT_RADIUS_RANGE_M[1])
+                mass = FRUIT_DENSITY_KG_M3 * 4 * np.pi * radius**3 / 3
+                self.assertAlmostEqual(self.env.model.body(f"fruit_{i}").mass[0], mass)
+                np.testing.assert_allclose(self.env.model.body(f"fruit_{i}").inertia, 2 * mass * radius**2 / 5)
             self.assertEqual(len(state.object_states), 5)
             self.assertTrue(self.env._task_randomizer._pairwise_ok(state.object_states))
             self.assertTrue(self.env._task_randomizer._contacts_ok(self.env.model, self.env.data))
@@ -695,7 +830,7 @@ class PourSceneTest(unittest.TestCase):
                         vertices = (
                             model.mesh_vert[start : start + n] @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
                         )
-                        self.assertLessEqual(np.linalg.norm(vertices - center, axis=1).max(), 0.024001)
+                        self.assertLessEqual(np.linalg.norm(vertices - center, axis=1).max(), 0.035001)
         self.assertGreaterEqual(count, 12)
 
 

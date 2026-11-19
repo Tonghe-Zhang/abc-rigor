@@ -15,6 +15,7 @@ from ..assets.fruit_bowls import (
     BOWL_COLORS,
     BOWL_SEGMENTS,
     FRUIT_CATEGORIES,
+    FRUIT_RADIUS_RANGE_M,
     FruitSpec,
     build_bowl,
     build_fruit,
@@ -41,7 +42,9 @@ class PackAndPourFruitRandomizer(SceneRandomizer):
             if "fruits" in options
             else [
                 FruitSpec(
-                    str(category), str(rng.choice(fruit_variants(str(category)))), float(rng.uniform(0.021, 0.025))
+                    str(category),
+                    str(rng.choice(fruit_variants(str(category)))),
+                    float(rng.uniform(*FRUIT_RADIUS_RANGE_M)),
                 )
                 for category in rng.choice(FRUIT_CATEGORIES, size=3, replace=False)
             ]

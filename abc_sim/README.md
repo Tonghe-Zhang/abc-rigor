@@ -65,7 +65,7 @@ env.close()
 
 ### Pack and pour fruit
 
-`pack_and_pour_fruit` starts with three 42–50 mm fruits, a bowl with a 16 cm
+`pack_and_pour_fruit` starts with three 60–75 mm fruits, a bowl with a 16 cm
 opening and 6 cm height, and a shallow 34 cm receiving bowl. Apple, orange, lemon,
 and tomato asset variants have textured visuals enclosed by spherical
 collision geometry. Both bowls have solid floors and open, outward-flaring
@@ -88,7 +88,10 @@ compiled body weights.
 The seed controls identities, fruit radii, five separated poses, two distinct
 named colors from eight choices, and six prompt templates. Prompts name the
 realized colors, such as “Place all the fruits into the blue bowl, then pour
-the fruits from the blue bowl into the large white bowl.”
+the fruits from the blue bowl into the large white bowl. Finally, put the
+empty blue bowl back on the table.”
+Fruit collision geometry uses 800 kg/m³ density, giving 90–177 g per fruit;
+mass and inertia scale with the sampled radius.
 Serialized randomization restores geometry, colors, poses and language.
 Reset options under `randomization` accept `fruits` (three
 `category`/`variant`/`radius` dictionaries), `source_color`, `target_color`,
@@ -98,10 +101,11 @@ Reward stages are chronological:
 
 | Stage | Maximum | Qualification |
 | --- | ---: | --- |
-| Packing | 0.3 | 0.1 per fully contained fruit, supported, released and settled for 0.5 s |
+| Packing | 0.3 | 0.1 per fruit in a supported pile in the small bowl, released and settled for 0.5 s |
 | Transport | 0.3 | All three packed together, then a bowl grasp lifts the filled bowl and carries it above or into the receiver |
-| Emptying | 0.2 | 1/15 per fruit observed leaving the tilted bowl's mouth after transport, while grasped or supported by the receiver |
-| Catching | 0.2 | 1/15 per poured fruit settled, released and supported inside the receiver for 0.5 s |
+| Emptying | 0.15 | 0.05 per fruit observed leaving the tilted bowl's opening after transport, while grasped or supported by the receiver |
+| Catching | 0.15 | 0.05 per poured fruit settled, released and supported in the receiver for 0.5 s |
+| Return | 0.1 | All three fruits poured out, then small bowl upright, released and directly supported by the table for 0.5 s |
 
 Putting fruit directly into the receiver earns **zero**. Nesting the packed
 small bowl inside the receiver earns **0.6 before force deductions** and
@@ -110,8 +114,11 @@ Before all three are packed, each qualified fruit retains its partial packing
 credit while its center stays inside the small bowl, including while rolling
 or being carried. This tolerates contact-solver penetration after qualification.
 Its center leaving the bowl clears that fruit's partial credit. The fruits can
-qualify at different times; having all three qualified full spheres inside
-together completes the permanent packing milestone.
+qualify at different times; having all three qualified fruits contained and
+supported together completes the permanent packing milestone. Fruits may
+protrude above either bowl's rim or stack on other fruits, with a contact-support
+path to that bowl. Above-rim fruit centers must stay over the opening; unsupported
+fruit hovering over it cannot qualify.
 Transport has a 0.1 s dwell; the filled bowl must first have been lifted
 at least 5 cm with a bowl grasp. Grasp acquisition requires both opposing
 fingers of one hand contacting the bowl for 50 ms, tolerating gaps of up to
@@ -126,20 +133,30 @@ during placement. Nesting also qualifies when the source floor is inside the rec
 flared cavity, with upward support from the receiver and both bowls upright and
 settled.
 Pouring requires
-at least 30° tilt and the fruit's center crossing the mouth plane, with no
+at least 30° tilt and the fruit's center leaving the opening's upper column, with no
 direct robot-fruit contact. The source must either remain grasped and lifted
 5 cm or be supported by the receiver within the transport zone. Receiver
 support means at least 30% of the empty source bowl's weight carried by the
 upright, table-supported receiver. This permits fruit to finish rolling out
-after release onto the receiver. A spill can earn emptying credit but cannot earn catching credit
+after release onto the receiver; support gaps up to 20 ms are tolerated while
+the source remains in the transport zone. A brushed fruit can re-arm for pouring
+after 50 ms released onto the supported pile, tolerating 20 ms support gaps while
+its collision bounds remain contained. A hand-carried fruit cannot.
+A spill can earn emptying credit but cannot earn catching credit
 after contacting the table. Re-entering the small bowl clears a fruit's
 pouring credit. Removing a caught fruit clears its current catching credit.
-Containment accounts for the fruit's full sphere and each bowl's polygonal
-interior, allowing 1 mm of side-wall solver penetration.
+Containment checks each sphere against the finite polygonal walls and floor,
+allowing 1 mm of side-wall solver penetration. The opening's vertical column
+admits above-rim piles; contact support is required for packing and catching.
 Fruit settling limits `linear_speed + radius * angular_speed` to 3 cm/s;
 bowls must move slower than 3 cm/s and 0.25 rad/s.
+Return credit requires the small bowl's base to receive at least 60% of its
+own weight from the table, its upright axis within about 11.5° of vertical,
+and no robot contact throughout the 0.5 s dwell. Any table location qualifies.
+Lifting or touching the bowl again revokes only this component. Catching every
+fruit is independent of return credit; full task success requires both.
 
-Gentle handling reserves 0.05 per fruit, 0.12 for the small bowl and 0.03
+Gentle handling reserves 0.045 per fruit, 0.1425 for the small bowl and 0.0225
 for the receiver. Every solved native tick sums the magnitudes of all
 external contact forces, including friction; opposing forces add. Dose is
 `max(load - allowance, 0) * dt`, and 5 N·s consumes an entity's entire
@@ -149,10 +166,10 @@ reaction. Damage never recovers before reset, and remains separate from
 binary task completion. `force_allowance_n` and `force_dose_budget_ns`
 are configurable evaluator options.
 
-Metrics report the four reward components, per-fruit packing/emptying/catching,
+Metrics report the five reward components, per-fruit packing/emptying/catching,
 stage milestones, retained packing masks, qualification masks and dwell times,
 bowl support/readiness, containment/support/pour masks, bowl/rim grasp, transport
-eligibility and dwell, center-distance transport zone, receiver support,
+eligibility and dwell, return eligibility/dwell, center-distance transport zone, receiver support,
 mouth crossings, qualified departures, floor containment, and load/peak/
 excess-dose/potential-penalty columns in order
 `[fruit_1, fruit_2, fruit_3, source_bowl, target_bowl]`.

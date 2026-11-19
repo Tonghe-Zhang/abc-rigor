@@ -59,18 +59,6 @@
     <texture type="skybox" builtin="gradient" rgb1="1.0 1.0 1.0" rgb2="0.98 0.98 0.98" width="512" height="3072" />
     <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.55 0.55 0.55" rgb2="0.50 0.50 0.50" markrgb="0.6 0.6 0.6" width="300" height="300" />
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2" />
-    <mesh file="task_grab_clutter/objects/apple/apple_10/visual/model_normalized_0.obj" name="fruit_1_model_normalized_0_vis" scale="0.07 0.07 0.07" refquat="1.0 0.0 0.0 0.0" />
-    <texture type="2d" name="fruit_1_image0" file="task_grab_clutter/objects/apple/apple_10/visual/image0.png" />
-    <material name="fruit_1_M_Apple.001" texture="fruit_1_image0" specular="0.5" shininess="0.25" />
-    <mesh file="task_grab_clutter/objects/apple/apple_10/visual/model_normalized_0.obj" name="fruit_1_model_normalized_0_vis__scaled__fruit_1" scale="0.0440100984 0.0440100984 0.0440100984" refquat="1.0 0.0 0.0 0.0" />
-    <mesh file="task_grab_clutter/objects/orange/orange_0/visual/model_normalized_0.obj" name="fruit_2_model_normalized_0_vis" scale="0.07499999999999997 0.07499999999999997 0.07499999999999997" refquat="-1.1102230246251565e-16 1.0 0.0 0.0" />
-    <texture type="2d" name="fruit_2_image0" file="task_grab_clutter/objects/orange/orange_0/visual/image0.png" />
-    <material name="fruit_2_orange_halb3DC_null_color" texture="fruit_2_image0" specular="0.5" shininess="0.15999998099999999" />
-    <mesh file="task_grab_clutter/objects/orange/orange_0/visual/model_normalized_0.obj" name="fruit_2_model_normalized_0_vis__scaled__fruit_2" scale="0.041745772 0.041745772 0.041745772" refquat="-1.1102230246251565e-16 1.0 0.0 0.0" />
-    <mesh file="task_grab_clutter/objects/lemon/lemon_10/visual/model_normalized_0.obj" name="fruit_3_model_normalized_0_vis" scale="0.08499999999999998 0.08499999999999998 0.08499999999999998" refquat="0.7071067811865475 0.0 0.0 0.7071067811865476" />
-    <texture type="2d" name="fruit_3_image0" file="task_grab_clutter/objects/lemon/lemon_10/visual/image0.png" />
-    <material name="fruit_3_material0.022" texture="fruit_3_image0" specular="0.5" shininess="0.359999993" />
-    <mesh file="task_grab_clutter/objects/lemon/lemon_10/visual/model_normalized_0.obj" name="fruit_3_model_normalized_0_vis__scaled__fruit_3" scale="0.0462080177 0.0462080177 0.0462080177" refquat="0.7071067811865475 0.0 0.0 0.7071067811865476" />
     <material name="source_bowl_color" rgba="0.06 0.25 0.8 1" specular="0.25" shininess="0.3" />
     <mesh name="source_bowl_wall_mesh_0" vertex="0.05 -0.00492457017 0.003 0.0525 -0.00517079868 0.003 0.0525 0.00517079868 0.003 0.05 0.00492457017 0.003 0.08 -0.00787931227 0.06 0.0825 -0.00812554078 0.06 0.0825 0.00812554078 0.06 0.08 0.00787931227 0.06" face="0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7" />
     <mesh name="source_bowl_wall_mesh_1" vertex="0.05 0.00492457017 0.003 0.0525 0.00517079868 0.003 0.0504824544 0.0153136851 0.003 0.048078528 0.014584462 0.003 0.08 0.00787931227 0.06 0.0825 0.00812554078 0.06 0.0793295713 0.0240643624 0.06 0.0769256449 0.0233351393 0.06" face="0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7" />
@@ -137,6 +125,18 @@
     <mesh name="target_bowl_wall_mesh_29" vertex="0.112628854 -0.0924321121 0.003 0.114570731 -0.0940257692 0.003 0.130712804 -0.0698674495 0.003 0.128497333 -0.0686832555 0.003 0.132047622 -0.108368683 0.065 0.133989499 -0.10996234 0.065 0.152867517 -0.0817093901 0.065 0.150652046 -0.0805251961 0.065" face="0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7" />
     <mesh name="target_bowl_wall_mesh_30" vertex="0.128497333 -0.0686832555 0.003 0.130712804 -0.0698674495 0.003 0.141831658 -0.043024163 0.003 0.139427731 -0.0422949399 0.003 0.150652046 -0.0805251961 0.065 0.152867517 -0.0817093901 0.065 0.165870922 -0.050316394 0.065 0.163466995 -0.0495871709 0.065" face="0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7" />
     <mesh name="target_bowl_wall_mesh_31" vertex="0.139427731 -0.0422949399 0.003 0.141831658 -0.043024163 0.003 0.1475 -0.014527482 0.003 0.145 -0.0142812535 0.003 0.163466995 -0.0495871709 0.065 0.165870922 -0.050316394 0.065 0.1725 -0.0169897671 0.065 0.17 -0.0167435386 0.065" face="0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7" />
+    <mesh file="task_grab_clutter/objects/apple/apple_10/visual/model_normalized_0.obj" name="fruit_1_model_normalized_0_vis" scale="0.07 0.07 0.07" refquat="1.0 0.0 0.0 0.0" />
+    <texture type="2d" name="fruit_1_image0" file="task_grab_clutter/objects/apple/apple_10/visual/image0.png" />
+    <material name="fruit_1_M_Apple.001" texture="fruit_1_image0" specular="0.5" shininess="0.25" />
+    <mesh file="task_grab_clutter/objects/apple/apple_10/visual/model_normalized_0.obj" name="fruit_1_model_normalized_0_vis__scaled__fruit_1" scale="0.0641813935 0.0641813935 0.0641813935" refquat="1.0 0.0 0.0 0.0" />
+    <mesh file="task_grab_clutter/objects/orange/orange_0/visual/model_normalized_0.obj" name="fruit_2_model_normalized_0_vis" scale="0.07499999999999997 0.07499999999999997 0.07499999999999997" refquat="-1.1102230246251565e-16 1.0 0.0 0.0" />
+    <texture type="2d" name="fruit_2_image0" file="task_grab_clutter/objects/orange/orange_0/visual/image0.png" />
+    <material name="fruit_2_orange_halb3DC_null_color" texture="fruit_2_image0" specular="0.5" shininess="0.15999998099999999" />
+    <mesh file="task_grab_clutter/objects/orange/orange_0/visual/model_normalized_0.obj" name="fruit_2_model_normalized_0_vis__scaled__fruit_2" scale="0.0608792509 0.0608792509 0.0608792509" refquat="-1.1102230246251565e-16 1.0 0.0 0.0" />
+    <mesh file="task_grab_clutter/objects/lemon/lemon_10/visual/model_normalized_0.obj" name="fruit_3_model_normalized_0_vis" scale="0.08499999999999998 0.08499999999999998 0.08499999999999998" refquat="0.7071067811865475 0.0 0.0 0.7071067811865476" />
+    <texture type="2d" name="fruit_3_image0" file="task_grab_clutter/objects/lemon/lemon_10/visual/image0.png" />
+    <material name="fruit_3_material0.022" texture="fruit_3_image0" specular="0.5" shininess="0.359999993" />
+    <mesh file="task_grab_clutter/objects/lemon/lemon_10/visual/model_normalized_0.obj" name="fruit_3_model_normalized_0_vis__scaled__fruit_3" scale="0.0673866925 0.0673866925 0.0673866925" refquat="0.7071067811865475 0.0 0.0 0.7071067811865476" />
   </asset>
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true" diffuse="0.30 0.30 0.30" specular="0.05 0.05 0.05" />
@@ -526,26 +526,26 @@
       <site name="target_bowl_cavity_floor" type="cylinder" pos="0 0 0.003" size="0.145 0.001" rgba="0 0 0 0" group="4" />
       <site name="target_bowl_cavity_rim" type="cylinder" pos="0 0 0.065" size="0.17 0.001" rgba="0 0 0 0" group="4" />
     </body>
-    <body name="fruit_1" pos=".4 -0.32 .775">
+    <body name="fruit_1" pos=".4 -0.32 0.786">
       <freejoint name="fruit_1_joint" />
-      <body name="fruit_1_object" pos="5.08293902e-10 2.63019122e-10 -7.8007753e-11">
+      <body name="fruit_1_object" pos="7.41261941e-10 3.83569552e-10 -1.6376131e-10">
         <geom solimp="0.998 0.998 0.001" solref="0.001 1" density="0" friction="0.95 0.3 0.1" type="mesh" mesh="fruit_1_model_normalized_0_vis__scaled__fruit_1" conaffinity="0" contype="0" group="2" material="fruit_1_M_Apple.001" name="fruit_1_geom_0" />
       </body>
-      <geom name="fruit_1_collision" type="sphere" size="0.024" mass="0.04632466863277365" rgba="0 0 0 0" group="3" friction="0.35 0.003 0.0002" condim="6" priority="1" solref="0.004 1" />
+      <geom name="fruit_1_collision" type="sphere" size="0.035" density="800.0" rgba="0 0 0 0" group="3" friction="0.35 0.003 0.0002" condim="6" priority="1" solref="0.004 1" />
     </body>
-    <body name="fruit_2" pos=".4 0.0 .775">
+    <body name="fruit_2" pos=".4 0.0 0.786">
       <freejoint name="fruit_2_joint" />
-      <body name="fruit_2_object" pos="6.32231437e-10 2.5657892e-10 1.33407445e-10">
+      <body name="fruit_2_object" pos="9.22004179e-10 3.74177591e-10 2.61219189e-10">
         <geom solimp="0.998 0.998 0.001" solref="0.001 1" density="0" friction="0.95 0.3 0.1" type="mesh" mesh="fruit_2_model_normalized_0_vis__scaled__fruit_2" conaffinity="0" contype="0" group="2" material="fruit_2_orange_halb3DC_null_color" name="fruit_2_geom_0" />
       </body>
-      <geom name="fruit_2_collision" type="sphere" size="0.024" mass="0.04632466863277365" rgba="0 0 0 0" group="3" friction="0.35 0.003 0.0002" condim="6" priority="1" solref="0.004 1" />
+      <geom name="fruit_2_collision" type="sphere" size="0.035" density="800.0" rgba="0 0 0 0" group="3" friction="0.35 0.003 0.0002" condim="6" priority="1" solref="0.004 1" />
     </body>
-    <body name="fruit_3" pos=".4 0.32 .775">
+    <body name="fruit_3" pos=".4 0.32 0.786">
       <freejoint name="fruit_3_joint" />
-      <body name="fruit_3_object" pos="6.15945053e-11 -3.14221816e-10 -2.26514828e-10">
+      <body name="fruit_3_object" pos="8.98253202e-11 -4.58240149e-10 -2.84500794e-10">
         <geom solimp="0.998 0.998 0.001" solref="0.001 1" density="0" friction="0.95 0.3 0.1" type="mesh" mesh="fruit_3_model_normalized_0_vis__scaled__fruit_3" conaffinity="0" contype="0" group="2" material="fruit_3_material0.022" name="fruit_3_geom_0" />
       </body>
-      <geom name="fruit_3_collision" type="sphere" size="0.024" mass="0.04632466863277365" rgba="0 0 0 0" group="3" friction="0.35 0.003 0.0002" condim="6" priority="1" solref="0.004 1" />
+      <geom name="fruit_3_collision" type="sphere" size="0.035" density="800.0" rgba="0 0 0 0" group="3" friction="0.35 0.003 0.0002" condim="6" priority="1" solref="0.004 1" />
     </body>
   </worldbody>
   <equality>

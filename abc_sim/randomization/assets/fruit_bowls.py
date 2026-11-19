@@ -26,6 +26,8 @@ BOWL_COLORS = {
     "pink": (0.95, 0.36, 0.59),
 }
 FRUIT_CATEGORIES = ("apple", "orange", "lemon", "tomato")
+FRUIT_DENSITY_KG_M3 = 800.0
+FRUIT_RADIUS_RANGE_M = (0.030, 0.0375)
 
 
 @dataclass(frozen=True)
@@ -128,14 +130,14 @@ def build_bowl(name: str, spec: BowlSpec) -> tuple[list[ET.Element], ET.Element]
 class FruitSpec:
     category: str
     variant: str
-    radius: float = 0.024
+    radius: float = 0.035
 
     def __post_init__(self):
         if self.category not in FRUIT_CATEGORIES:
             raise ValueError(f"Unsupported fruit category: {self.category!r}.")
         DistractorSpec(self.category, self.variant)
-        if not np.isfinite(self.radius) or not 0.021 <= self.radius <= 0.025:
-            raise ValueError("Fruit radius must be between 21 and 25 mm.")
+        if not np.isfinite(self.radius) or not FRUIT_RADIUS_RANGE_M[0] <= self.radius <= FRUIT_RADIUS_RANGE_M[1]:
+            raise ValueError("Fruit radius must be between 30 and 37.5 mm.")
 
 
 @lru_cache(maxsize=None)
@@ -199,7 +201,7 @@ def build_fruit(spec: FruitSpec, index: int) -> tuple[list[ET.Element], ET.Eleme
         name=f"{name}_collision",
         type="sphere",
         size=str(spec.radius),
-        mass=str(800 * 4 * np.pi * spec.radius**3 / 3),
+        density=str(FRUIT_DENSITY_KG_M3),
         rgba="0 0 0 0",
         group="3",
         friction="0.35 0.003 0.0002",
