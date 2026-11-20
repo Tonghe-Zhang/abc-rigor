@@ -29,6 +29,9 @@ _BELT_CONTACT_ANGULAR_DAMPING = 0.0
 _OFF_TRACK_GEOMS = (
     "table_collision",
     "floor_collision",
+)
+# Open workspaces have no enclosure walls; any walls present still remove objects.
+_OPTIONAL_OFF_TRACK_GEOMS = (
     "back_wall_collision",
     "left_wall_collision",
     "right_wall_collision",
@@ -188,8 +191,11 @@ class ConveyorPickRuntime:
             if left_joint < 0 or right_joint < 0 or gripper_actuator < 0:
                 raise RuntimeError(f"conveyor_pick scene is missing {prefix} gripper controls")
 
-            data.qpos[model.jnt_qposadr[left_joint]] = float(model.jnt_range[left_joint][1])
-            data.qpos[model.jnt_qposadr[right_joint]] = float(model.jnt_range[right_joint][0])
+            # Both finger coordinates are zero when closed. Their open endpoints
+            # follow each joint's range, including mirrored and linear fingers.
+            for joint in (left_joint, right_joint):
+                limits = model.jnt_range[joint]
+                data.qpos[model.jnt_qposadr[joint]] = float(limits[np.argmax(np.abs(limits))])
             data.ctrl[gripper_actuator] = float(model.actuator_ctrlrange[gripper_actuator][1])
 
     @staticmethod
@@ -221,7 +227,11 @@ class ConveyorPickRuntime:
         if missing:
             raise RuntimeError("conveyor_pick scene is missing off-track geoms: " + ", ".join(missing))
 
-        self._off_track_geom_ids = frozenset(int(geom_id) for geom_id in geom_ids.values())
+        walls = {
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+            for name in _OPTIONAL_OFF_TRACK_GEOMS
+        }
+        self._off_track_geom_ids = frozenset(geom_ids.values()) | frozenset(walls - {-1})
         return self._off_track_geom_ids
 
     def _roller_actuators_for(self, model: mujoco.MjModel) -> tuple[int, ...]:
