@@ -1,8 +1,8 @@
 """Runtime controller for the conveyor pick task.
 
-An object that leaves the belt for the table, floor or a wall is off the track: it is removed from the scene (parked
-on the floor behind the back wall, out of every camera's view), so objects that ride off the belt's end cannot pile
-up within reach and be put in the bin afterwards.
+An object that leaves the belt for the table, floor or a wall is off the track:
+it is parked at x = 3 m, beyond the robot's reach, so objects that ride off the
+belt's end cannot be collected and put in the bin afterwards.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Conveyor belt speed: 0.10-0.20 m/s by default; a reset request can move either bound."""
+"""Conveyor speeds, gripper reset coordinates, and workspace contact contracts."""
 
 from __future__ import annotations
 
@@ -35,8 +35,11 @@ def conveyor_xml(*, mirrored_fingers=True):
         owner.find("joint").set("range", "0 .0475")
         passive = ET.SubElement(owner, "body", name=f"{arm}_passive_finger_body")
         ET.SubElement(
-            passive, "joint", name=f"{arm}_right_finger", type="slide",
-            range="-.0475 0" if mirrored_fingers else "0 .0475"
+            passive,
+            "joint",
+            name=f"{arm}_right_finger",
+            type="slide",
+            range="-.0475 0" if mirrored_fingers else "0 .0475",
         )
         ET.SubElement(
             passive,
