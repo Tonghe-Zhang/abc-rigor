@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,9 +31,9 @@ def __getattr__(name: str):
 
     if name in {"RandomizationSamplingError", "RandomizationState", "TASK_RANDOMIZERS"}:
         from abc_sim.randomization import (
+            TASK_RANDOMIZERS,
             RandomizationSamplingError,
             RandomizationState,
-            TASK_RANDOMIZERS,
         )
 
         return {
@@ -91,8 +92,8 @@ def __getattr__(name: str):
     }:
         from abc_sim.task_registry import (
             DEFAULT_SCENE_XML,
-            ResolvedTask,
             SCENE_XMLS,
+            ResolvedTask,
             SceneTaskSpec,
             get_scene_task_spec,
             get_task_physics_defaults,
@@ -177,6 +178,7 @@ def make_env(
     background_variation_asset_dir: str | Path | None = None,
     background_resample: str = "episode",
     background_slot_scale: float = 1.0,
+    environment_factory: Callable[..., MuJoCoYAMEnv] | None = None,
     **kwargs,
 ) -> "MuJoCoYAMEnv":
     """Create a MuJoCo YAM bimanual environment.
@@ -184,6 +186,10 @@ def make_env(
     Args:
         task: Task scene, catalogue name, or a custom ``SimTaskSpec``.
         render_cameras: Whether to render camera images in observations.
+        environment_factory: Optional constructor for a MuJoCoYAMEnv subclass.
+            The task factory retains responsibility for task binding, generated
+            scenes, and randomizer preparation. Subclasses can compose hardware
+            during every XML compilation and validate cached models.
         prompt: Task prompt string included in observations. Defaults to the
             resolved task prompt when available.
         chunk_dim: Number of timesteps per action chunk.
@@ -266,13 +272,13 @@ def make_env(
         import numpy as _np
 
         from abc_sim.randomization import (
-            InHandTransferRandomizer,
             _INHAND_CATEGORIES,
             _OBJ_Z,
             _X_MAX,
             _X_MIN,
             _Y_LEFT_MAX,
             _Y_LEFT_MIN,
+            InHandTransferRandomizer,
             _inhand_apply_scene_transforms,
             _inhand_build_xml,
             _inhand_get_variants,
@@ -302,7 +308,7 @@ def make_env(
             "terminate_on_success": terminate_on_success,
             "terminate_on_failure": terminate_on_failure,
         }
-        env = MuJoCoYAMEnv(
+        env = (environment_factory or MuJoCoYAMEnv)(
             config=config,
             render_cameras=render_cameras,
             camera_backend=camera_backend,
@@ -329,9 +335,7 @@ def make_env(
 
     scene_xml_path = Path(scene_xml) if scene_xml is not None else get_task_scene_xml(env_task)
     if scene_xml_path is None:
-        raise ValueError(
-            f"Unknown task '{task}'. Available: {list(list_scene_task_names())}"
-        )
+        raise ValueError(f"Unknown task '{task}'. Available: {list(list_scene_task_names())}")
 
     tmp_scene_xml_path: Path | None = None
     if scene_xml_string is not None:
@@ -357,7 +361,7 @@ def make_env(
         "terminate_on_failure": terminate_on_failure,
     }
     try:
-        env = MuJoCoYAMEnv(
+        env = (environment_factory or MuJoCoYAMEnv)(
             config=config,
             render_cameras=render_cameras,
             camera_backend=camera_backend,
