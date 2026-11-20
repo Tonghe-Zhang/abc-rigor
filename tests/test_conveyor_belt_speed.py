@@ -92,21 +92,34 @@ def conveyor_xml(*, mirrored_fingers=True):
 
 class ConveyorBeltSpeedTest(unittest.TestCase):
     def test_off_track_contacts_allow_open_workspaces_but_require_table_and_floor(self):
-        root = ET.fromstring(conveyor_xml())
-        world = root.find("worldbody")
-        for name in ("back_wall_collision", "left_wall_collision", "right_wall_collision"):
-            world.remove(world.find(f"geom[@name='{name}']"))
-        model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+        walls = ("back_wall_collision", "left_wall_collision", "right_wall_collision")
+        required = ("table_collision", "floor_collision")
         runtime = ConveyorPickRuntime()
-        self.assertEqual(
-            runtime._off_track_geoms_for(model),
-            {model.geom(name).id for name in ("table_collision", "floor_collision")},
-        )
-        world.remove(world.find("geom[@name='floor_collision']"))
-        model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
-        runtime.bind(model, mujoco.MjData(model))
-        with self.assertRaisesRegex(RuntimeError, "missing off-track geoms: floor_collision"):
-            runtime._off_track_geoms_for(model)
+        for removed_walls in ((), walls[:1], walls):
+            with self.subTest(removed_walls=removed_walls):
+                root = ET.fromstring(conveyor_xml())
+                world = root.find("worldbody")
+                for name in removed_walls:
+                    world.remove(world.find(f"geom[@name='{name}']"))
+                model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+                runtime.bind(model, mujoco.MjData(model))
+                self.assertEqual(
+                    runtime._off_track_geoms_for(model),
+                    {
+                        model.geom(name).id
+                        for name in (*required, *walls)
+                        if name not in removed_walls
+                    },
+                )
+                for missing in required:
+                    with self.subTest(missing=missing):
+                        geom = world.find(f"geom[@name='{missing}']")
+                        world.remove(geom)
+                        model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+                        runtime.bind(model, mujoco.MjData(model))
+                        with self.assertRaisesRegex(RuntimeError, f"missing off-track geoms: {missing}"):
+                            runtime._off_track_geoms_for(model)
+                        world.append(geom)
 
     def test_default_reset_opens_both_mirrored_and_linear_fingers(self):
         for mirrored in (True, False):
