@@ -1,10 +1,11 @@
-"""Conveyor belt speed: 0.10-0.20 m/s by default; a reset request can move either bound."""
+"""Conveyor speeds, gripper reset coordinates, and workspace contact contracts."""
 
 from __future__ import annotations
 
 import unittest
 import xml.etree.ElementTree as ET
 
+import mujoco
 import numpy as np
 
 from abc_sim import make_env
@@ -13,10 +14,11 @@ from abc_sim.randomization.tasks.conveyor_pick import (
     ConveyorPickObjectRandomizer,
     _conveyor_belt_speed_range,
 )
+from abc_sim.task_runtime.conveyor_pick import ConveyorPickRuntime
 from tests.test_spelling_goals import blocks_xml
 
 
-def conveyor_xml():
+def conveyor_xml(*, mirrored_fingers=True):
     root = ET.fromstring(blocks_xml())
     ET.SubElement(root, "option", gravity="0 0 0")
     world = root.find("worldbody")
@@ -33,7 +35,11 @@ def conveyor_xml():
         owner.find("joint").set("range", "0 .0475")
         passive = ET.SubElement(owner, "body", name=f"{arm}_passive_finger_body")
         ET.SubElement(
-            passive, "joint", name=f"{arm}_right_finger", type="slide", range="-.0475 0"
+            passive,
+            "joint",
+            name=f"{arm}_right_finger",
+            type="slide",
+            range="-.0475 0" if mirrored_fingers else "0 .0475",
         )
         ET.SubElement(
             passive,
@@ -85,6 +91,57 @@ def conveyor_xml():
 
 
 class ConveyorBeltSpeedTest(unittest.TestCase):
+    def test_off_track_contacts_allow_open_workspaces_but_require_table_and_floor(self):
+        walls = ("back_wall_collision", "left_wall_collision", "right_wall_collision")
+        required = ("table_collision", "floor_collision")
+        runtime = ConveyorPickRuntime()
+        for removed_walls in ((), walls[:1], walls):
+            with self.subTest(removed_walls=removed_walls):
+                root = ET.fromstring(conveyor_xml())
+                world = root.find("worldbody")
+                for name in removed_walls:
+                    world.remove(world.find(f"geom[@name='{name}']"))
+                model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+                runtime.bind(model, mujoco.MjData(model))
+                self.assertEqual(
+                    runtime._off_track_geoms_for(model),
+                    {
+                        model.geom(name).id
+                        for name in (*required, *walls)
+                        if name not in removed_walls
+                    },
+                )
+                for missing in required:
+                    with self.subTest(missing=missing):
+                        geom = world.find(f"geom[@name='{missing}']")
+                        world.remove(geom)
+                        model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+                        runtime.bind(model, mujoco.MjData(model))
+                        with self.assertRaisesRegex(RuntimeError, f"missing off-track geoms: {missing}"):
+                            runtime._off_track_geoms_for(model)
+                        world.append(geom)
+
+    def test_default_reset_opens_both_mirrored_and_linear_fingers(self):
+        for mirrored in (True, False):
+            with self.subTest(mirrored=mirrored):
+                env = make_env(
+                    "conveyor_pick",
+                    scene_xml_string=conveyor_xml(mirrored_fingers=mirrored),
+                    enable_task_randomizer=False,
+                    render_cameras=False,
+                )
+                try:
+                    env.reset(randomize=False)
+                    for arm in ("left", "right"):
+                        self.assertEqual(env.data.joint(f"{arm}_left_finger").qpos[0], 0.0475)
+                        self.assertEqual(
+                            env.data.joint(f"{arm}_right_finger").qpos[0],
+                            -0.0475 if mirrored else 0.0475,
+                        )
+                        self.assertEqual(env.data.actuator(f"{arm}_gripper").ctrl[0], 0.0475)
+                finally:
+                    env.close()
+
     def speeds(self, request=None, seeds=range(12)):
         env = make_env("conveyor_pick", render_cameras=False)
         self.addCleanup(env.close)
