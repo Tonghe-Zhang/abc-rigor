@@ -39,9 +39,16 @@ def model_signature(model: mujoco.MjModel) -> bytes:
 class PerWorldEvaluators:
     """One evaluator per world, for evaluators configured from each episode's randomization."""
 
-    def __init__(self, model: mujoco.MjModel, spec: Any, num_worlds: int):
-        self.evaluators = [make_task_evaluator(model, spec) for _ in range(num_worlds)]
-        self._metric_probe = make_task_evaluator(model, spec)
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        spec: Any,
+        num_worlds: int,
+        *,
+        evaluator_options: dict[str, Any] | None = None,
+    ):
+        self.evaluators = [make_task_evaluator(model, spec, evaluator_options) for _ in range(num_worlds)]
+        self._metric_probe = make_task_evaluator(model, spec, evaluator_options)
 
     def reset(self, model: mujoco.MjModel, randomizations: list[Any]) -> None:
         for evaluator, state in zip(self.evaluators, randomizations):
@@ -126,6 +133,7 @@ class BatchedWarpYAMEnv:
         self._runtime: WarpReplayRuntime | None = None
         self._renderer: RendererWrapper | None = None
         self._evaluator = None
+        self._bound_base_evaluator = None
         # Background variations: world w shows texture set w % n_sets (set 0 in the model, the rest only
         # in the render context); every set is redrawn from the background stream on each reset.
         self._background = base_env._background
@@ -259,30 +267,35 @@ class BatchedWarpYAMEnv:
         return snapshot
 
     def _bind_model(self) -> None:
-        """Rebuild the MJWarp runtime when the base env compiled a new model."""
+        """Refresh scoring after task changes and rebuild MJWarp for new geometry."""
         signature = model_signature(self.model)
-        if signature == self._signature:
+        if signature != self._signature:
+            self._release()
+            self._signature = signature
+            self._runtime = WarpReplayRuntime(
+                self.model,
+                self.base_env.data,
+                nworld=self.num_worlds,
+                gpu_id=self._gpu_id,
+                nconmax=4096,
+                njmax=32768,
+            )
+            self._renderer = RendererWrapper(
+                backend="mjwarp",
+                runtime=self._runtime,
+                cam_res=(self.camera_width, self.camera_height),
+                gpu_id=self._gpu_id,
+            )
+            self._camera_index = {self.model.cam(i).name: i for i in range(self.model.ncam)}
+        elif self.base_env._task_evaluator is self._bound_base_evaluator:
             return
-        self._release()
-        self._signature = signature
-        self._runtime = WarpReplayRuntime(
-            self.model,
-            self.base_env.data,
-            nworld=self.num_worlds,
-            gpu_id=self._gpu_id,
-            nconmax=4096,
-            njmax=32768,
-        )
-        self._renderer = RendererWrapper(
-            backend="mjwarp",
-            runtime=self._runtime,
-            cam_res=(self.camera_width, self.camera_height),
-            gpu_id=self._gpu_id,
-        )
-        self._camera_index = {self.model.cam(i).name: i for i in range(self.model.ncam)}
-        self._evaluator = make_task_evaluator(self.model, self.base_env._task_spec)
+        options = self.base_env._evaluator_options
+        self._evaluator = make_task_evaluator(self.model, self.base_env._task_spec, options)
         if hasattr(self._evaluator, "configure_from_randomization"):
-            self._evaluator = PerWorldEvaluators(self.model, self.base_env._task_spec, self.num_worlds)
+            self._evaluator = PerWorldEvaluators(
+                self.model, self.base_env._task_spec, self.num_worlds, evaluator_options=options
+            )
+        self._bound_base_evaluator = self.base_env._task_evaluator
 
     def _probe_metric_keys(self) -> set[str]:
         """Evaluator metric keys with a leading world axis.
