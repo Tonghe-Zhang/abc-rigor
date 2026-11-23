@@ -65,8 +65,12 @@ class BallTrayTest(unittest.TestCase):
             '<mujoco><worldbody><geom name="table_plane" type="plane" size="1 1 .1"/>'
             '<body name="ball_tray" pos="0 0 .009"><freejoint name="ball_tray_joint"/>'
             '<geom type="box" size=".15 .15 .01" mass="1"/>'
+            '<geom name="ball_tray_left_handle_collision" type="box" size=".03 .01 .01" pos="0 .16 .02"/>'
+            '<geom name="ball_tray_right_handle_collision" type="box" size=".03 .01 .01" pos="0 -.16 .02"/>'
             '<site name="ball_tray_center_site"/></body>'
-            + body("ball_tray_ball", "ball_tray_ball_joint", "0 0 .039")
+            + body("ball_tray_ball", "ball_tray_ball_joint", "0 0 .028")
+            + body("left_link_left_finger", "left_finger_joint", "0 .16 .029")
+            + body("right_link_left_finger", "right_finger_joint", "0 -.16 .029")
             + "</worldbody></mujoco>"
         )
         self.data = mujoco.MjData(self.model)
@@ -89,39 +93,42 @@ class BallTrayTest(unittest.TestCase):
             self.model,
             self.data,
             "ball_tray_ball_joint",
-            [0 if ball_inside else 1, 0, z + 0.03],
+            [0 if ball_inside else 1, 0, z + 0.019],
         )
+        position(self.model, self.data, "left_finger_joint", [0, 0.16, z + 0.02])
+        position(self.model, self.data, "right_finger_joint", [0, -0.16, z + 0.02])
         self.data.time = timestamp
         mujoco.mj_forward(self.model, self.data)
         return self.evaluator.evaluate_model_data(self.model, self.data)
 
-    def test_lenient_hold_then_contact_ignores_ball_after_hold(self):
-        self.use_evaluator(require_ball_on_tray_when_lowered=False)
+    def test_recovered_ball_cannot_borrow_a_prior_complete_hold(self):
         self.sample(1, lifted=True)
-        self.assertFalse(self.sample(5.99, lifted=True).scalar_success())
-        reached = self.sample(6, lifted=True)
-        self.assertTrue(reached.metrics["hold_complete"][0])
-        self.assertFalse(reached.scalar_success())
-        self.assertFalse(
-            self.sample(7, ball_inside=False, contact=False).scalar_success()
-        )
-        self.assertTrue(self.sample(8, ball_inside=False).scalar_success())
-        self.assertTrue(self.sample(9, lifted=True, ball_inside=False).scalar_success())
+        self.sample(6, lifted=True)
+        self.sample(7, lifted=True, ball_inside=False)
+        self.sample(8, lifted=True)
+        self.sample(9)
+        done = self.sample(10)
+        self.assertFalse(done.scalar_success())
+        self.assertAlmostEqual(done.reward[0], 0.9)
+        self.assertEqual(done.metrics["placement_credit"][0], 0)
 
     def test_ball_must_come_down_with_the_tray(self):
         self.sample(1, lifted=True)
         self.assertTrue(self.sample(6, lifted=True).metrics["hold_complete"][0])
         lost = self.sample(7, lifted=True, ball_inside=False)
         self.assertTrue(lost.metrics["ball_lost_after_hold"][0])
-        self.assertEqual(lost.reward[0], 0.0)
+        self.assertAlmostEqual(lost.reward[0], 0.9)
         self.assertFalse(self.sample(8, ball_inside=False).scalar_success())
-        self.assertFalse(self.sample(9).scalar_success())  # putting the ball back does not undo the loss
+        self.assertFalse(
+            self.sample(9).scalar_success()
+        )  # putting the ball back does not undo the loss
 
     def test_ball_kept_on_the_tray_completes(self):
         self.sample(1, lifted=True)
         self.sample(6, lifted=True)
         self.assertFalse(self.sample(7, contact=False).scalar_success())
-        completed = self.sample(8)
+        self.assertFalse(self.sample(8).scalar_success())
+        completed = self.sample(9)
         self.assertTrue(completed.scalar_success())
         self.assertEqual(completed.reward[0], 1.0)
 
@@ -131,7 +138,8 @@ class BallTrayTest(unittest.TestCase):
         self.sample(5, lifted=True)
         self.assertFalse(self.sample(9.99, lifted=True).metrics["hold_complete"][0])
         self.assertTrue(self.sample(10, lifted=True).metrics["hold_complete"][0])
-        self.assertTrue(self.sample(11).scalar_success())
+        self.assertFalse(self.sample(11).scalar_success())
+        self.assertTrue(self.sample(12).scalar_success())
 
     def test_time_is_required_for_qpos_only_calls(self):
         with self.assertRaisesRegex(ValueError, "time_s"):
@@ -140,7 +148,12 @@ class BallTrayTest(unittest.TestCase):
     def test_batch_resize_preserves_duration_and_hold_threshold(self):
         rest = np.repeat(self.data.qpos[None, :], 2, axis=0)
         raised = rest.copy()
-        for joint in ("ball_tray_joint", "ball_tray_ball_joint"):
+        for joint in (
+            "ball_tray_joint",
+            "ball_tray_ball_joint",
+            "left_finger_joint",
+            "right_finger_joint",
+        ):
             address = int(self.model.jnt_qposadr[self.model.joint(joint).id])
             raised[:, address + 2] += 0.1
         for duration in (5.0, 15.0):
@@ -164,15 +177,16 @@ class BallTrayTest(unittest.TestCase):
                 )
                 self.assertTrue(reached.metrics["hold_complete"].all())
                 self.assertFalse(reached.success.any())
-                lowered = self.evaluator.evaluate_qpos_batch(
-                    rest, time_s=2 + duration
-                )
-                self.assertTrue(lowered.success.all())
+                lowered = self.evaluator.evaluate_qpos_batch(rest, time_s=2 + duration)
+                self.assertFalse(lowered.success.any())
+                settled = self.evaluator.evaluate_qpos_batch(rest, time_s=3 + duration)
+                self.assertTrue(settled.success.all())
 
     def test_reset_retains_duration_and_clears_hold_state(self):
         self.sample(1, lifted=True)
         self.sample(6, lifted=True)
-        self.assertTrue(self.sample(7).scalar_success())
+        self.assertFalse(self.sample(7).scalar_success())
+        self.assertTrue(self.sample(8).scalar_success())
         self.evaluator.reset(nworld=3)
         qpos = np.repeat(self.data.qpos[None, :], 3, axis=0)
         result = self.evaluator.evaluate_qpos_batch(qpos, time_s=0)
@@ -192,13 +206,15 @@ class BallTrayTest(unittest.TestCase):
         self.sample(1, lifted=True)
         reached = self.sample(6, lifted=True)
         self.assertTrue(reached.metrics["tray_table_contact"][0])
-        self.assertTrue(reached.metrics["hold_complete"][0])
+        self.assertFalse(reached.metrics["hold_complete"][0])
         self.assertFalse(reached.scalar_success())
         self.assertFalse(self.sample(6, lifted=True).scalar_success())
         self.assertFalse(self.sample(7, lifted=True).scalar_success())
         self.data.qpos[address + 3 : address + 7] = [1, 0, 0, 0]
         self.assertFalse(self.sample(8, lifted=True).scalar_success())
-        self.assertTrue(self.sample(9).scalar_success())
+        self.assertTrue(self.sample(13, lifted=True).metrics["hold_complete"][0])
+        self.assertFalse(self.sample(14).scalar_success())
+        self.assertTrue(self.sample(15).scalar_success())
 
     def test_duration_sampling_is_reproducible_and_in_range(self):
         values = [sample_hold_duration_s(seed) for seed in range(100)]
@@ -277,6 +293,9 @@ class BallTrayTest(unittest.TestCase):
         )
         runtime.on_task_evaluation(self.sample(7))
         runtime.after_step(self.model, self.data)
+        self.assertFalse(runtime.debug_state()["complete"])
+        runtime.on_task_evaluation(self.sample(8))
+        runtime.after_step(self.model, self.data)
         self.assertTrue(runtime.debug_state()["complete"])
         self.assertEqual(runtime.observation_prompt(), prompt)
 
@@ -326,7 +345,7 @@ class BallTrayTest(unittest.TestCase):
                 self.assertEqual(score.call_count, 4)
                 self.assertIs(env._task_runtime._balance_result, env._step_task_eval)
 
-    def test_env_preserves_hold_during_synchronized_tray_and_ball_motion(self):
+    def test_env_rejects_unsupported_synchronized_tray_and_ball_motion(self):
         env = make_test_env(self, self.model, "ball_tray_balancing")
         env.model.opt.gravity[:] = 0
         env.model.geom_contype[:] = 0
@@ -343,9 +362,10 @@ class BallTrayTest(unittest.TestCase):
         env.advance_physics(steps=3)
 
         live = env._step_task_eval
-        self.assertTrue(live.metrics["current_balanced"][0])
+        self.assertFalse(live.metrics["current_balanced"][0])
         self.assertTrue(live.metrics["lifted"][0])
-        self.assertAlmostEqual(live.metrics["continuous_hold_s"][0], 0.006)
+        self.assertEqual(live.metrics["continuous_hold_s"][0], 0)
+        self.assertEqual(live.reward[0], 0)
         self.assertAlmostEqual(live.metrics["ball_tray_local_pos"][0, 0], 0.125)
         fresh = env._task_evaluator.evaluate_qpos_batch(
             env.data.qpos[None, :], time_s=env.data.time

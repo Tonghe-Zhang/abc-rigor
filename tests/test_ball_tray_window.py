@@ -59,16 +59,18 @@ class BallTrayWindowTest(unittest.TestCase):
         address = int(self.model.jnt_qposadr[self.model.joint(joint).id])
         self.data.qpos[address : address + 3] = xyz
 
-    def sample(self, t, z, *, held=True, ball_inside=True, touch_ball=False):
+    def sample(
+        self, t, z, *, held=True, ball_inside=True, touch_ball=False, ball_height=0.019
+    ):
         self.put("ball_tray_joint", [0, 0, z])
-        ball = [0 if ball_inside else 1, 0, z + 0.03]
+        ball = [0 if ball_inside else 1, 0, z + ball_height]
         self.put("ball_tray_ball_joint", ball)
         self.put("left_finger_joint", [0, HANDLE_Y, z + 0.02] if held else AWAY)
         self.put(
             "right_finger_joint", [0, -HANDLE_Y, z + 0.02] if held else [-1, -1, 0.5]
         )
         if touch_ball:
-            self.put("left_finger_joint", [0, 0, z + 0.045])
+            self.put("left_finger_joint", [0, 0, z + 0.029])
         self.data.time = t
         mujoco.mj_forward(self.model, self.data)
         return self.evaluator.evaluate_model_data(self.model, self.data)
@@ -105,122 +107,173 @@ class BallTrayWindowTest(unittest.TestCase):
         runtime.after_step(self.model, self.data)
         return result
 
-    def test_hold_in_the_window_then_gentle_placement_succeeds(self):
-        self.assertEqual(
-            self.score(self.hold(1, 6)), (False, 0.45)
-        )  # half of the 10 s minimum
-        held = self.hold(6.5, 12)
-        self.assertTrue(held.metrics["hold_complete"][0])
-        self.assertEqual(self.score(held), (False, 0.9))
-        touchdown = self.place(12.6)
-        self.assertTrue(touchdown.metrics["settling"][0])
-        self.assertEqual(self.score(touchdown), (False, 0.9))
-        self.assertFalse(
-            self.sample(13.5, REST_Z).scalar_success()
-        )  # the ball must stay 1 s
-        done = self.sample(13.6, REST_Z, held=False)
-        self.assertEqual(self.score(done), (True, 1.0))
+    def test_lift_is_one_time_and_hold_credit_survives_interruptions(self):
+        self.assertEqual(self.score(self.sample(1, UP_Z)), (False, 0.1))
+        self.assertEqual(self.score(self.sample(6, UP_Z)), (False, 0.5))
+        for t, kwargs in ((6.5, {"ball_inside": False}), (7, {}), (10, {})):
+            result = self.sample(t, UP_Z, **kwargs)
+            self.assertEqual(self.score(result), (False, 0.5))
+        self.assertEqual(result.metrics["continuous_hold_s"][0], 3)
+        self.assertEqual(result.metrics["best_continuous_hold_s"][0], 5)
+        self.assertEqual(result.metrics["lift_credit"][0], 0.1)
 
-    def test_runtime_stops_active_and_overdue_pulses_through_settling_and_success(self):
-        runtime = self.make_runtime()
-        self.runtime_sample(runtime, 1.0, UP_Z)
-        self.runtime_sample(runtime, 10.99, UP_Z)
-        pulses = runtime.debug_state()["perturbation_count"]
-        self.assertGreater(pulses, 0)
-        ball_body = self.model.body("ball_tray_ball").id
-        other_force = np.array([0.1, 0.2, 0.3])
-        self.data.xfrc_applied[ball_body, :3] += other_force
-        runtime.before_step(self.model, self.data)
-        self.assertGreater(
-            np.linalg.norm(self.data.xfrc_applied[ball_body, :3] - other_force), 0.0
-        )
-
-        held = self.runtime_sample(runtime, 11.0, UP_Z)
-        self.assertTrue(held.metrics["hold_complete"][0])
-        self.assertFalse(held.metrics["perturbations_allowed"][0])
-        runtime.before_step(self.model, self.data)
-        np.testing.assert_allclose(self.data.xfrc_applied[ball_body, :3], other_force)
-        self.runtime_sample(runtime, 12.5, LOW_Z)
-        touchdown = self.runtime_sample(runtime, 12.6, REST_Z)
-        self.assertTrue(touchdown.metrics["settling"][0])
-
-        # Runtime callbacks run at 500 Hz; the evaluator publishes a score every 17 ticks.
-        for control_step in range(45):
-            for tick in range(17):
-                runtime.before_step(self.model, self.data)
-                np.testing.assert_allclose(
-                    self.data.xfrc_applied[ball_body, :3], other_force
-                )
-                self.data.time = 12.6 + (control_step * 17 + tick + 1) * 0.002
-                if tick == 16:
-                    result = self.sample(float(self.data.time), REST_Z)
-                    runtime.on_task_evaluation(result)
-                    self.assertTrue(result.metrics["hold_complete"][0])
-                    self.assertFalse(result.metrics["perturbations_allowed"][0])
-                runtime.after_step(self.model, self.data)
-                self.assertEqual(runtime.debug_state()["perturbation_count"], pulses)
-        self.assertEqual(self.score(result), (True, 1.0))
-        self.assertTrue(runtime.debug_state()["complete"])
-
-        self.use_evaluator()
-        runtime.after_reset(
-            self.model, self.data, randomization=SimpleNamespace(seed=0)
-        )
-        reset = self.runtime_sample(runtime, 0.0, REST_Z)
-        self.assertFalse(reset.metrics["hold_complete"][0])
-        self.assertTrue(reset.metrics["perturbations_allowed"][0])
-        self.runtime_sample(runtime, 1.0, UP_Z)
-        self.assertGreater(runtime.debug_state()["perturbation_count"], 0)
-
-    def test_early_placements_stop_perturbations_without_completing_the_hold(self):
-        for gentle in (False, True):
-            with self.subTest(gentle=gentle):
-                self.use_evaluator()
-                runtime = self.make_runtime()
-                self.runtime_sample(runtime, 1.0, UP_Z)
-                self.runtime_sample(runtime, 4.0, UP_Z)
-                self.runtime_sample(runtime, 4.5, LOW_Z, held=gentle)
-                placed = self.runtime_sample(runtime, 4.6, REST_Z, held=gentle)
-                pulses = runtime.debug_state()["perturbation_count"]
-                self.assertFalse(placed.metrics["hold_complete"][0])
-                self.assertFalse(placed.metrics["perturbations_allowed"][0])
-                self.assertEqual(bool(placed.metrics["settling"][0]), gentle)
-                for t in (4.634, 5.0, 5.6, 6.0):
-                    result = self.runtime_sample(runtime, t, REST_Z)
-                    self.assertFalse(result.metrics["perturbations_allowed"][0])
-                    self.assertEqual(
-                        runtime.debug_state()["perturbation_count"], pulses
-                    )
-                self.assertFalse(result.scalar_success())
-
-    def test_contact_loss_and_relift_restart_the_full_settling_interval(self):
-        for gap_z in (LOW_Z, UP_Z):
-            for gap_time in (13.0, 13.6):
-                with self.subTest(gap_z=gap_z, gap_time=gap_time):
-                    self.use_evaluator()
-                    self.hold(1, 12)
-                    self.place(12.6)
-                    for t in (gap_time, 14.0):
-                        interrupted = self.sample(t, gap_z)
-                        self.assertFalse(interrupted.metrics["tray_table_contact"][0])
-                        self.assertFalse(interrupted.scalar_success())
-                        self.assertTrue(interrupted.metrics["hold_complete"][0])
-                        self.assertFalse(
-                            interrupted.metrics["perturbations_allowed"][0]
-                        )
-                    recontact = self.sample(14.1, REST_Z, held=False)
-                    self.assertTrue(recontact.metrics["settling"][0])
-                    self.assertFalse(recontact.scalar_success())
-                    self.assertFalse(
-                        self.sample(15.099, REST_Z, held=False).scalar_success()
-                    )
-                    self.assertEqual(
-                        self.score(self.sample(15.1, REST_Z, held=False)), (True, 1.0)
-                    )
-
-    def test_contact_at_the_lift_threshold_does_not_count_as_settled(self):
-        self.hold(1, 12)
+    def test_disjoint_holds_do_not_sum_and_current_hold_qualifies_success(self):
+        self.hold(1, 11)
+        self.sample(11.1, UP_Z, ball_inside=False)
+        self.sample(11.2, UP_Z)
+        result = self.sample(12, UP_Z)
+        self.assertAlmostEqual(result.reward[0], 0.9)
+        self.assertFalse(result.metrics["hold_complete"][0])
+        self.assertTrue(result.metrics["perturbations_allowed"][0])
         self.place(12.6)
+        done = self.sample(13.6, REST_Z)
+        self.assertEqual(self.score(done), (False, 0.9))
+        self.assertEqual(done.metrics["placement_credit"][0], 0)
+
+    def test_dip_breaks_hold_and_cannot_farm_repeated_lifts(self):
+        self.hold(1, 6)
+        self.sample(6.1, LOW_Z)
+        self.sample(6.2, UP_Z)
+        result = self.sample(10.2, UP_Z)
+        self.assertEqual(self.score(result), (False, 0.5))
+        self.assertAlmostEqual(result.metrics["continuous_hold_s"][0], 4)
+        self.assertEqual(result.metrics["best_continuous_hold_s"][0], 5)
+
+    def test_target_hold_and_gentle_continuous_settle_succeed(self):
+        self.assertEqual(self.score(self.hold(1, 11)), (False, 0.9))
+        self.assertEqual(self.score(self.place(11.6)), (False, 0.9))
+        self.assertFalse(self.sample(12.599, REST_Z).scalar_success())
+        done = self.sample(12.6, REST_Z, held=False)
+        self.assertEqual(self.score(done), (True, 1.0))
+        self.assertTrue(done.metrics["placement_finalized"][0])
+        self.assertEqual(
+            self.score(self.sample(30, UP_Z, ball_inside=False)), (True, 1.0)
+        )
+
+    def test_early_safe_park_can_retry_without_resetting_clock_or_earned_credit(self):
+        self.hold(1, 5)
+        self.place(5.6)
+        parked = self.sample(6.6, REST_Z)
+        self.assertEqual(self.score(parked), (False, 0.42))
+        self.assertTrue(parked.metrics["early_placement"][0])
+        self.assertFalse(parked.metrics["placement_finalized"][0])
+        self.hold(7, 17)
+        self.place(17.6)
+        done = self.sample(18.6, REST_Z)
+        self.assertTrue(done.scalar_success())
+        self.assertAlmostEqual(done.metrics["overtime_s"][0], 1.6)
+        self.assertAlmostEqual(done.reward[0], 0.968, places=6)
+
+    def test_three_short_parked_cycles_never_sum_hold_credit(self):
+        for start in (1, 7, 13):
+            self.hold(start, start + 4)
+            self.place(start + 4.6)
+            result = self.sample(start + 5.6, REST_Z)
+            self.assertAlmostEqual(result.metrics["hold_credit"][0], 0.32)
+            self.assertEqual(result.metrics["lift_credit"][0], 0.1)
+            self.assertFalse(result.scalar_success())
+        self.assertAlmostEqual(result.metrics["overtime_s"][0], 1.6)
+
+    def test_overtime_uses_first_lift_through_drop_dip_and_recovery(self):
+        self.hold(1, 11)
+        self.assertEqual(self.score(self.sample(17, UP_Z)), (False, 0.88))
+        for t, z, kwargs in (
+            (18, UP_Z, {"ball_inside": False}),
+            (19, LOW_Z, {}),
+            (20, UP_Z, {}),
+        ):
+            result = self.sample(t, z, **kwargs)
+            self.assertAlmostEqual(result.metrics["overtime_s"][0], t - 16)
+            self.assertAlmostEqual(result.reward[0], 0.9 - 0.02 * (t - 16), places=6)
+        self.assertFalse(result.metrics["hold_complete"][0])
+
+    def test_overtime_caps_and_saturates_at_zero_for_small_earned_credit(self):
+        self.sample(1, UP_Z)
+        self.sample(2, UP_Z)
+        self.sample(2.1, UP_Z, ball_inside=False)
+        result = self.sample(40, UP_Z, ball_inside=False)
+        self.assertEqual(self.score(result), (False, 0.0))
+        self.assertAlmostEqual(result.metrics["overtime_penalty"][0], 0.18)
+        self.use_evaluator()
+        self.hold(1, 31, step=1)
+        self.place(31.6)
+        self.assertEqual(self.score(self.sample(32.6, REST_Z)), (True, 0.8))
+
+    def test_valid_settling_time_is_excluded_from_overtime(self):
+        self.hold(1, 15)
+        self.place(15.9)
+        done = self.sample(16.9, REST_Z)
+        self.assertEqual(self.score(done), (True, 1.0))
+        self.assertEqual(done.metrics["overtime_s"][0], 0)
+
+    def test_failed_settle_resumes_clock_and_restarts_continuous_interval(self):
+        self.hold(1, 16)
+        self.place(16.6)
+        gap = self.sample(17, LOW_Z, held=False)
+        self.assertAlmostEqual(gap.metrics["overtime_s"][0], 1)
+        self.sample(17.1, REST_Z, held=False)
+        self.assertFalse(self.sample(18.099, REST_Z, held=False).scalar_success())
+        done = self.sample(18.1, REST_Z, held=False)
+        self.assertTrue(done.scalar_success())
+        self.assertAlmostEqual(done.metrics["overtime_s"][0], 1.1)
+        self.assertAlmostEqual(done.reward[0], 0.978, places=6)
+
+    def test_full_relift_invalidates_settle_qualification(self):
+        self.hold(1, 11)
+        self.place(11.6)
+        self.sample(12, UP_Z)
+        self.place(12.6)
+        done = self.sample(13.6, REST_Z)
+        self.assertEqual(self.score(done), (False, 0.9))
+
+    def test_ball_loss_during_settle_preserves_credit_without_bonus(self):
+        self.hold(1, 11)
+        self.place(11.6)
+        self.sample(12, REST_Z, ball_inside=False)
+        self.sample(12.1, REST_Z)
+        done = self.sample(13.1, REST_Z)
+        self.assertEqual(self.score(done), (False, 0.9))
+        self.assertTrue(done.metrics["ball_lost_after_hold"][0])
+
+    def test_grip_loss_before_touchdown_invalidates_placement(self):
+        self.hold(1, 11)
+        self.sample(11.2, LOW_Z, held=False)
+        self.sample(11.4, REST_Z)
+        self.assertEqual(self.score(self.sample(12.4, REST_Z)), (False, 0.9))
+
+    def test_lowering_must_reach_table_within_five_seconds(self):
+        self.hold(1, 11)
+        self.sample(11.1, LOW_Z)
+        self.sample(16.2, LOW_Z)
+        self.sample(16.3, REST_Z)
+        done = self.sample(17.3, REST_Z)
+        self.assertFalse(done.scalar_success())
+        self.assertEqual(done.metrics["placement_credit"][0], 0)
+        self.assertAlmostEqual(done.reward[0], 0.894, places=6)
+
+    def test_rough_contact_does_not_finalize_or_pause_clock(self):
+        self.hold(1, 11)
+        result = self.place(17, held=False)
+        self.assertTrue(result.metrics["rough_placement"][0])
+        self.assertFalse(result.metrics["settling"][0])
+        self.assertEqual(self.score(self.sample(18, REST_Z, held=False)), (False, 0.86))
+
+    def test_policy_done_during_settle_has_only_earned_credit(self):
+        self.hold(1, 11)
+        result = self.place(11.6)
+        info = result.to_info(squeeze=True)
+        self.assertFalse(info["success"])
+        self.assertAlmostEqual(info["reward"], 0.9)
+        self.assertEqual(info["placement_credit"], 0)
+        self.assertFalse(info["placement_finalized"])
+
+    def test_levitated_ball_is_not_supported(self):
+        result = self.sample(1, UP_Z, ball_height=1)
+        self.assertTrue(result.metrics["inside_tray"][0])
+        self.assertFalse(result.metrics["ball_tray_contact"][0])
+        self.assertEqual(self.score(self.sample(20, UP_Z, ball_height=1)), (False, 0.0))
+
+    def test_table_supported_tilt_is_not_an_airborne_hold(self):
         address = int(self.model.jnt_qposadr[self.model.joint("ball_tray_joint").id])
         self.data.qpos[address + 3 : address + 7] = [
             np.cos(np.pi / 8),
@@ -228,165 +281,214 @@ class BallTrayWindowTest(unittest.TestCase):
             np.sin(np.pi / 8),
             0,
         ]
-        relifted = self.sample(13.6, REST_Z + 0.05)
-        self.assertTrue(relifted.metrics["tray_table_contact"][0])
-        self.assertTrue(relifted.metrics["lifted"][0])
-        self.assertFalse(relifted.scalar_success())
-        self.data.qpos[address + 3 : address + 7] = [1, 0, 0, 0]
-        self.assertFalse(self.sample(13.7, REST_Z).scalar_success())
-        self.assertTrue(self.sample(14.7, REST_Z).scalar_success())
+        result = self.sample(1, REST_Z + 0.06)
+        self.assertTrue(result.metrics["tray_table_contact"][0])
+        self.assertTrue(result.metrics["lifted"][0])
+        self.assertFalse(result.metrics["valid_hold"][0])
+        self.assertEqual(result.reward[0], 0)
 
-    def test_ball_loss_during_a_settling_interruption_still_fails(self):
-        self.hold(1, 12)
-        self.place(12.6)
-        self.sample(13.0, LOW_Z)
-        lost = self.sample(13.1, LOW_Z, ball_inside=False)
-        self.assertTrue(lost.metrics["ball_lost_after_hold"][0])
-        self.assertEqual(self.score(lost), (False, 0.0))
-        self.assertEqual(self.score(self.sample(20.0, REST_Z)), (False, 0.0))
+    def test_ball_table_support_cannot_count_as_balancing(self):
+        result = self.sample(1, UP_Z, ball_height=0.005 - UP_Z)
+        self.assertTrue(result.metrics["ball_table_contact"][0])
+        self.assertFalse(result.metrics["current_balanced"][0])
+        self.sample(2, UP_Z)
+        metrics = self.evaluator._sample_metrics_from_data(self.data)
+        self.assertTrue(metrics["ball_tray_contact"])
+        metrics["ball_table_contact"] = np.asarray(True)
+        result = self.evaluator._result_from_metrics(metrics)
+        self.assertFalse(result.metrics["valid_hold"][0])
+        self.assertEqual(result.metrics["continuous_hold_s"][0], 0)
 
-    def test_settling_interruption_is_independent_per_world(self):
-        self.use_evaluator(require_handles_at_touchdown=False)
+    def test_both_distinct_hands_are_required_and_grasping_ball_is_invalid(self):
+        result = self.sample(1, UP_Z, held=False)
+        self.assertFalse(result.metrics["both_handles_gripped"][0])
+        self.assertEqual(result.reward[0], 0)
+        result = self.sample(2, UP_Z, touch_ball=True)
+        self.assertTrue(result.metrics["ball_gripper_contact"][0])
+        self.assertEqual(result.reward[0], 0)
+        self.sample(3, UP_Z, held=False)
+        geom = int(self.model.body("left_link_left_finger").geomadr[0])
+        self.model.geom_size[geom, 1] = 0.18
+        self.put("left_finger_joint", [0, 0, UP_Z + 0.02])
+        mujoco.mj_forward(self.model, self.data)
+        result = self.evaluator.evaluate_model_data(self.model, self.data)
+        self.assertFalse(result.metrics["both_handles_gripped"][0])
+
+    def test_margin_only_ball_contact_does_not_supply_support(self):
+        ball_geom = int(self.model.body("ball_tray_ball").geomadr[0])
+        self.model.geom_margin[ball_geom] = 0.02
+        result = self.sample(1, UP_Z, ball_height=0.025)
+        self.assertGreater(self.data.ncon, 0)
+        self.assertFalse(result.metrics["ball_tray_contact"][0])
+        self.assertEqual(result.reward[0], 0)
+
+    def test_actual_physics_contacts_support_ball_on_table(self):
+        self.sample(0, REST_Z, held=False)
+        self.data.qvel[:] = 0
+        for _ in range(100):
+            mujoco.mj_step(self.model, self.data)
+        result = self.evaluator.evaluate_model_data(self.model, self.data)
+        self.assertTrue(result.metrics["ball_tray_contact"][0])
+        self.assertTrue(result.metrics["tray_table_contact"][0])
+        self.assertFalse(result.metrics["valid_hold"][0])
+        self.assertEqual(result.reward[0], 0)
+
+    def test_stable_dynamic_ball_reaches_target_at_production_verifier_cadence(self):
+        xml = XML.replace(
+            "<mujoco><worldbody>",
+            '<mujoco><option timestep=".002"/><worldbody>',
+        )
+        xml = xml.replace(
+            '<body name="ball_tray"', '<body mocap="true" name="ball_tray"'
+        ).replace('<freejoint name="ball_tray_joint"/>', "")
+        xml = xml.replace(
+            f'pos="{AWAY[0]} {AWAY[1]} {AWAY[2]}"',
+            f'pos="0 {HANDLE_Y} {UP_Z + 0.0395}"',
+        ).replace('pos="-1 -1 .5"', f'pos="0 -{HANDLE_Y} {UP_Z + 0.0395}"')
+        xml = xml.replace(
+            '<geom type="box" size=".01 .01 .01" mass=".1"/>',
+            '<geom name="left_finger_contact" type="box" size=".01 .01 .01" mass=".1"/>',
+            1,
+        ).replace(
+            '<geom type="box" size=".01 .01 .01" mass=".1"/>',
+            '<geom name="right_finger_contact" type="box" size=".01 .01 .01" mass=".1"/>',
+            1,
+        )
+        xml = xml.replace(
+            "</mujoco>",
+            '<contact><pair geom1="left_finger_contact" geom2="ball_tray_left_handle_collision"/>'
+            '<pair geom1="right_finger_contact" geom2="ball_tray_right_handle_collision"/>'
+            '</contact><equality><weld body1="left_link_left_finger"/>'
+            '<weld body1="right_link_left_finger"/></equality></mujoco>',
+        )
+        model = mujoco.MjModel.from_xml_string(xml)
+        data = mujoco.MjData(model)
+        evaluator = BallTrayBalancingEvaluator(
+            model=model, spec=get_task_spec("ball_tray_balancing")
+        )
+        mujoco.mj_forward(model, data)
+        evaluator.evaluate_model_data(model, data)
+        data.mocap_pos[int(model.body("ball_tray").mocapid[0])] = [0, 0, UP_Z]
+        address = int(model.jnt_qposadr[model.joint("ball_tray_ball_joint").id])
+        data.qpos[address : address + 3] = [0, 0, UP_Z + 0.02]
+        sample_counts = dict.fromkeys(
+            (
+                "ball_tray_contact",
+                "both_handles_gripped",
+                "ball_robot_contact",
+                "lifted",
+                "valid_hold",
+            ),
+            0,
+        )
+        for tick in range(5508):
+            mujoco.mj_step(model, data)
+            if (tick + 1) % 17 == 0:
+                result = evaluator.evaluate_model_data(model, data)
+                for key in sample_counts:
+                    sample_counts[key] += int(result.metrics[key][0])
+        self.assertGreaterEqual(
+            result.metrics["continuous_hold_s"][0],
+            10,
+            {
+                "sample_counts": sample_counts,
+                "final_metrics": result.to_info(squeeze=True),
+            },
+        )
+        self.assertTrue(result.metrics["hold_complete"][0])
+        self.assertFalse(result.scalar_success())
+        self.assertAlmostEqual(result.reward[0], 0.9)
+
+    def test_wrist_contact_cannot_stabilize_ball_for_credit(self):
+        xml = XML.replace(
+            "</worldbody>",
+            f'<body name="left_arm" pos="0 0 {UP_Z + 0.029}">'
+            '<freejoint name="wrist_joint"/><geom type="sphere" size=".01" mass=".1"/>'
+            "</body></worldbody>",
+        )
+        self.model = mujoco.MjModel.from_xml_string(xml)
+        self.data = mujoco.MjData(self.model)
+        self.use_evaluator()
+        result = self.sample(1, UP_Z)
+        self.assertTrue(result.metrics["both_handles_gripped"][0])
+        self.assertFalse(result.metrics["ball_gripper_contact"][0])
+        self.assertTrue(result.metrics["ball_robot_contact"][0])
+        self.assertEqual(result.reward[0], 0)
+
+    def test_worlds_repeated_timestamps_reset_and_invalid_times(self):
         rest = self.data.qpos.copy()
-        self.sample(1.0, UP_Z)
+        self.sample(1, UP_Z)
         up = self.data.qpos.copy()
         self.evaluator.reset(nworld=2)
-        self.evaluator.evaluate_qpos_batch(np.stack([rest, rest]), time_s=0.0)
-        self.evaluator.evaluate_qpos_batch(np.stack([up, up]), time_s=1.0)
-        self.evaluator.evaluate_qpos_batch(np.stack([up, up]), time_s=12.0)
-        self.evaluator.evaluate_qpos_batch(np.stack([rest, rest]), time_s=12.6)
-        self.evaluator.evaluate_qpos_batch(np.stack([rest, up]), time_s=13.0)
-        first = self.evaluator.evaluate_qpos_batch(np.stack([rest, rest]), time_s=13.6)
-        np.testing.assert_array_equal(first.success, [True, False])
-        np.testing.assert_array_equal(first.metrics["hold_complete"], [True, True])
-        np.testing.assert_array_equal(
-            first.metrics["perturbations_allowed"], [False, False]
-        )
-        both = self.evaluator.evaluate_qpos_batch(np.stack([rest, rest]), time_s=14.6)
-        np.testing.assert_array_equal(both.success, [True, True])
+        self.evaluator.evaluate_qpos_batch(np.stack([rest, rest]), time_s=0)
+        self.evaluator.evaluate_qpos_batch(np.stack([up, up]), time_s=1)
+        result = self.evaluator.evaluate_qpos_batch(np.stack([up, up]), time_s=11)
+        repeated = self.evaluator.evaluate_qpos_batch(np.stack([up, up]), time_s=11)
+        np.testing.assert_array_equal(result.reward, repeated.reward)
+        self.evaluator.evaluate_qpos_batch(np.stack([rest, up]), time_s=11.1)
+        result = self.evaluator.evaluate_qpos_batch(np.stack([rest, up]), time_s=12.1)
+        np.testing.assert_array_equal(result.success, [True, False])
+        self.evaluator.reset(nworld=2)
+        result = self.evaluator.evaluate_qpos_batch(np.stack([rest, rest]), time_s=0)
+        np.testing.assert_array_equal(result.reward, [0, 0])
+        for time_s in (-1, np.nan, np.inf):
+            with self.assertRaises(ValueError):
+                self.evaluator.evaluate_qpos_batch(
+                    np.stack([rest, rest]), time_s=time_s
+                )
 
-    def test_a_placement_within_one_control_step_still_checks_the_handles(self):
-        self.hold(1, 12)
-        touchdown = self.sample(12.034, REST_Z)  # lifted at the previous sample
-        self.assertTrue(touchdown.metrics["handles_held"][0])
-        self.assertTrue(touchdown.metrics["settling"][0])
+    def test_repeated_timestamp_state_changes_cannot_add_hold_time(self):
+        self.sample(1, UP_Z)
+        self.sample(5, UP_Z)
+        self.sample(5, LOW_Z)
+        result = self.sample(5, UP_Z)
+        self.assertEqual(result.metrics["continuous_hold_s"][0], 0)
+        self.assertEqual(result.metrics["best_continuous_hold_s"][0], 4)
+        self.assertEqual(self.score(result), (False, 0.42))
 
-    def test_placing_before_10_s_keeps_half_the_credit_reached_without_success(self):
-        self.assertAlmostEqual(
-            float(self.hold(1, 8).reward[0]), 0.63, places=4
-        )  # 7 s up
-        early = self.place(8.6)  # 7.5 s up: 0.675 while up, half of it kept
-        self.assertEqual(self.score(early), (False, 0.3375))
-        done = self.sample(9.6, REST_Z)
-        self.assertTrue(done.metrics["early_placement"][0])
-        self.assertEqual(self.score(done), (False, 0.3375))
-        self.hold(10, 25)  # the attempt is over: lifting again changes nothing
-        self.assertEqual(self.score(self.place(25.6)), (False, 0.3375))
+    def test_sampled_target_uses_same_credit_and_settle_without_overtime(self):
+        self.use_evaluator(hold_window_s=None)
+        self.sample(1, UP_Z)
+        self.assertEqual(self.score(self.sample(4.5, UP_Z)), (False, 0.5))
+        self.hold(5, 31, step=1)
+        self.assertEqual(self.score(self.place(31.6)), (False, 0.9))
+        done = self.sample(32.6, REST_Z)
+        self.assertEqual(self.score(done), (True, 1.0))
+        self.assertEqual(done.metrics["overtime_s"][0], 0)
 
-    def test_reward_falls_after_15_s_and_a_late_placement_keeps_it(self):
-        self.assertAlmostEqual(
-            float(self.hold(1, 16).reward[0]), 0.9, places=4
-        )  # 15 s up
-        late = self.hold(16.5, 21.5)  # 20.5 s since the hold began
-        self.assertAlmostEqual(float(late.reward[0]), 0.9 - 0.4 * 5.5 / 8, places=4)
-        reward = float(self.place(22.1).reward[0])  # 21 s up: past the 18 s limit
-        self.assertAlmostEqual(reward, 0.9 - 0.4 * 6.1 / 8, places=4)
-        done = self.sample(23.1, REST_Z)
-        self.assertTrue(done.metrics["late_placement"][0])
-        self.assertEqual(self.score(done), (False, round(reward, 4)))
-        self.assertEqual(self.score(self.sample(30, REST_Z)), (False, round(reward, 4)))
+    def test_runtime_resumes_perturbations_after_prior_complete_hold_and_loss(self):
+        runtime = self.make_runtime()
+        self.runtime_sample(runtime, 1, UP_Z)
+        self.runtime_sample(runtime, 2, UP_Z)
+        pulses = runtime.debug_state()["perturbation_count"]
+        self.assertGreater(pulses, 0)
+        held = self.runtime_sample(runtime, 11, UP_Z)
+        self.assertFalse(held.metrics["perturbations_allowed"][0])
+        self.runtime_sample(runtime, 11.1, UP_Z, ball_inside=False)
+        retry = self.runtime_sample(runtime, 11.2, UP_Z)
+        self.assertFalse(retry.metrics["hold_complete"][0])
+        self.assertTrue(retry.metrics["perturbations_allowed"][0])
+        self.assertGreater(runtime.debug_state()["perturbation_count"], pulses)
+        self.assertEqual(runtime.debug_state()["state"], "counting_down")
 
-    def test_success_reward_favours_the_asked_10_to_15_s(self):
-        rewards = []
-        for up_until in (12, 16, 17.5, 19):  # 11.5, 15.5, 17.0, 18.5 s of air time
-            self.use_evaluator()
-            self.hold(1, up_until)
-            self.place(up_until + 0.6)
-            rewards.append(self.score(self.sample(up_until + 1.6, REST_Z)))
-        expected = [
-            (True, round(1.0 - 0.2 * max(a - 15, 0) / 3, 4)) for a in (11.5, 15.5, 17.0)
-        ]
-        self.assertEqual(rewards[:3], expected)
-        self.assertFalse(rewards[3][0])  # 18.5 s is past the limit
-        self.assertLess(rewards[3][1], 0.8)  # and scores below the worst success
-
-    def test_demonstration_like_holds_succeed(self):
-        # The demonstrations hold up to about 17.6 s (p95) and touch down up to about 5 s after the final drop.
-        for up_until, low_until in ((18, 18.5), (12, 16.5)):
-            with self.subTest(up_until=up_until, low_until=low_until):
-                self.use_evaluator()
-                self.hold(1, up_until)
-                for t in np.arange(up_until + 0.5, low_until + 1e-9, 0.5):
-                    self.sample(float(t), LOW_Z)
-                touchdown = self.sample(low_until + 0.1, REST_Z)
-                self.assertTrue(touchdown.metrics["settling"][0])
-                done = self.sample(low_until + 1.1, REST_Z)
-                self.assertTrue(done.scalar_success())
-                self.assertGreaterEqual(float(done.reward[0]), 0.8)
-
-    def test_hovering_just_above_the_table_is_a_late_placement(self):
-        self.hold(1, 12)
-        for t in np.arange(12.5, 20.01, 0.5):
-            self.sample(
-                float(t), LOW_Z
-            )  # 1.6 cm up: below the lift height, not on the table
-        self.sample(20.1, REST_Z)
-        done = self.sample(21.1, REST_Z)
-        self.assertTrue(done.metrics["late_placement"][0])
-        self.assertFalse(done.scalar_success())
-
-    def test_never_placing_decays_to_half(self):
-        self.assertEqual(self.score(self.hold(1, 30, step=1.0)), (False, 0.5))
-
-    def test_releasing_the_handles_keeps_at_most_half(self):
-        for held_until, expected in ((12, 0.5), (3, 0.1125)):
-            with self.subTest(held_until=held_until):
-                self.use_evaluator()
-                self.hold(1, held_until)
-                touchdown = self.place(held_until + 0.6, held=False)
-                self.assertTrue(touchdown.metrics["rough_placement"][0])
-                self.assertEqual(self.score(touchdown), (False, expected))
-                self.assertEqual(self.score(self.sample(30, REST_Z)), (False, expected))
-
-    def test_ball_touched_or_lost_after_the_hold_scores_zero(self):
-        for case in (
-            "touched while up",
-            "lost while settling",
-            "lost after an early placement",
-        ):
-            with self.subTest(case=case):
-                self.use_evaluator()
-                end = 5 if case == "lost after an early placement" else 12
-                self.hold(1, end)
-                if case == "touched while up":
-                    result = self.sample(end + 0.5, UP_Z, touch_ball=True)
-                else:
-                    self.assertGreater(self.place(end + 0.6).reward[0], 0.0)
-                    result = self.sample(end + 1.0, REST_Z, ball_inside=False)
-                self.assertTrue(result.metrics["ball_lost_after_hold"][0])
-                self.assertEqual(self.score(result), (False, 0.0))
-                self.assertEqual(self.score(self.sample(20, REST_Z)), (False, 0.0))
-
-    def test_touching_the_ball_does_not_count_as_holding(self):
-        self.hold(1, 5)
-        self.sample(5.5, UP_Z, touch_ball=True)
-        self.assertEqual(
-            self.score(self.hold(6, 10)), (False, 0.36)
-        )  # restarted at 6 s
-
-    def test_flags_turn_off_each_placement_check(self):
-        self.use_evaluator(require_handles_at_touchdown=False, settle_s=0.0)
-        self.hold(1, 12)
-        self.assertEqual(self.score(self.sample(12.1, REST_Z, held=False)), (True, 1.0))
+    def test_runtime_stops_force_through_settle_and_keeps_other_forces(self):
+        runtime = self.make_runtime()
+        self.runtime_sample(runtime, 1, UP_Z)
+        self.runtime_sample(runtime, 2, UP_Z)
+        ball = self.model.body("ball_tray_ball").id
+        other = np.array([0.1, 0.2, 0.3])
+        self.data.xfrc_applied[ball, :3] += other
+        runtime.before_step(self.model, self.data)
+        self.assertGreater(np.linalg.norm(self.data.xfrc_applied[ball, :3] - other), 0)
+        self.runtime_sample(runtime, 11, UP_Z)
+        runtime.before_step(self.model, self.data)
+        np.testing.assert_allclose(self.data.xfrc_applied[ball, :3], other)
+        self.runtime_sample(runtime, 11.6, REST_Z)
+        self.runtime_sample(runtime, 12.6, REST_Z)
+        self.assertTrue(runtime.debug_state()["complete"])
 
     def test_prompts(self):
-        runtime = BallTrayBalancingRuntime()
-        runtime.bind(self.model, self.data)
-        runtime.after_reset(
-            self.model, self.data, randomization=SimpleNamespace(seed=0)
-        )
-        self.assertEqual(runtime.observation_prompt(), PROMPT)
-        runtime.on_task_evaluation(self.sample(1, UP_Z))
+        runtime = self.make_runtime()
         self.assertEqual(runtime.observation_prompt(), PROMPT)
         self.assertEqual(get_task_spec("ball_tray_balancing").prompt, PROMPT)
         self.use_evaluator(hold_window_s=None)

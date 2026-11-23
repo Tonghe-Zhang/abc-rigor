@@ -14,6 +14,7 @@ from abc_sim.task_eval.ball_tray import (
     format_window_prompt,
 )
 from abc_sim.task_eval.base import TaskEvalResult
+from abc_sim.task_eval.contacts import gripper_geom_ids
 
 _DEFAULT_DURATION_S = 12
 _HOLD_TO_START_S = 0.0
@@ -28,10 +29,6 @@ _BALL_BODY = "ball_tray_ball"
 _TRAY_CENTER_SITE = "ball_tray_center_site"
 _LEFT_HANDLE_GEOM = "ball_tray_left_handle_collision"
 _RIGHT_HANDLE_GEOM = "ball_tray_right_handle_collision"
-_GRIPPER_ROOT_BODIES = {
-    "left": ("left_link_left_finger", "left_link_right_finger"),
-    "right": ("right_link_left_finger", "right_link_right_finger"),
-}
 
 
 class BallTrayBalancingRuntime:
@@ -66,9 +63,16 @@ class BallTrayBalancingRuntime:
     def bind(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """Refresh cached model indices after a model swap."""
 
+        fingers = gripper_geom_ids(model)
         self._gripper_geom_ids = {
-            side: self._geom_ids_for_body_subtrees(model, roots)
-            for side, roots in _GRIPPER_ROOT_BODIES.items()
+            side: {
+                geom
+                for geom in fingers
+                if (model.body(int(model.geom_bodyid[geom])).name or "").startswith(
+                    side + "_"
+                )
+            }
+            for side in ("left", "right")
         }
         self._handle_geom_ids = {
             "left": self._optional_geom_id(model, _LEFT_HANDLE_GEOM),
@@ -212,34 +216,6 @@ class BallTrayBalancingRuntime:
     def _optional_site_id(model: mujoco.MjModel, name: str) -> int:
         return int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name))
 
-    def _geom_ids_for_body_subtrees(
-        self,
-        model: mujoco.MjModel,
-        root_body_names: tuple[str, ...],
-    ) -> set[int]:
-        root_ids = {
-            body_id
-            for body_name in root_body_names
-            if (body_id := self._optional_body_id(model, body_name)) >= 0
-        }
-        if not root_ids:
-            return set()
-
-        body_ids: set[int] = set()
-        for body_id in range(model.nbody):
-            current = body_id
-            while current > 0:
-                if current in root_ids:
-                    body_ids.add(body_id)
-                    break
-                current = int(model.body_parentid[current])
-
-        return {
-            geom_id
-            for geom_id in range(model.ngeom)
-            if int(model.geom_bodyid[geom_id]) in body_ids
-        }
-
     def _detect_gripper_handle_contacts(
         self,
         model: mujoco.MjModel,
@@ -375,7 +351,7 @@ class BallTrayBalancingRuntime:
                 if self._window_s is not None
                 else "Lower the tray onto the table"
             )
-        elif bool(metrics["lifted"][0]) and bool(metrics["current_balanced"][0]):
+        elif bool(metrics["valid_hold"][0]):
             self._state = "counting_down"
             self._display_prompt = f"Balance: {math.ceil(self._remaining_s)}s"
         else:
