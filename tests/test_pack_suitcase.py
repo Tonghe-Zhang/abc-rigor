@@ -74,7 +74,10 @@ class SuitcaseSceneTest(unittest.TestCase):
             self.assertTrue(self.env._task_randomizer._contacts_ok(self.env.model, self.env.data))
             self.assertGreaterEqual(np.rad2deg(self.env.data.joint("suitcase_hinge").qpos[0]), 105)
             self.assertLessEqual(np.rad2deg(self.env.data.joint("suitcase_hinge").qpos[0]), 110)
-            self.assertEqual(self.env.evaluate_task().scalar_reward(), 0)
+            result = self.env.evaluate_task()
+            self.assertEqual(result.metrics["packing_reward"][0], 0)
+            self.assertEqual(result.metrics["release_reward"][0], 0)
+            self.assertLessEqual(result.scalar_reward(), 0.3 * 5 / 107)
             self.assertEqual(get_task_spec(self.env.prompt).name, "pack_suitcase")
         self.assertGreaterEqual(len(textures), 16)
         self.assertEqual(categories, set(PACKING_CATEGORIES))
@@ -137,7 +140,10 @@ class SuitcaseSceneTest(unittest.TestCase):
         self.assertGreater(data.joint("suitcase_hinge").qpos[0], np.deg2rad(104))
         self.assertLess(data.joint("suitcase_hinge").qpos[0], LID_LIMIT_RAD + 1e-4)
         self.assertAlmostEqual(data.joint("suitcase_joint").qpos[2], 0.75, places=3)
-        self.assertEqual(self.env.evaluate_task().scalar_reward(), 0)
+        result = self.env.evaluate_task()
+        self.assertEqual(result.metrics["packing_reward"][0], 0)
+        self.assertEqual(result.metrics["release_reward"][0], 0)
+        self.assertLessEqual(result.scalar_reward(), 0.3 * 6 / 107)
 
     def test_all_object_variants_compile_settle_and_fit_three_across(self):
         count = 0
@@ -279,10 +285,73 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.data.qvel[:] = 0
         mujoco.mj_forward(self.model, self.data)
 
+    def observe_angle(self, angle_deg, ticks=1, hinge_speed=0):
+        """Hold a controlled pose and solve contacts at each observed tick."""
+        for _ in range(ticks):
+            self.data.joint("suitcase_hinge").qpos[0] = np.deg2rad(angle_deg)
+            self.data.qvel[:] = 0
+            self.data.joint("suitcase_hinge").qvel[0] = hinge_speed
+            self.data.time += self.model.opt.timestep
+            mujoco.mj_forward(self.model, self.data)
+            self.evaluator.after_physics_step(self.model, self.data)
+        return self.result()
+
+    def test_angle_credit_is_linear_from_native_open_limit_to_three_degrees(self):
+        self.pack(close=True)
+        self.steps(700)
+        for angle, fraction in ((110, 0), (56.5, 0.5), (3.1, 106.9 / 107), (3, 1), (2.9, 1), (0, 1)):
+            with self.subTest(angle=angle):
+                result = self.observe_angle(angle, hinge_speed=0.2)
+                self.assertTrue(result.metrics["suitcase_supported_and_settled"][0])
+                self.assertAlmostEqual(result.metrics["lid_closure_fraction"][0], fraction)
+                multiplier = 1 - result.metrics["force_penalty"][0, 3] / 0.4
+                self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.3 * fraction * multiplier)
+                self.assertEqual(result.metrics["release_reward"][0], 0)
+                self.assertFalse(result.scalar_success())
+        for angle in (3, 56.5, 110, 111):
+            positive = self.observe_angle(angle).metrics["lid_closure_fraction"][0]
+            negative = self.observe_angle(-angle).metrics["lid_closure_fraction"][0]
+            self.assertAlmostEqual(positive, negative)
+
+    def test_angle_credit_survives_robot_contact_but_release_requires_closed_dwell(self):
+        self.pack(close=True)
+        self.assertTrue(self.steps(700).scalar_success())
+        self.data.mocap_pos[0] = self.data.geom_xpos[self.model.geom("suitcase_front").id]
+        for angle in (110, 56.5, 0):
+            result = self.observe_angle(angle)
+            self.assertTrue(result.metrics["suitcase_touching_robot"][0])
+            self.assertTrue(result.metrics["suitcase_supported_and_settled"][0])
+            fraction = result.metrics["lid_closure_fraction"][0]
+            multiplier = 1 - result.metrics["force_penalty"][0, 3] / 0.4
+            self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.3 * fraction * multiplier)
+            self.assertEqual(result.metrics["release_reward"][0], 0)
+            self.assertFalse(result.scalar_success())
+        self.data.mocap_pos[0] = [-2, 0, 2]
+        self.assertEqual(self.observe_angle(110, ticks=300).metrics["release_reward"][0], 0)
+        self.assertEqual(self.observe_angle(0, ticks=200).metrics["release_reward"][0], 0)
+        self.assertEqual(self.observe_angle(20).metrics["release_reward"][0], 0)
+        self.assertEqual(self.observe_angle(0, ticks=200).metrics["release_reward"][0], 0)
+        for _ in range(100):
+            self.assertEqual(self.result().metrics["release_reward"][0], 0)
+        result = self.observe_angle(0, ticks=100)
+        self.assertAlmostEqual(result.metrics["release_reward"][0], 0.1 - 0.25 * result.metrics["force_penalty"][0, 3])
+        self.assertTrue(result.scalar_success())
+        self.data.mocap_pos[0] = self.data.geom_xpos[self.model.geom("suitcase_front").id]
+        self.assertEqual(self.observe_angle(0).metrics["release_reward"][0], 0)
+        self.data.mocap_pos[0] = [-2, 0, 2]
+        self.assertEqual(self.observe_angle(0, ticks=200).metrics["release_reward"][0], 0)
+        self.evaluator.reset()
+        self.evaluator.after_reset(self.model, self.data)
+        self.assertEqual(self.result().metrics["release_reward"][0], 0)
+        np.testing.assert_array_equal(self.result().metrics["force_dose_ns"], 0)
+
     def test_partial_credit_then_full_packed_closed_success(self):
         for count in range(4):
             self.pack(count)
-            self.assertAlmostEqual(self.steps(600).scalar_reward(), count * 0.1)
+            result = self.steps(600)
+            self.assertAlmostEqual(result.metrics["packing_reward"][0], count * 0.1)
+            self.assertAlmostEqual(result.scalar_reward(), count * 0.1 + result.metrics["lid_reward"][0])
+            self.assertEqual(result.metrics["release_reward"][0], 0)
             self.assertFalse(self.result().scalar_success())
         self.data.joint("suitcase_hinge").qpos[0] = 0
         result = self.steps(600)
@@ -298,7 +367,8 @@ class SuitcaseRewardTest(unittest.TestCase):
                 result = self.steps(700)
                 penalty = result.metrics["force_penalty"][0]
                 self.assertAlmostEqual(result.metrics["packing_reward"][0], count * 0.1 - penalty[:count].sum())
-                self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - penalty[3])
+                self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.3 - 0.75 * penalty[3])
+                self.assertAlmostEqual(result.metrics["release_reward"][0], 0.1 - 0.25 * penalty[3])
                 self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3)
                 self.assertAlmostEqual(result.scalar_reward(), 0.7 + count * 0.1 - penalty[:count].sum() - penalty[3])
                 self.assertEqual(result.scalar_success(), count == 3)
@@ -309,7 +379,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.data.joint("packing_object_1_joint").qpos[:] = [0.4, -0.2, 0.77, 1, 0, 0, 0]
         result = self.steps(1)
         self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.2 - result.metrics["force_penalty"][0, 1:3].sum())
-        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - result.metrics["force_penalty"][0, 3])
+        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.3 - 0.75 * result.metrics["force_penalty"][0, 3])
         self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3)
         self.assertFalse(result.scalar_success())
 
@@ -318,18 +388,20 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertTrue(self.steps(700).scalar_success())
         self.data.joint("suitcase_hinge").qpos[0] = np.deg2rad(30)
         self.assertFalse(self.steps(1).scalar_success())
-        self.assertAlmostEqual(self.result().scalar_reward(), 0.3)
+        self.assertAlmostEqual(self.result().metrics["packing_reward"][0], 0.3)
+        self.assertEqual(self.result().metrics["release_reward"][0], 0)
         self.assertTrue(self.result().metrics["ever_success"][0])
         self.data.joint("packing_object_1_joint").qpos[0] = 0.4
-        self.assertAlmostEqual(self.steps(1).scalar_reward(), 0.2)
+        self.assertAlmostEqual(self.steps(1).metrics["packing_reward"][0], 0.2)
         self.evaluator.reset()
         self.evaluator.after_reset(self.model, self.data)
         self.assertFalse(self.result().metrics["ever_success"][0])
-        self.assertEqual(self.result().scalar_reward(), 0)
+        self.assertEqual(self.result().metrics["packing_reward"][0], 0)
+        self.assertEqual(self.result().metrics["release_reward"][0], 0)
 
     def test_full_bounds_reject_overhang_above_lid_and_below_floor(self):
         self.pack()
-        self.assertAlmostEqual(self.steps(600).scalar_reward(), 0.3)
+        self.assertAlmostEqual(self.steps(600).metrics["packing_reward"][0], 0.3)
         original = self.data.joint("packing_object_1_joint").qpos.copy()
         for displacement in ((0.075, 0, 0), (0, 0, 0.08), (0, 0, -0.06)):
             self.data.joint("packing_object_1_joint").qpos[:] = original
@@ -393,9 +465,10 @@ class SuitcaseRewardTest(unittest.TestCase):
         result = self.steps(1)
         self.assertTrue(result.metrics["object_contained_mask"][0, 0])
         self.assertFalse(result.metrics["object_supported_mask"][0, 0])
-        self.assertEqual(result.scalar_reward(), 0)
+        self.assertEqual(result.metrics["packing_reward"][0], 0)
+        self.assertEqual(result.metrics["release_reward"][0], 0)
 
-    def test_object_contact_preserves_case_credit_but_case_contact_revokes_it(self):
+    def test_object_contact_preserves_case_credit_but_case_contact_revokes_release_and_pose(self):
         self.pack(close=True)
         self.assertTrue(self.steps(700).scalar_success())
         # Reach through the lid with a test probe to isolate item release.
@@ -407,7 +480,7 @@ class SuitcaseRewardTest(unittest.TestCase):
         self.assertTrue(result.metrics["object_packed_mask"][0, 0])
         self.assertFalse(result.metrics["suitcase_touching_robot"][0])
         self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], 0.3)
-        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - result.metrics["force_penalty"][0, 3])
+        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.3 - 0.75 * result.metrics["force_penalty"][0, 3])
         self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3 - result.metrics["force_penalty"][0, :3].sum())
         self.assertFalse(result.scalar_success())
         self.data.mocap_pos[0] = [-2, 0, 2]
@@ -470,6 +543,8 @@ class SuitcaseRewardTest(unittest.TestCase):
         result = self.steps(700)
         self.assertTrue(result.scalar_success())
         self.assertAlmostEqual(result.scalar_reward(), 0.88)
+        self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.21)
+        self.assertAlmostEqual(result.metrics["release_reward"][0], 0.07)
         dose = result.metrics["force_dose_ns"].copy()
         for _ in range(100):
             np.testing.assert_array_equal(self.result().metrics["force_dose_ns"], dose)
@@ -512,7 +587,8 @@ class SuitcaseRewardTest(unittest.TestCase):
         return self.steps(1)
 
     def test_staying_credit_requires_closed_lid_and_revokes_on_reopening(self):
-        self.assertEqual(self.result().scalar_reward(), 0)
+        self.assertEqual(self.result().metrics["packing_reward"][0], 0)
+        self.assertEqual(self.result().metrics["release_reward"][0], 0)
         self.pack()
         self.steps(600)
         for angle, closed in ((107, False), (3.1, False), (2.9, True), (0, True), (20, False)):
@@ -548,7 +624,8 @@ class SuitcaseRewardTest(unittest.TestCase):
         distance = np.sqrt(2) * 0.04
         self.assertAlmostEqual(result.metrics["suitcase_translation_m"][0], distance)
         self.assertAlmostEqual(result.metrics["suitcase_staying_fraction"][0], (0.2 - distance) / 0.15)
-        self.assertEqual(result.scalar_reward(), 0)
+        self.assertEqual(result.metrics["packing_reward"][0], 0)
+        self.assertEqual(result.metrics["release_reward"][0], 0)
 
     def test_staying_credit_rotation_deadband_taper_and_worst_fraction(self):
         for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1)):
@@ -597,7 +674,7 @@ class SuitcaseRewardTest(unittest.TestCase):
             mujoco.mj_forward(self.model, self.data)
             result = self.steps(700)
             self.assertAlmostEqual(result.metrics["packing_reward"][0], 0.3)
-            self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.4 - result.metrics["force_penalty"][0, 3])
+            self.assertAlmostEqual(result.metrics["lid_reward"][0], 0.3 - 0.75 * result.metrics["force_penalty"][0, 3])
             self.assertAlmostEqual(result.metrics["suitcase_staying_reward"][0], pose_reward, places=4)
             self.assertAlmostEqual(
                 result.scalar_reward(), 0.7 + pose_reward - result.metrics["force_penalty"].sum(), places=4
