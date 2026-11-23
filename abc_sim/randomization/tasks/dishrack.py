@@ -369,6 +369,8 @@ class DishRackRandomizer(SceneRandomizer):
         rack_perturb = perturbations_by_name.get("dishrack")
         if rack_perturb is not None and "dishrack" in nominals:
             states["dishrack"] = sample_state(rack_perturb)
+            if not self._bounds_ok(states):
+                return states
 
         for index, _plate_variant in enumerate(
             getattr(self, "_current_plate_variants", [_DISHRACK_DEFAULT_VARIANTS["plate"]])
@@ -384,7 +386,7 @@ class DishRackRandomizer(SceneRandomizer):
                 trial_states = dict(states)
                 trial_states[joint_name] = candidate
                 last_candidate = candidate
-                if self._pairwise_ok(trial_states):
+                if self._bounds_ok(trial_states) and self._pairwise_ok(trial_states):
                     break
             if last_candidate is not None:
                 states[joint_name] = last_candidate
