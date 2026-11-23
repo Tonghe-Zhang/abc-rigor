@@ -221,6 +221,14 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         ),
     ),
     SimTaskSpec(
+        name="rl_conveyor_pick",
+        env_task="rl_conveyor_pick",
+        prompt="Pick the requested objects from the conveyor and gently place them in the bin.",
+        max_chunks=120,
+        description="RL conveyor: seeded all-three or semantic-category collection with normal distractor exits.",
+        evaluator_name="rl_conveyor_pick",
+    ),
+    SimTaskSpec(
         name="count_into_opaque_box",
         env_task="count_into_opaque_box",
         prompt="put the prompted number of objects in the opaque box",

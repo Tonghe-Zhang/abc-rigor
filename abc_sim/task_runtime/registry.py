@@ -9,6 +9,7 @@ import mujoco
 from abc_sim.task_runtime.base import TaskRuntime
 from abc_sim.task_runtime.ball_tray import BallTrayBalancingRuntime
 from abc_sim.task_runtime.conveyor_pick import ConveyorPickRuntime
+from abc_sim.task_runtime.rl_conveyor import RLConveyorRuntime
 from abc_sim.task_runtime.multi_drawer import MultiDrawerSearchRuntime
 from abc_sim.task_registry import resolve_env_task_name
 from abc_sim.task_specs import SimTaskSpec
@@ -19,6 +20,7 @@ TaskRuntimeFactory: TypeAlias = type[TaskRuntime]
 _TASK_RUNTIMES: dict[str, TaskRuntimeFactory] = {
     "ball_tray_balancing": BallTrayBalancingRuntime,
     "conveyor_pick": ConveyorPickRuntime,
+    "rl_conveyor_pick": RLConveyorRuntime,
     "multi_drawer_search": MultiDrawerSearchRuntime,
 }
 

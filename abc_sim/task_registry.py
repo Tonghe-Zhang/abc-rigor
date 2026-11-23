@@ -43,6 +43,7 @@ _SCENE_TASKS: tuple[SceneTaskSpec, ...] = (
     SceneTaskSpec(name="bottles", scene_xml=_MODELS_DIR / "yam_bottles_scene.xml"),
     SceneTaskSpec(name="put_bottles", scene_xml=_MODELS_DIR / "yam_put_bottles_scene.xml"),
     SceneTaskSpec(name="conveyor_pick", scene_xml=_MODELS_DIR / "yam_conveyor_pick_scene.xml"),
+    SceneTaskSpec(name="rl_conveyor_pick", scene_xml=_MODELS_DIR / "yam_conveyor_pick_scene.xml"),
     SceneTaskSpec(name="count_into_opaque_box", scene_xml=_MODELS_DIR / "yam_count_into_opaque_box_scene.xml"),
     SceneTaskSpec(name="put_relative", scene_xml=_MODELS_DIR / "yam_put_relative_scene.xml"),
     SceneTaskSpec(name="grab_clutter", scene_xml=_MODELS_DIR / "yam_grab_clutter_scene.xml"),

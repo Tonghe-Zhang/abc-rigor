@@ -123,6 +123,7 @@ SIM_TASK_PACKAGES = {
     # Several of the task_* packages below are pulled in by abc_sim.randomization rather
     # than the scene XML, so only reset(randomize=True) shows them missing.
     "conveyor_pick": ("task_conveyor_pick",),
+    "rl_conveyor_pick": ("task_conveyor_pick",),
     # The box and the counted cubes are primitive geoms; the arm meshes are enough.
     "count_into_opaque_box": (),
     "put_relative": ("task_put_relative",),

@@ -10,6 +10,7 @@ from .tasks.bottles import BottlesRandomizer, WaterBottleRandomizer
 from .tasks.bottles_upright import BottlesUprightRandomizer
 from .tasks.chess import ChessRandomizer
 from .tasks.conveyor_pick import ConveyorPickObjectRandomizer
+from .tasks.rl_conveyor import RLConveyorRandomizer
 from .tasks.count_box import CountIntoOpaqueBoxRandomizer
 from .tasks.dishrack import DishRackRandomizer
 from .tasks.grab_clutter import GrabClutterRandomizer
@@ -48,6 +49,7 @@ TASK_RANDOMIZERS: dict[str, SceneRandomizer] = {
     "count_into_opaque_box": CountIntoOpaqueBoxRandomizer(),
     "put_relative": PutRelativeRandomizer(),
     "conveyor_pick": ConveyorPickObjectRandomizer(),
+    "rl_conveyor_pick": RLConveyorRandomizer(),
     "ball_tray_balancing": BallTrayBalancingRandomizer(),
     "grab_clutter":  GrabClutterRandomizer(),
     "multi_drawer_search": MultiDrawerSearchRandomizer(),
