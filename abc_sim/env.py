@@ -578,7 +578,12 @@ class MuJoCoYAMEnv(gym.Env):
         if randomizer is not None:
             prepare_reset = getattr(randomizer, "prepare_reset", None)
             if prepare_reset is not None:
-                prepare_reset(request=randomization_request, randomize=randomize)
+                prepare_reset(
+                    request=randomization_request,
+                    randomize=randomize,
+                    seed=seed,
+                    keep_arm_state=(options or {}).get("keep_arm_state", False),
+                )
         if randomize and randomizer is not None:
             self._task_randomizer = randomizer
         self._physics_observer = None
