@@ -12,6 +12,7 @@ from abc_sim.background import background_material_ids, background_texture_ids
 from abc_sim.env import _GRIPPER_CTRL_MAX, MuJoCoYAMEnv, project_policy_state_batch
 from abc_sim.randomization.core import RandomizationSamplingError
 from abc_sim.rendering.replay.renderer import (
+    PER_EPISODE_MODEL_FIELD_DTYPES,
     PER_EPISODE_MODEL_FIELDS,
     RendererWrapper,
     WarpReplayRuntime,
@@ -91,7 +92,7 @@ class BatchedWarpYAMEnv:
     Each world is reset through the CPU base env (its randomizer, seeds, and
     evaluator), then its state is loaded into one MJWarp ``Data`` holding
     ``num_worlds`` worlds. All worlds share the compiled model: object poses,
-    fixed-body poses, and material colors vary per world, but model-level
+    fixed-body poses, material colors, and texture assignments vary per world, but model-level
     randomization (object scales, mesh variants, object counts) has to be pinned
     through the reset request so every world compiles to the same model.
     Observations carry the camera images as CUDA tensors.
@@ -199,7 +200,7 @@ class BatchedWarpYAMEnv:
         )
         self._runtime.forward()
         if self._background is not None:
-            self._apply_backgrounds((options or {}).get("background_id"))
+            self._apply_backgrounds(stacked["mat_texid"], (options or {}).get("background_id"))
         self.qpos = stacked["qpos"]
         if isinstance(self._evaluator, PerWorldEvaluators):
             self._evaluator.reset(self.model, self.randomization)
@@ -215,11 +216,12 @@ class BatchedWarpYAMEnv:
                     getattr(self._evaluator, method)([state.metadata[key] for state in self.randomization])
         return self.get_obs()
 
-    def _apply_backgrounds(self, background_id: int | None = None) -> None:
+    def _apply_backgrounds(self, mat_texid: np.ndarray, background_id: int | None = None) -> None:
         """Draw one background per texture set and point every world's background materials at its set.
 
         Set 0 replaces the model's four background textures; further sets exist only in the render
-        context, appended after the model's textures.
+        context, appended after the model's textures. Preserve each world's
+        captured task texture assignments while replacing its background slots.
         """
         mjm = self._runtime.mjm
         slots = background_texture_ids(mjm)
@@ -233,7 +235,7 @@ class BatchedWarpYAMEnv:
                 gains[tid] = self._background.mjwarp_gain(k)
             texids.append(ids)
         self._renderer.update_textures(images, gains)
-        mat_texid = np.repeat(mjm.mat_texid[None], self.num_worlds, axis=0)
+        mat_texid = np.array(mat_texid, dtype=np.int32, copy=True)
         rgb = mujoco.mjtTextureRole.mjTEXROLE_RGB
         for world in range(self.num_worlds):
             for slot, mat in materials.items():
@@ -263,7 +265,9 @@ class BatchedWarpYAMEnv:
             "time": np.float32(data.time),
         }
         for name in PER_EPISODE_MODEL_FIELDS:
-            snapshot[name] = np.array(getattr(model, name), dtype=np.float32, copy=True)
+            snapshot[name] = np.array(
+                getattr(model, name), dtype=PER_EPISODE_MODEL_FIELD_DTYPES[name], copy=True
+            )
         return snapshot
 
     def _bind_model(self) -> None:
