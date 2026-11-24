@@ -12,6 +12,7 @@ from abc_sim.task_eval.bottles import BottlesInBinEvaluator, PutBottlesInBinEval
 from abc_sim.task_eval.bottles_upright import BottlesUprightEvaluator
 from abc_sim.task_eval.chess import ChessBoardSetupEvaluator
 from abc_sim.task_eval.conveyor import ConveyorPickObjectsInBinEvaluator
+from abc_sim.task_eval.rl_conveyor import RLConveyorEvaluator
 from abc_sim.task_eval.count_box import CountIntoOpaqueBoxEvaluator
 from abc_sim.task_eval.dishrack import DishrackEvaluator
 from abc_sim.task_eval.grab_clutter import GrabClutterTargetInBoxEvaluator
@@ -48,6 +49,7 @@ _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
     "put_bottles_in_bin": PutBottlesInBinEvaluator,
     "chess_board_setup": ChessBoardSetupEvaluator,
     "conveyor_pick_objects_in_bin": ConveyorPickObjectsInBinEvaluator,
+    "rl_conveyor_pick": RLConveyorEvaluator,
     "count_into_opaque_box": CountIntoOpaqueBoxEvaluator,
     "dishrack_plates_in_rack": DishrackEvaluator,
     "mug_flip_upright": MugFlipUprightEvaluator,

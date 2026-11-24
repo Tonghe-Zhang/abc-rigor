@@ -15,18 +15,21 @@ from abc_sim.task_specs import SimTaskSpec
 
 
 class PackSuitcaseEvaluator:
-    """Give 0.3 for packing, 0.4 for closure, and 0.3 for preserving case pose.
+    """Give 0.3 packing, 0.3 lid angle, 0.1 release, and 0.3 case pose credit.
 
     Full object collision bounds must lie inside the cavity, with a solved
     support path to its floor, no robot contact, and low velocity for 0.5 s.
     Once packed, an object keeps its credit while its full bounds remain
     inside, including during case motion. Leaving the cavity clears that
-    qualification. Closure requires a lid angle within 3 degrees, release
-    of the case, and 0.5 s of settled, supported physics, independently of packing.
+    qualification. Angle credit increases linearly from the 110 degree open
+    limit to full credit within 3 degrees closed, while the case is supported
+    and settled. Holding or moving the lid does not block angle credit.
+    Release requires a lid angle within 3 degrees, no robot contact with the
+    case or lid, and 0.5 s of settled, supported physics, independently of packing.
     Case pose credit has a 5 cm / 5 degree deadband, then falls linearly to
     zero at 20 cm or 45 degrees from the reset pose. The worse fraction wins.
-    Pose credit requires the same released, settled closure as lid credit.
-    Thirty percent of packing and closure reflects gentle handling. Each entity's
+    Pose credit requires the same released, settled closure as release credit.
+    Thirty percent of packing, angle, and release reflects gentle handling. Each entity's
     cumulative external contact load above its allowance irreversibly spends
     that credit over a 5 N*s dose budget. History resets only with the episode.
     """
@@ -34,7 +37,8 @@ class PackSuitcaseEvaluator:
     evaluation_interval_steps = 1
     settling_seconds = 0.5
     packing_reward = 0.3
-    closure_reward = 0.4
+    closure_reward = 0.3
+    release_reward = 0.1
     staying_reward = 0.3
     position_tolerance_m = 0.05
     position_limit_m = 0.2
@@ -99,7 +103,9 @@ class PackSuitcaseEvaluator:
         self.force_threshold_n = np.array(
             [object_force_allowance_n] * 3 + [self.case_gravity_allowance_n + case_extra_force_allowance_n]
         )
-        self._gentle_credit = self.gentle_fraction * np.array([self.packing_reward / 3] * 3 + [self.closure_reward])
+        self._gentle_credit = self.gentle_fraction * np.array(
+            [self.packing_reward / 3] * 3 + [self.closure_reward + self.release_reward]
+        )
         self._robot = set().union(*(subtree_geom_ids(model, model.body(name).id) for name in ("left_arm", "right_arm")))
         self._bounds_geoms = []
         for geoms in self._geoms:
@@ -258,7 +264,9 @@ class PackSuitcaseEvaluator:
         packed = self._packed
         angle = float(data.qpos[model.jnt_qposadr[self._hinge]])
         hinge_speed = float(data.qvel[model.jnt_dofadr[self._hinge]])
-        lid_is_closed = abs(angle) <= np.deg2rad(self.lid_closed_tolerance_deg)
+        closed_angle = np.deg2rad(self.lid_closed_tolerance_deg)
+        closure_fraction = float(np.clip((LID_LIMIT_RAD - abs(angle)) / (LID_LIMIT_RAD - closed_angle), 0, 1))
+        lid_is_closed = abs(angle) <= closed_angle
         closed = bool(case_ok and not case_touching_robot and lid_is_closed and abs(hinge_speed) <= 0.1)
         self._closed_time = self._closed_time + elapsed if closed and self._previous_closed else 0.0
         self._previous_closed = closed
@@ -277,15 +285,18 @@ class PackSuitcaseEvaluator:
         self._peak_force_n = np.maximum(self._peak_force_n, contact_force_n)
         penalty = self._gentle_credit * np.minimum(self._force_dose_ns / self.force_dose_budget_ns, 1)
         object_reward = packed * (self.packing_reward / 3 - penalty[:3])
-        lid_reward = closure_qualified * (self.closure_reward - penalty[3])
+        case_credit_fraction = 1 - penalty[3] / (self.closure_reward + self.release_reward)
+        lid_reward = case_ok * closure_fraction * self.closure_reward * case_credit_fraction
+        release_reward = closure_qualified * self.release_reward * case_credit_fraction
         self._result = TaskEvalResult(
-            reward=np.array([object_reward.sum() + lid_reward + staying_reward]),
+            reward=np.array([object_reward.sum() + lid_reward + release_reward + staying_reward]),
             success=np.array([success]),
             metrics={
                 "num_packed_objects": np.array([count]),
                 "object_reward": object_reward[None, :],
                 "packing_reward": np.array([object_reward.sum()]),
                 "lid_reward": np.array([lid_reward]),
+                "release_reward": np.array([release_reward]),
                 "suitcase_staying_reward": np.array([staying_reward]),
                 "suitcase_staying_fraction": np.array([staying_fraction]),
                 "suitcase_translation_m": np.array([translation_m]),
@@ -308,7 +319,7 @@ class PackSuitcaseEvaluator:
                 "suitcase_supported_and_settled": np.array([case_ok]),
                 "suitcase_touching_robot": np.array([case_touching_robot]),
                 "lid_angle_deg": np.array([np.rad2deg(angle)]),
-                "lid_closure_fraction": np.array([np.clip(1 - angle / LID_LIMIT_RAD, 0, 1)]),
+                "lid_closure_fraction": np.array([closure_fraction]),
                 "closed_settling_seconds": np.array([self._closed_time]),
                 "ever_success": np.array([self._ever_success]),
             },
