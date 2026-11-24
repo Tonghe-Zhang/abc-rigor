@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 
@@ -455,6 +456,20 @@ class BallTrayWindowTest(unittest.TestCase):
         done = self.sample(32.6, REST_Z)
         self.assertEqual(self.score(done), (True, 1.0))
         self.assertEqual(done.metrics["overtime_s"][0], 0)
+        info = done.to_info(squeeze=True)
+        self.assertIsNone(info["hold_window_s"])
+        self.assertEqual(json.loads(json.dumps(info, allow_nan=False)), info)
+
+    def test_disabled_hold_window_is_json_null_for_grouped_worlds(self):
+        self.use_evaluator(hold_window_s=None)
+        self.evaluator.reset(nworld=2)
+        result = self.evaluator.evaluate_qpos_batch(
+            np.stack([self.data.qpos, self.data.qpos]), time_s=0
+        )
+        for squeeze in (False, True):
+            info = result.to_info(squeeze=squeeze)
+            self.assertIsNone(info["hold_window_s"])
+            self.assertEqual(json.loads(json.dumps(info, allow_nan=False)), info)
 
     def test_runtime_resumes_perturbations_after_prior_complete_hold_and_loss(self):
         runtime = self.make_runtime()

@@ -536,7 +536,7 @@ class BallTrayBalancingEvaluator:
                 "best_continuous_hold_s": self._best_hold_s.copy(),
                 "hold_duration_s": self._hold_duration_s.copy(),
                 "hold_window_s": (
-                    np.full((self._nworld, 2), np.nan)
+                    None
                     if self.hold_window_s is None
                     else np.broadcast_to(
                         np.asarray(self.hold_window_s), (self._nworld, 2)
