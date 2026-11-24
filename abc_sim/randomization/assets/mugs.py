@@ -9,6 +9,8 @@ from functools import lru_cache as _lru_cache
 import mujoco
 import numpy as np
 
+from abc_sim.mug_inertia import MUG_MASS_KG, surface_inertia
+
 from ..core import (
     _format_float_list,
     _parse_float_list,
@@ -95,9 +97,11 @@ def _mug_instance_prefix(variant_name: str, instance_index: int) -> str:
 
 
 def _mug_prepare_imported_geoms(body: _ET.Element) -> None:
-    mass_assigned = False
     for parent in body.iter():
         for child in list(parent):
+            if child.tag == "inertial":
+                parent.remove(child)
+                continue
             if child.tag != "geom":
                 continue
 
@@ -119,11 +123,7 @@ def _mug_prepare_imported_geoms(body: _ET.Element) -> None:
                 child.set("contype", "0")
                 child.set("conaffinity", "0")
                 child.set("density", "0")
-                if not mass_assigned:
-                    child.set("mass", "0.05")
-                    mass_assigned = True
-                else:
-                    child.attrib.pop("mass", None)
+                child.attrib.pop("mass", None)
                 continue
 
             child.set("group", "3")
@@ -209,6 +209,78 @@ def _mug_build_object_block(
         )
 
     return list(temp_asset), cloned_body
+
+
+@_lru_cache(maxsize=128)
+def _mug_unit_surface_inertia(
+    task_name: str, variant_name: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cache unit-scale moments from a variant's transformed visual triangles."""
+    assets, body = _mug_build_object_block(
+        task_name=task_name,
+        variant_name=variant_name,
+        instance_index=0,
+        scale_factor=1.0,
+        joint_name="mug_inertia",
+    )
+    # This model only resolves mesh/body transforms; it has no dynamic joints.
+    root = _ET.Element("mujoco")
+    _ET.SubElement(root, "compiler", angle="radian", fusestatic="false")
+    for parent in body.iter():
+        for child in list(parent):
+            if child.tag == "geom":
+                if child.get("group") != "2":
+                    parent.remove(child)
+                else:
+                    child.attrib.pop("material", None)
+            elif child.tag not in {"body", "frame"}:
+                parent.remove(child)
+    mesh_names = {geom.get("mesh") for geom in body.iter("geom")}
+    asset = _ET.SubElement(root, "asset")
+    for item in assets:
+        if item.tag == "mesh" and item.get("name") in mesh_names:
+            asset.append(item)
+    _ET.SubElement(root, "worldbody").append(body)
+    model = mujoco.MjModel.from_xml_string(_ET.tostring(root, encoding="unicode"))
+    data = mujoco.MjData(model)
+    mujoco.mj_kinematics(model, data)
+    triangles = []
+    for geom in range(model.ngeom):
+        if model.geom_type[geom] != mujoco.mjtGeom.mjGEOM_MESH:
+            raise ValueError("Imported mug visual geometry must be a mesh")
+        mesh = int(model.geom_dataid[geom])
+        start = int(model.mesh_vertadr[mesh])
+        vertices = np.asarray(
+            model.mesh_vert[start : start + int(model.mesh_vertnum[mesh])],
+            dtype=np.float64,
+        )
+        vertices = vertices @ data.geom_xmat[geom].reshape(3, 3).T + data.geom_xpos[geom]
+        start = int(model.mesh_faceadr[mesh])
+        faces = model.mesh_face[start : start + int(model.mesh_facenum[mesh])]
+        triangles.append(vertices[faces])
+    if not triangles:
+        raise ValueError("Imported mug has no visual triangle surfaces")
+    center, inertia = surface_inertia(np.concatenate(triangles))
+    # The imported root's position is preserved by _scale_body_subtree.
+    anchor = np.asarray(_parse_float_list(body.get("pos", "0 0 0")))
+    for array in (center, inertia, anchor):
+        array.setflags(write=False)
+    return center, inertia, anchor
+
+
+def _mug_wrapper_inertial(task_name: str, variant_name: str, scale: float) -> _ET.Element:
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("Mug scale must be positive and finite")
+    center, inertia, anchor = _mug_unit_surface_inertia(task_name, variant_name)
+    center = anchor + scale * (center - anchor)
+    inertia = scale**2 * inertia
+    values = inertia[(0, 1, 2, 0, 0, 1), (0, 1, 2, 1, 2, 2)]
+    return _ET.Element(
+        "inertial",
+        mass=str(MUG_MASS_KG),
+        pos=" ".join(f"{value:.17g}" for value in center),
+        fullinertia=" ".join(f"{value:.17g}" for value in values),
+    )
 
 
 def _mug_replace_body_contents(wrapper: _ET.Element, imported_body: _ET.Element) -> None:
@@ -302,6 +374,11 @@ def _build_mug_scene_xml(
         for asset in variant_assets:
             asset_elem.append(asset)
         _mug_replace_body_contents(wrapper, imported_body)
+        wrapper.append(
+            _mug_wrapper_inertial(
+                task_name, current_mug_variant, float(scale_states.get(joint_name, 1.0))
+            )
+        )
 
     return _resolve_scene_xml_paths(_ET.tostring(root, encoding="unicode"), base_dir)
 
