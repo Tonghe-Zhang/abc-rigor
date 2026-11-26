@@ -151,7 +151,7 @@ class BallTrayWindowTest(unittest.TestCase):
             self.score(self.sample(30, UP_Z, ball_inside=False)), (True, 1.0)
         )
 
-    def test_early_safe_park_can_retry_without_resetting_clock_or_earned_credit(self):
+    def test_early_safe_park_keeps_credit_and_later_qualified_hold_starts_clock(self):
         self.hold(1, 5)
         self.place(5.6)
         parked = self.sample(6.6, REST_Z)
@@ -162,8 +162,8 @@ class BallTrayWindowTest(unittest.TestCase):
         self.place(17.6)
         done = self.sample(18.6, REST_Z)
         self.assertTrue(done.scalar_success())
-        self.assertAlmostEqual(done.metrics["overtime_s"][0], 1.6)
-        self.assertAlmostEqual(done.reward[0], 0.968, places=6)
+        self.assertAlmostEqual(done.metrics["overtime_s"][0], 0.0)
+        self.assertAlmostEqual(done.reward[0], 1.0, places=6)
 
     def test_three_short_parked_cycles_never_sum_hold_credit(self):
         for start in (1, 7, 13):
@@ -173,9 +173,9 @@ class BallTrayWindowTest(unittest.TestCase):
             self.assertAlmostEqual(result.metrics["hold_credit"][0], 0.32)
             self.assertEqual(result.metrics["lift_credit"][0], 0.1)
             self.assertFalse(result.scalar_success())
-        self.assertAlmostEqual(result.metrics["overtime_s"][0], 1.6)
+        self.assertAlmostEqual(result.metrics["overtime_s"][0], 0.0)
 
-    def test_overtime_uses_first_lift_through_drop_dip_and_recovery(self):
+    def test_qualified_overtime_persists_through_drop_dip_and_recovery(self):
         self.hold(1, 11)
         self.assertEqual(self.score(self.sample(17, UP_Z)), (False, 0.88))
         for t, z, kwargs in (
@@ -188,17 +188,65 @@ class BallTrayWindowTest(unittest.TestCase):
             self.assertAlmostEqual(result.reward[0], 0.9 - 0.02 * (t - 16), places=6)
         self.assertFalse(result.metrics["hold_complete"][0])
 
-    def test_overtime_caps_and_saturates_at_zero_for_small_earned_credit(self):
+    def test_partial_credit_is_preserved_and_qualified_overtime_caps(self):
         self.sample(1, UP_Z)
         self.sample(2, UP_Z)
         self.sample(2.1, UP_Z, ball_inside=False)
         result = self.sample(40, UP_Z, ball_inside=False)
-        self.assertEqual(self.score(result), (False, 0.0))
-        self.assertAlmostEqual(result.metrics["overtime_penalty"][0], 0.18)
+        self.assertEqual(self.score(result), (False, 0.18))
+        self.assertAlmostEqual(result.metrics["overtime_penalty"][0], 0.0)
         self.use_evaluator()
         self.hold(1, 31, step=1)
         self.place(31.6)
         self.assertEqual(self.score(self.sample(32.6, REST_Z)), (True, 0.8))
+
+    def test_first_qualification_after_interruption_gets_full_placement_window(self):
+        self.hold(1, 5)
+        self.sample(5.1, UP_Z, ball_inside=False)
+        self.hold(8, 18)
+        self.assertEqual(self.score(self.sample(23, UP_Z)), (False, 0.9))
+        self.assertEqual(self.score(self.sample(23.5, UP_Z)), (False, 0.89))
+        self.assertEqual(
+            self.score(self.sample(24, UP_Z, ball_inside=False)), (False, 0.88)
+        )
+
+    def test_late_first_qualification_does_not_instantly_deduct_partial_credit(self):
+        self.hold(1, 3)
+        self.sample(3.1, UP_Z, ball_inside=False)
+        self.assertEqual(self.score(self.sample(30, REST_Z)), (False, 0.26))
+        self.hold(31, 41)
+        self.assertEqual(self.score(self.sample(46, UP_Z)), (False, 0.9))
+        self.assertEqual(self.score(self.sample(47, UP_Z)), (False, 0.88))
+
+    def test_second_qualified_hold_cannot_restart_overtime_clock(self):
+        self.hold(1, 11)
+        self.sample(17, UP_Z)
+        self.sample(18, UP_Z, ball_inside=False)
+        self.hold(20, 30)
+        result = self.sample(30, UP_Z)
+        self.assertEqual(self.score(result), (False, 0.7))
+        self.assertAlmostEqual(result.metrics["overtime_s"][0], 14)
+
+    def test_no_lift_never_receives_credit_or_penalty(self):
+        result = self.sample(300, REST_Z)
+        self.assertEqual(self.score(result), (False, 0.0))
+        self.assertEqual(result.metrics["overtime_penalty"][0], 0.0)
+
+    def test_sparse_observation_uses_exact_qualification_time(self):
+        self.hold(1, 5)
+        self.sample(5.1, UP_Z, ball_inside=False)
+        self.sample(7, UP_Z)
+        result = self.sample(23, UP_Z)
+        self.assertEqual(self.score(result), (False, 0.88))
+        self.assertEqual(result.metrics["overtime_s"][0], 1.0)
+
+    def test_custom_window_grace_is_upper_minus_lower_bound(self):
+        self.use_evaluator(hold_window_s=(4, 6))
+        self.sample(1, UP_Z)
+        self.sample(5, UP_Z)
+        result = self.sample(8, UP_Z)
+        self.assertEqual(self.score(result), (False, 0.88))
+        self.assertEqual(result.metrics["overtime_s"][0], 1.0)
 
     def test_valid_settling_time_is_excluded_from_overtime(self):
         self.hold(1, 15)
