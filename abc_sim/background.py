@@ -365,13 +365,89 @@ class BackgroundController:
         return self.info_of(self.state)
 
 
+# ---- any env (external env_factory tasks) -------------------------------------------------------------------
+# Scenes not compiled by MuJoCoYAMEnv keep their own background textures; these names (plus the standard slot names)
+# are swapped in place, resized to each texture.  Extend per task with ``attach(..., aliases=...)``.
+TEXTURE_ALIASES: dict[str, tuple[str, ...]] = {
+    "wall_far": ("wall_far_t", "bg_wall_far", "bg_wall_back"),
+    "wall_left": ("wall_left_t", "bg_wall_left", "bg_wall_left_back"),
+    "wall_right": ("wall_right_t", "bg_wall_right", "bg_wall_right_back"),
+    "table": ("table_t", "bg_table"),
+}
+
+
+def write_background_any(model: mujoco.MjModel, images: dict[str, np.ndarray],
+                         aliases: dict[str, tuple[str, ...]] | None = None) -> list[int]:
+    """Write slot images into every matching texture of ``model`` (any size / 1, 3 or 4 channels); returns ids."""
+    ids = []
+    for k, names in (aliases or TEXTURE_ALIASES).items():
+        for n in dict.fromkeys((texture_name(k), *names)):
+            tid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, n)
+            if tid < 0:
+                continue
+            w, h, c = int(model.tex_width[tid]), int(model.tex_height[tid]), int(model.tex_nchannel[tid])
+            im = images[k] if images[k].shape[:2] == (h, w) else _resize(images[k], (w, h))
+            if c == 4:
+                im = np.concatenate([im, np.full((h, w, 1), 255, np.uint8)], -1)
+            elif c == 1:
+                im = im.mean(-1, keepdims=True).astype(np.uint8)
+            adr = int(model.tex_adr[tid])
+            model.tex_data[adr:adr + w * h * c] = im.reshape(-1)
+            ids.append(tid)
+    return ids
+
+
+def attach(env: Any, config: BackgroundConfig | None, *, aliases: dict[str, tuple[str, ...]] | None = None) -> Any:
+    """Per-seed wallpaper / table swap for any env with ``reset(seed=...)`` and ``model`` (external factory tasks).
+
+    Every ``reset(seed=s)`` draws from ``background_rng(s)`` (or ``(config.seed, s)``) -- so a seed always shows the
+    same background -- and writes it into the textures named in ``aliases`` after the env built its scene.  Visual
+    only.  ``info["background"]`` / ``env.background_info`` report the draw; a renderer passed to ``env.render`` gets
+    the new textures re-uploaded.  ``options={"background_id": k}`` pins one combination.  No-op for ``config=None``.
+    """
+    if config is None:
+        return env
+    lib = BackgroundLibrary(config.asset_dir, slot_cache=8)
+    if config.background_id is not None:
+        lib.combination(config.background_id)
+    reset0, render0 = env.reset, getattr(env, "render", None)
+    env.background_info, env._bg_dirty = None, []
+
+    def reset(seed: int | None = None, options: dict | None = None, **kw):
+        out = reset0(seed=seed, options=options, **kw)
+        s = getattr(env, "seed", seed) if seed is None else seed
+        s = int(np.random.SeedSequence().entropy % (2**31)) if s is None else int(s)
+        bid = (options or {}).get("background_id", config.background_id)
+        st = lib.draw(background_rng(s if config.seed is None else (int(config.seed), s)), bid)
+        env._bg_dirty = write_background_any(env.model, lib.slot_images(st, config.slot_scale), aliases)
+        env.background_info = BackgroundController.info_of(st) | {"seed": s, "textures": len(env._bg_dirty)}
+        if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
+            out[1]["background"] = env.background_info
+        return out
+
+    def render(*a, renderer=None, **kw):
+        if renderer is not None and env._bg_dirty:
+            ctx = getattr(renderer, "_mjr_context", None)
+            for tid in env._bg_dirty if ctx is not None else ():
+                mujoco.mjr_uploadTexture(env.model, ctx, tid)
+            env._bg_dirty = []
+        return render0(*a, renderer=renderer, **kw)
+
+    env.reset = reset
+    if render0 is not None:
+        env.render = render
+    return env
+
+
 __all__ = [
     "MJWARP_WALL_AMBIENT",
     "SLOTS",
     "BackgroundConfig",
     "BackgroundController",
     "BackgroundLibrary",
+    "TEXTURE_ALIASES",
     "apply_background_xml",
+    "attach",
     "background_material_ids",
     "background_rng",
     "background_texture_ids",
@@ -379,4 +455,5 @@ __all__ = [
     "resolve_asset_dir",
     "slot_sizes",
     "write_background",
+    "write_background_any",
 ]

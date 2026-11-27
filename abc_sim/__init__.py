@@ -275,8 +275,11 @@ def make_env(
         if scene_xml is not None or scene_xml_string is not None:
             raise ValueError(f"scene_xml overrides are not supported for external task {env_task!r}")
         builder_options = kwargs.pop("builder_options", None)
-        if external.mode == "factory":
-            return external.env_factory(
+        if external.mode == "factory":   # every factory task gets the same per-seed background swap
+            from abc_sim.background import attach
+
+            background = kwargs.pop("background", None)
+            return attach(external.env_factory(
                 task=resolved_task.task_spec or task,
                 render_cameras=render_cameras,
                 camera_backend=camera_backend,
@@ -291,7 +294,7 @@ def make_env(
                 evaluator_options=evaluator_options,
                 builder_options=builder_options,
                 **kwargs,
-            )
+            ), background)
         seed = kwargs.pop("seed", None)
         physics_kwargs = {
             **get_task_physics_defaults(env_task),
