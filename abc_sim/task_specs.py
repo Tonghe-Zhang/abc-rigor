@@ -404,7 +404,7 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         prompt="find two target objects in the drawers and place them in the bin one at a time",
         description="Training variant with two ordered targets and episode-unique drawer-opening "
         "credit; the caller controls the horizon.",
-        evaluator_name="multi_drawer_search_shaped_v1",
+        evaluator_name="multi_drawer_search_shaped_v2",
         reset_constraints=(("target_count", 2),),
     ),
     SimTaskSpec(

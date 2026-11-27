@@ -20,9 +20,7 @@ def drawer_interior(model, body):
         rotation = np.empty(9)
         mujoco.mju_quat2Mat(rotation, model.geom_quat[geom])
         center, half = model.geom_aabb[geom, :3], model.geom_aabb[geom, 3:]
-        points = (
-            model.geom_pos[geom] + (center + signs * half) @ rotation.reshape(3, 3).T
-        )
+        points = model.geom_pos[geom] + (center + signs * half) @ rotation.reshape(3, 3).T
         bounds.append((geom, points.min(axis=0), points.max(axis=0)))
     floors = [entry for entry in bounds if np.argmin(entry[2] - entry[1]) == 2]
     if not floors:
@@ -39,14 +37,11 @@ def drawer_interior(model, body):
             entry
             for entry in walls
             if np.argmin(entry[2] - entry[1]) == axis
-            and entry[2][other_axis] - entry[1][other_axis]
-            >= 0.8 * (floor[2][other_axis] - floor[1][other_axis])
+            and entry[2][other_axis] - entry[1][other_axis] >= 0.8 * (floor[2][other_axis] - floor[1][other_axis])
             and entry[2][2] > lower[2]
         ]
         if len(candidates) != 2:
-            raise ValueError(
-                "Marker drawer requires two opposing walls on each horizontal axis."
-            )
+            raise ValueError("Marker drawer requires two opposing walls on each horizontal axis.")
         negative, positive = sorted(candidates, key=lambda entry: entry[1][axis])
         lower[axis], upper[axis] = negative[2][axis], positive[1][axis]
         inner_walls.extend(candidates)
@@ -59,7 +54,9 @@ def drawer_interior(model, body):
 class MarkerDrawerEvaluator:
     """Bank opening progress; score current released contents and closure."""
 
+    evaluation_interval_steps = 1
     requires_step_updates = True
+    requires_position_refresh = False
 
     def __init__(self, *, model, spec, closed_tolerance_m=0.005):
         self.model, self.spec = model, spec
@@ -72,6 +69,7 @@ class MarkerDrawerEvaluator:
             raise ValueError("Marker drawers require native contact evaluation.")
         self._best_open = 0.0
         self._opened = False
+        self._result = TaskEvalResult(np.array([0.0]), np.array([False]), {"ever_success": np.array([False])})
 
     def configure_from_randomization(self, model, randomization):
         self.model = model
@@ -92,77 +90,86 @@ class MarkerDrawerEvaluator:
         if not self._markers:
             raise ValueError("Marker drawer scene contains no required markers.")
         self._marker_geoms = [subtree_geom_ids(model, body) for body in self._markers]
-        self._points = [
-            PutRelativeEvaluator._body_extent_points(model, body)
-            for body in self._markers
-        ]
-        self._robot = set().union(
-            *(
-                subtree_geom_ids(model, model.body(f"{arm}_arm").id)
-                for arm in ("left", "right")
-            )
-        )
+        self._geom_marker = {geom: index for index, geoms in enumerate(self._marker_geoms) for geom in geoms}
+        self._points = [PutRelativeEvaluator._body_extent_points(model, body) for body in self._markers]
+        self._robot = set().union(*(subtree_geom_ids(model, model.body(f"{arm}_arm").id) for arm in ("left", "right")))
         self.reset()
 
     def evaluate_qpos_batch(self, qpos_batch):
         raise NotImplementedError("Marker placement requires solved support contacts.")
 
     def evaluate_model_data(self, model, data):
+        return self._result
+
+    def after_reset(self, model, data):
+        self.after_physics_step(model, data)
+
+    def after_physics_step(self, model, data):
         if self._target is None:
             raise RuntimeError("Configure the marker drawer before evaluating it.")
         opening = float(data.qpos[model.jnt_qposadr[self._joint]])
-        self._best_open = max(
-            self._best_open, min(max(opening / self._travel, 0.0), 1.0)
-        )
+        self._best_open = max(self._best_open, min(max(opening / self._travel, 0.0), 1.0))
         self._opened |= opening > self.closed_tolerance_m
         drawer_rotation = data.xmat[self._drawer].reshape(3, 3)
-        placed = []
+        count = len(self._markers)
+        contained = np.zeros(count, dtype=bool)
+        touched = np.zeros(count, dtype=bool)
+        penetrating = np.zeros(count, dtype=bool)
+        direct_support = np.zeros(count, dtype=bool)
+        support_edges = np.zeros((count, count), dtype=bool)
         force = np.zeros(6)
-        for body, points, geoms in zip(self._markers, self._points, self._marker_geoms):
+        for index, (body, points) in enumerate(zip(self._markers, self._points)):
             world = points @ data.xmat[body].reshape(3, 3).T + data.xpos[body]
             local = (world - data.xpos[self._drawer]) @ drawer_rotation
-            contained = bool(
-                np.all(local >= self._lower - [0.0, 0.0, 0.002])
-                and np.all(local <= self._upper)
-            )
-            supported = touched = penetrating = False
-            for c in range(data.ncon):
-                contact = data.contact[c]
-                g1, g2 = int(contact.geom1), int(contact.geom2)
-                if (g1 in geoms) == (g2 in geoms):
+            contained[index] = np.all(local >= self._lower - [0.0, 0.0, 0.002]) and np.all(local <= self._upper)
+        for c in range(data.ncon):
+            contact = data.contact[c]
+            g1, g2 = int(contact.geom1), int(contact.geom2)
+            if g1 not in self._geom_marker and g2 not in self._geom_marker:
+                continue
+            mujoco.mj_contactForce(model, data, c, force)
+            if contact.dist > 0 and force[0] <= 0:
+                continue
+            for geom, other, sign in ((g1, g2, -1), (g2, g1, 1)):
+                if geom not in self._geom_marker:
                     continue
-                other, sign = (g2, -1) if g1 in geoms else (g1, 1)
-                mujoco.mj_contactForce(model, data, c, force)
-                if contact.dist > 0 and force[0] <= 0:
+                index = self._geom_marker[geom]
+                if self._geom_marker.get(other) == index:
                     continue
-                touched |= other in self._robot
-                penetrating |= contact.dist < -0.002
-                supported |= (
-                    other in self._drawer_geoms
-                    and force[0] > 0.001
-                    and sign * contact.frame[2] > 0.5
-                )
-            placed.append(contained and supported and not touched and not penetrating)
+                touched[index] |= other in self._robot
+                penetrating[index] |= contact.dist < -0.002
+                if force[0] > 0.001 and sign * contact.frame[2] > 0.5:
+                    direct_support[index] |= other in self._drawer_geoms
+                    if other in self._geom_marker:
+                        support_edges[index, self._geom_marker[other]] = True
+        valid = contained & ~touched & ~penetrating
+        placed = valid & direct_support
+        # A load path must reach the selected drawer through valid markers.
+        # At most N propagation rounds cover every simple path in this scene.
+        for _ in range(count):
+            placed = valid & (direct_support | np.any(support_edges & placed[None, :], axis=1))
         fraction = float(np.mean(placed))
         all_inside = all(placed)
         closure = (
             max(
                 0.0,
-                1.0
-                - max(opening - self.closed_tolerance_m, 0.0)
-                / (self._travel - self.closed_tolerance_m),
+                1.0 - max(opening - self.closed_tolerance_m, 0.0) / (self._travel - self.closed_tolerance_m),
             )
             if self._opened and all_inside
             else 0.0
         )
         success = all_inside and self._opened and opening <= self.closed_tolerance_m
-        return TaskEvalResult(
+        self._result = TaskEvalResult(
             np.array([0.20 * self._best_open + 0.70 * fraction + 0.10 * closure]),
             np.array([success]),
             {
                 "target_drawer": self._target,
                 "marker_count": len(placed),
                 "placed_marker_mask": np.array([placed]),
+                "contained_marker_mask": contained[None],
+                "released_marker_mask": (~touched)[None],
+                "nonpenetrating_marker_mask": (~penetrating)[None],
+                "direct_drawer_support_mask": direct_support[None],
                 "opening_credit": 0.20 * self._best_open,
                 "placement_credit": 0.70 * fraction,
                 "closure_credit": 0.10 * closure,

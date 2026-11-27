@@ -69,7 +69,7 @@ _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
     "mug_on_rack": MugOnRackEvaluator,
     "mug_on_rack_v2": MugOnRackV2Evaluator,
     "multi_drawer_target_in_bin": MultiDrawerSearchTargetInBinEvaluator,
-    "multi_drawer_search_shaped_v1": ShapedMultiDrawerSearchEvaluator,
+    "multi_drawer_search_shaped_v2": ShapedMultiDrawerSearchEvaluator,
     "ball_tray_balancing": BallTrayBalancingEvaluator,
     "pour_beads_in_container": PourBeadsInContainerEvaluator,
     "put_relative": PutRelativeEvaluator,
@@ -97,8 +97,6 @@ def make_task_evaluator(
     try:
         evaluator_cls = _TASK_EVALUATORS[spec.evaluator_name]
     except KeyError as exc:
-        raise KeyError(
-            f"Unknown task evaluator {spec.evaluator_name!r} for task {spec.name!r}"
-        ) from exc
+        raise KeyError(f"Unknown task evaluator {spec.evaluator_name!r} for task {spec.name!r}") from exc
 
     return evaluator_cls(model=model, spec=spec, **{**spec.evaluator_kwargs(), **(options or {})})

@@ -105,19 +105,11 @@ def test_slowest_conveyor_last_spawn_exits_and_finishes_grace_before_thirty_seco
 def test_ball_loss_before_lift_terminates_only_after_grace_and_can_recover():
     fixture = tray_tests.BallTrayWindowTest()
     fixture.setUp()
-    assert not fixture.sample(0.1, tray_tests.REST_Z, ball_inside=False).metrics[
-        "task_terminated"
-    ][0]
+    assert not fixture.sample(0.1, tray_tests.REST_Z, ball_inside=False).metrics["task_terminated"][0]
     assert not fixture.sample(0.9, tray_tests.REST_Z).metrics["task_terminated"][0]
-    assert not fixture.sample(1.0, tray_tests.REST_Z, ball_inside=False).metrics[
-        "task_terminated"
-    ][0]
-    assert not fixture.sample(1.999, tray_tests.REST_Z, ball_inside=False).metrics[
-        "task_terminated"
-    ][0]
-    assert fixture.sample(2.001, tray_tests.REST_Z, ball_inside=False).metrics[
-        "task_terminated"
-    ][0]
+    assert not fixture.sample(1.0, tray_tests.REST_Z, ball_inside=False).metrics["task_terminated"][0]
+    assert not fixture.sample(1.999, tray_tests.REST_Z, ball_inside=False).metrics["task_terminated"][0]
+    assert fixture.sample(2.001, tray_tests.REST_Z, ball_inside=False).metrics["task_terminated"][0]
 
 
 def test_ball_bounce_and_safe_lowering_do_not_trigger_loss():
@@ -138,15 +130,13 @@ def test_ball_loss_before_first_support_observation_starts_one_second_grace():
     initial = fixture.sample(0, tray_tests.REST_Z, ball_height=0.04)
     assert not initial.metrics["ball_tray_contact"][0]
     assert not initial.metrics["task_terminated"][0]
-    assert not fixture.sample(
-        0.01, tray_tests.REST_Z, ball_inside=False, ball_height=0.04
-    ).metrics["task_terminated"][0]
-    assert not fixture.sample(
-        1.009, tray_tests.REST_Z, ball_inside=False, ball_height=0.04
-    ).metrics["task_terminated"][0]
-    assert fixture.sample(
-        1.011, tray_tests.REST_Z, ball_inside=False, ball_height=0.04
-    ).metrics["task_terminated"][0]
+    assert not fixture.sample(0.01, tray_tests.REST_Z, ball_inside=False, ball_height=0.04).metrics["task_terminated"][
+        0
+    ]
+    assert not fixture.sample(1.009, tray_tests.REST_Z, ball_inside=False, ball_height=0.04).metrics["task_terminated"][
+        0
+    ]
+    assert fixture.sample(1.011, tray_tests.REST_Z, ball_inside=False, ball_height=0.04).metrics["task_terminated"][0]
 
 
 @pytest.mark.parametrize("worlds", [1, 3])
@@ -214,6 +204,23 @@ def test_recall_deduction_requires_delivered_target_exposure(observed, expected)
     assert result.metrics["recall_wrong_drawer_count"][0] == (3 if observed else 0)
 
 
+def test_recall_reward_has_distinct_declared_version_and_rejects_old_selection():
+    from dataclasses import replace
+
+    from abc_sim.task_eval.registry import make_task_evaluator
+
+    fixture = drawer_tests.DrawerRewardsTest()
+    fixture.setUp()
+    assert fixture.spec.evaluator_name == "multi_drawer_search_shaped_v2"
+    evaluator = make_task_evaluator(fixture.model, fixture.spec)
+    assert type(evaluator) is type(fixture.evaluator)
+    with pytest.raises(KeyError, match="multi_drawer_search_shaped_v1"):
+        make_task_evaluator(
+            fixture.model,
+            replace(fixture.spec, evaluator_name="multi_drawer_search_shaped_v1"),
+        )
+
+
 def test_recall_deduction_preserves_first_retrieval_and_ignores_preopened_drawers():
     fixture = drawer_tests.DrawerRewardsTest()
     fixture.setUp()
@@ -250,12 +257,8 @@ def test_counting_family_first_covers_all_six_and_exact_one_with_replay():
     randomizer = CountIntoOpaqueBoxRandomizer()
     families, exact_counts = set(), set()
     for seed in range(120):
-        state = randomizer.randomize(
-            None, None, seed=seed, request={"family_first": True}
-        )
-        repeat = randomizer.randomize(
-            None, None, seed=seed, request={"family_first": True}
-        )
+        state = randomizer.randomize(None, None, seed=seed, request={"family_first": True})
+        repeat = randomizer.randomize(None, None, seed=seed, request={"family_first": True})
         assert state.metadata == repeat.metadata
         metadata = state.metadata
         families.add(metadata["prompt_type"])
@@ -309,9 +312,7 @@ class InterruptedFixture(Fixture):
         table = root.find(".//geom[@name='conveyor_belt_surface']")
         table.set("name", "table_plane")
         table.set("size", "1 1 .015")
-        self.model = mujoco.MjModel.from_xml_string(
-            ET.tostring(root, encoding="unicode")
-        )
+        self.model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
         self.data = mujoco.MjData(self.model)
         self.evaluator = InterruptedClutterEvaluator(
             model=self.model, spec=get_task_spec("rl_grab_specific_object_from_clutter")
@@ -342,12 +343,8 @@ class InterruptedFixture(Fixture):
         return result
 
 
-@pytest.mark.parametrize(
-    "distance, expected", [(0.049, 0.7), (0.051, 0.5), (0.099, 0.5), (0.101, 0.3)]
-)
-def test_interrupted_clutter_current_return_bands_and_one_shot_clock(
-    distance, expected
-):
+@pytest.mark.parametrize("distance, expected", [(0.049, 0.7), (0.051, 0.5), (0.099, 0.5), (0.101, 0.3)])
+def test_interrupted_clutter_current_return_bands_and_one_shot_clock(distance, expected):
     fixture = InterruptedFixture()
     assert fixture.sample().scalar_reward() == 0.0
     fixture.grasp(1)
@@ -365,9 +362,7 @@ def test_interrupted_clutter_current_return_bands_and_one_shot_clock(
 
 def test_native_wood_preserves_original_atlas_and_seeded_records():
     baseline = next(
-        sample_native_wood_appearance(seed)
-        for seed in range(100)
-        if sample_native_wood_appearance(seed)["original"]
+        sample_native_wood_appearance(seed) for seed in range(100) if sample_native_wood_appearance(seed)["original"]
     )
     np.testing.assert_array_equal(native_wood_pixels(baseline), original_atlas())
     varied = next(
@@ -378,12 +373,7 @@ def test_native_wood_preserves_original_atlas_and_seeded_records():
     validate_appearance(json.loads(json.dumps(varied)))
     assert varied == sample_native_wood_appearance(varied["seed"])
     assert not np.array_equal(native_wood_pixels(varied), original_atlas())
-    assert (
-        get_task_spec("spell_random_3_appearance").reset_request_options()[
-            "appearance_profile"
-        ]
-        == "native_wood"
-    )
+    assert get_task_spec("spell_random_3_appearance").reset_request_options()["appearance_profile"] == "native_wood"
 
 
 def test_mug_rack_finishes_are_distinct_replayable_and_physics_preserving():
@@ -407,9 +397,7 @@ def test_mug_rack_finishes_are_distinct_replayable_and_physics_preserving():
     assert len(set(snapshots)) == len(randomizer._rack_finishes) == 10
     randomizer._apply_rack_finish(model, "original")
     np.testing.assert_array_equal(model.tex_data, original)
-    for expected, actual in zip(
-        physics, (model.geom_size, model.geom_friction, model.body_mass)
-    ):
+    for expected, actual in zip(physics, (model.geom_size, model.geom_friction, model.body_mass)):
         np.testing.assert_array_equal(actual, expected)
 
 
@@ -472,24 +460,13 @@ def test_interrupted_clutter_regrasp_removes_return_and_early_second_pick_needs_
 
 def test_interruption_updates_the_runtime_prompt_once_without_replacing_native_tasks():
     fixture = InterruptedFixture()
-    runtime = make_task_runtime(
-        "rl_grab_specific_object_from_clutter", fixture.model, fixture.data
-    )
+    runtime = make_task_runtime("rl_grab_specific_object_from_clutter", fixture.model, fixture.data)
     assert isinstance(runtime, InterruptedInstructionRuntime)
-    assert (
-        make_task_runtime(
-            "grab_specific_object_from_clutter", fixture.model, fixture.data
-        )
-        is None
-    )
+    assert make_task_runtime("grab_specific_object_from_clutter", fixture.model, fixture.data) is None
     assert make_task_runtime("put_relative", fixture.model, fixture.data) is None
     episode = fixture.evaluator._episode
-    state = SimpleNamespace(
-        metadata={**episode, "interruption_initial_settled": True}, object_states={}
-    )
-    runtime.after_reset(
-        fixture.model, fixture.data, randomization=state, episode=episode
-    )
+    state = SimpleNamespace(metadata={**episode, "interruption_initial_settled": True}, object_states={})
+    runtime.after_reset(fixture.model, fixture.data, randomization=state, episode=episode)
     assert runtime.observation_prompt() == episode["prompt"]
     fixture.grasp()
     runtime.on_task_evaluation(fixture.sample(0.9))
@@ -512,16 +489,12 @@ class RelativeFixture(InterruptedFixture):
         table = root.find(".//geom[@name='conveyor_belt_surface']")
         table.set("name", "table_plane")
         table.set("size", "1 1 .015")
-        self.model = mujoco.MjModel.from_xml_string(
-            ET.tostring(root, encoding="unicode")
-        )
+        self.model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
         self.data = mujoco.MjData(self.model)
         self.move(2, [-0.4, 0.42, 0.0345])
         self.move(3, [0.4, 0.42, 0.0345])
         mujoco.mj_forward(self.model, self.data)
-        self.evaluator = InterruptedRelativeEvaluator(
-            model=self.model, spec=get_task_spec("rl_put_relative")
-        )
+        self.evaluator = InterruptedRelativeEvaluator(model=self.model, spec=get_task_spec("rl_put_relative"))
         states = {
             f"conveyor_object_{i}_joint": {
                 "pos": self.data.body(f"conveyor_object_{i}").xpos.tolist(),
@@ -553,9 +526,7 @@ class RelativeFixture(InterruptedFixture):
         }
         self.evaluator.configure_episode(
             self.model,
-            self.evaluator.prepare_randomization(
-                self.model, SimpleNamespace(metadata=initial, object_states=states)
-            ),
+            self.evaluator.prepare_randomization(self.model, SimpleNamespace(metadata=initial, object_states=states)),
         )
         self.evaluator.after_reset(self.model, self.data)
 
@@ -593,9 +564,7 @@ class MarkerFixture:
         root = ET.fromstring("<mujoco><worldbody/></mujoco>")
         world = root.find("worldbody")
         for level, height in (("bottom", 0), ("middle", 0.3), ("top", 0.6)):
-            drawer = ET.SubElement(
-                world, "body", name=f"link_{level}_drawer_low", pos=f"0 0 {height}"
-            )
+            drawer = ET.SubElement(world, "body", name=f"link_{level}_drawer_low", pos=f"0 0 {height}")
             ET.SubElement(
                 drawer,
                 "joint",
@@ -615,23 +584,17 @@ class MarkerFixture:
             ):
                 ET.SubElement(drawer, "geom", type="box", pos=pos, size=size)
         for i in range(1, 6):
-            body = ET.SubElement(
-                world, "body", name=f"marker_{i}", pos=f"{1 + i * 0.05} 0 .1"
-            )
+            body = ET.SubElement(world, "body", name=f"marker_{i}", pos=f"{1 + i * 0.05} 0 .1")
             ET.SubElement(body, "freejoint", name=f"marker_{i}_joint")
             ET.SubElement(body, "geom", type="sphere", size=".01", mass=".01")
         for arm in ("left", "right"):
             body = ET.SubElement(world, "body", name=f"{arm}_arm", pos="3 3 3")
             ET.SubElement(body, "freejoint", name=f"{arm}_arm_pose")
             ET.SubElement(body, "geom", type="sphere", size=".01", mass=".01")
-        self.model = mujoco.MjModel.from_xml_string(
-            ET.tostring(root, encoding="unicode")
-        )
+        self.model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
         self.data = mujoco.MjData(self.model)
         self.target = target
-        self.evaluator = MarkerDrawerEvaluator(
-            model=self.model, spec=get_task_spec("rl_put_markers_in_drawer")
-        )
+        self.evaluator = MarkerDrawerEvaluator(model=self.model, spec=get_task_spec("rl_put_markers_in_drawer"))
         self.evaluator.configure_from_randomization(
             self.model, SimpleNamespace(metadata={"marker_target_drawer": target})
         )
@@ -643,11 +606,10 @@ class MarkerFixture:
         origin = self.data.body(f"link_{self.target}_drawer_low").xpos.copy()
         for i in range(1, 6):
             self.data.joint(f"marker_{i}_joint").qpos[:3] = (
-                origin + [(i - 3) * 0.03, 0, 0.0145]
-                if i <= count
-                else [1 + i * 0.05, 0, 0.1]
+                origin + [(i - 3) * 0.03, 0, 0.0145] if i <= count else [1 + i * 0.05, 0, 0.1]
             )
         mujoco.mj_forward(self.model, self.data)
+        self.evaluator.after_physics_step(self.model, self.data)
         return self.evaluator.evaluate_model_data(self.model, self.data)
 
 

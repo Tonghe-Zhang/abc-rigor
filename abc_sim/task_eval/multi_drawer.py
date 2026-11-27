@@ -14,9 +14,7 @@ from abc_sim.task_eval.bottles import _quat_to_rotmat_batch
 from abc_sim.task_specs import SimTaskSpec
 
 
-def resolve_drawer_goal(
-    model: mujoco.MjModel, *, goal_bin_joint_name: str, goal_site_name: str
-) -> tuple[int, int]:
+def resolve_drawer_goal(model: mujoco.MjModel, *, goal_bin_joint_name: str, goal_site_name: str) -> tuple[int, int]:
     """Validate a bin freejoint and its directly attached goal-site frame."""
     joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, goal_bin_joint_name)
     if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
@@ -36,9 +34,7 @@ class DrawerProgressSource(EpisodeTaskEvaluator, Protocol):
     Joint validation declares the source's native or shaped travel requirements.
     """
 
-    def validate_drawer_joints(
-        self, model: mujoco.MjModel, names: Sequence[str]
-    ) -> list[int]:
+    def validate_drawer_joints(self, model: mujoco.MjModel, names: Sequence[str]) -> list[int]:
         """Validate every potentially sampled drawer without changing state."""
 
 
@@ -67,9 +63,7 @@ class MultiDrawerSearchProgress:
         self._goal_site_name = goal_site_name
         self._episode: DrawerEpisode | None = None
         self.validate_model(model)
-        self._target_qpos_addrs = [
-            self._resolve_free_joint_qpos_addr(model, target_joint_name)
-        ]
+        self._target_qpos_addrs = [self._resolve_free_joint_qpos_addr(model, target_joint_name)]
         self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
             model,
             goal_bin_joint_name,
@@ -92,15 +86,11 @@ class MultiDrawerSearchProgress:
         """Validate the effective sequence before changing episode or physics state."""
         self.validate_model(model)
         if randomization is None:
-            joint_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_JOINT, self._initial_target_joint_name
-            )
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, self._initial_target_joint_name)
             self._resolve_free_joint_qpos_addr(model, self._initial_target_joint_name)
             metadata = {
                 "target_joint": self._initial_target_joint_name,
-                "target_body": mujoco.mj_id2name(
-                    model, mujoco.mjtObj.mjOBJ_BODY, model.jnt_bodyid[joint_id]
-                ),
+                "target_body": mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.jnt_bodyid[joint_id]),
             }
         else:
             metadata = randomization.metadata
@@ -123,9 +113,7 @@ class MultiDrawerSearchProgress:
             goal_site_name=self._goal_site_name,
         )
 
-    def validate_drawer_joints(
-        self, model: mujoco.MjModel, names: Sequence[str]
-    ) -> list[int]:
+    def validate_drawer_joints(self, model: mujoco.MjModel, names: Sequence[str]) -> list[int]:
         """Resolve drawer slides without changing the model or episode history."""
         joint_ids = []
         for name in names:
@@ -138,10 +126,7 @@ class MultiDrawerSearchProgress:
     def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
         """Install the same validated episode definition used by the runtime."""
         self.validate_model(model)
-        target_qpos_addrs = [
-            self._resolve_free_joint_qpos_addr(model, target.joint)
-            for target in episode.targets
-        ]
+        target_qpos_addrs = [self._resolve_free_joint_qpos_addr(model, target.joint) for target in episode.targets]
         if model is not self.model:
             self.model = model
             self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
@@ -191,26 +176,19 @@ class MultiDrawerSearchProgress:
 
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
         if self._episode is None:
-            self.configure_episode(
-                self.model, self.prepare_randomization(self.model, None)
-            )
+            self.configure_episode(self.model, self.prepare_randomization(self.model, None))
         qpos_batch = np.asarray(qpos_batch, dtype=np.float32)
         if qpos_batch.ndim != 2 or qpos_batch.shape[1] != self.model.nq:
-            raise ValueError(
-                f"Expected qpos batch shape (B, {self.model.nq}), got {qpos_batch.shape}"
-            )
+            raise ValueError(f"Expected qpos batch shape (B, {self.model.nq}), got {qpos_batch.shape}")
         if qpos_batch.shape[0] != self._nworld:
             self.reset(nworld=qpos_batch.shape[0])
 
         target_positions = np.stack(
-            [
-                qpos_batch[:, qpos_addr: qpos_addr + 3]
-                for qpos_addr in self._target_qpos_addrs
-            ],
+            [qpos_batch[:, qpos_addr : qpos_addr + 3] for qpos_addr in self._target_qpos_addrs],
             axis=1,
         )
-        bin_pos = qpos_batch[:, self._bin_qpos_addr: self._bin_qpos_addr + 3]
-        bin_quat = qpos_batch[:, self._bin_qpos_addr + 3: self._bin_qpos_addr + 7]
+        bin_pos = qpos_batch[:, self._bin_qpos_addr : self._bin_qpos_addr + 3]
+        bin_quat = qpos_batch[:, self._bin_qpos_addr + 3 : self._bin_qpos_addr + 7]
         rot_world_from_bin = _quat_to_rotmat_batch(bin_quat)
         rel_world = target_positions - bin_pos[:, None, :]
         rel_bin = np.einsum(
@@ -244,9 +222,7 @@ class MultiDrawerSearchProgress:
         self._ever_success |= success
 
         position_indices = np.minimum(self._completed_target_count, target_count - 1)
-        active_target_in_bin = targets_in_bin[
-            np.arange(qpos_batch.shape[0]), position_indices
-        ]
+        active_target_in_bin = targets_in_bin[np.arange(qpos_batch.shape[0]), position_indices]
         target_pos = target_positions[
             np.arange(qpos_batch.shape[0]),
             position_indices,
@@ -263,10 +239,9 @@ class MultiDrawerSearchProgress:
             0.0,
             1.0,
         )
-        reward = (
-            self._completed_target_count.astype(np.float32)
-            + np.where(success, 0.0, target_progress)
-        ) / float(target_count)
+        reward = (self._completed_target_count.astype(np.float32) + np.where(success, 0.0, target_progress)) / float(
+            target_count
+        )
         reward = np.where(success, 1.0, reward).astype(np.float32)
         return TaskEvalResult(
             reward=reward,
@@ -321,18 +296,14 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
 
     def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
         if randomization is None:
-            raise RuntimeError(
-                "Shaped drawer evaluation requires reset randomization metadata."
-            )
+            raise RuntimeError("Shaped drawer evaluation requires reset randomization metadata.")
         episode = super().prepare_randomization(model, randomization)
         if not episode.drawers or any(target.drawer not in episode.drawers for target in episode.targets):
             raise ValueError("Each target must identify an active source drawer.")
         self.validate_drawer_joints(model, episode.drawer_joints)
         return episode
 
-    def validate_drawer_joints(
-        self, model: mujoco.MjModel, names: Sequence[str]
-    ) -> list[int]:
+    def validate_drawer_joints(self, model: mujoco.MjModel, names: Sequence[str]) -> list[int]:
         """Require the travel limits used by chronological opening detection."""
         joint_ids = super().validate_drawer_joints(model, names)
         for name, joint_id in zip(names, joint_ids):
@@ -363,7 +334,9 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         self._second_retrieval_latency = np.full(nworld, np.nan)
 
     def observation_target_bodies(self) -> tuple[str, ...]:
-        """Objects whose visible pixels in a delivered policy image are evidence."""
+        """Targets whose exposure can still affect the upcoming recall request."""
+        if self._completed_target_count[0] != 0:
+            return ()
         return tuple(target.body for target in self._episode.targets)
 
     def record_observed_targets(self, body_names: Sequence[str]) -> None:
@@ -374,7 +347,7 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         """
         if self._nworld != 1:
             raise ValueError("Policy observation delivery requires one native world.")
-        names = self.observation_target_bodies()
+        names = tuple(target.body for target in self._episode.targets)
         unknown = set(body_names) - set(names)
         if unknown:
             raise ValueError(f"Unknown drawer observation targets: {sorted(unknown)}")
@@ -439,9 +412,7 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
                     self._recall_correct_first
                     | (self._recall_eligible & (self._completed_target_count == target_count) & (wrong_count == 0))
                 ),
-                "second_prompt_at_s": np.where(
-                    np.isnan(self._second_requested_at), None, self._second_requested_at
-                ),
+                "second_prompt_at_s": np.where(np.isnan(self._second_requested_at), None, self._second_requested_at),
                 "second_retrieval_latency_s": np.where(
                     np.isnan(self._second_retrieval_latency), None, self._second_retrieval_latency
                 ),
