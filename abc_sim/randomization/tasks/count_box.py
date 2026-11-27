@@ -189,7 +189,9 @@ def _count_box_build_xml(selections: list[dict[str, Any]]) -> str:
             geom_attrs.append(f'size="{spec["size"]}"')
         lines.extend(
             [
-                f'    <body name="{name}" pos="{float(selection["x"]):.4f} {float(selection["y"]):.4f} {float(selection["z"]):.4f}" quat="{float(selection["qw"]):.6f} 0 0 {float(selection["qz"]):.6f}">',
+                f'    <body name="{name}" pos="{float(selection["x"]):.4f} '
+                f'{float(selection["y"]):.4f} {float(selection["z"]):.4f}" '
+                f'quat="{float(selection["qw"]):.6f} 0 0 {float(selection["qz"]):.6f}">',
                 f'      <joint name="{name}_joint" class="count_item"/>',
                 f'      <geom {" ".join(geom_attrs)}/>',
                 "    </body>",
@@ -201,10 +203,22 @@ def _count_box_build_xml(selections: list[dict[str, Any]]) -> str:
     return _resolve_scene_xml_paths(xml, _COUNT_BOX_BASE_SCENE_XML.parent)
 
 
-def _count_box_sample_prompt(
+COUNT_BOX_FAMILIES = (
+    "exact_count",
+    "all_color",
+    "all_shape",
+    "all_size",
+    "all_color_shape",
+    "exact_color_count",
+)
+
+
+def _count_box_prompt_candidates(
     objects: list[dict[str, Any]],
     rng: np.random.Generator,
-) -> dict[str, Any]:
+    *,
+    include_exact_one: bool = False,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
 
     for color in _COUNT_BOX_OBJECT_COLORS:
@@ -251,11 +265,7 @@ def _count_box_sample_prompt(
 
     for color in _COUNT_BOX_OBJECT_COLORS:
         for shape in _COUNT_BOX_OBJECT_SHAPES:
-            matching = [
-                obj
-                for obj in objects
-                if obj["color"] == color and obj["shape"] == shape
-            ]
+            matching = [obj for obj in objects if obj["color"] == color and obj["shape"] == shape]
             if matching:
                 plural = _count_box_plural_shape(shape)
                 candidates.append(
@@ -269,7 +279,7 @@ def _count_box_sample_prompt(
                     }
                 )
 
-    for count in (2, 3, 4):
+    for count in (1, 2, 3, 4) if include_exact_one else (2, 3, 4):
         candidates.append(_count_box_exact_count_prompt(objects, count))
 
     for color in _COUNT_BOX_OBJECT_COLORS:
@@ -289,6 +299,11 @@ def _count_box_sample_prompt(
 
     if not candidates:
         raise RuntimeError("count_into_opaque_box generated no valid prompt candidates")
+    return candidates
+
+
+def _count_box_sample_prompt(objects: list[dict[str, Any]], rng: np.random.Generator) -> dict[str, Any]:
+    candidates = _count_box_prompt_candidates(objects, rng)
     return candidates[int(rng.integers(0, len(candidates)))]
 
 
@@ -301,14 +316,20 @@ def _count_box_requested_count(request: Any | None) -> int | None:
         return None
     if not isinstance(request, dict):
         raise TypeError(f"count_into_opaque_box reset request must be a dict, got {type(request).__name__}")
-    unknown = set(request) - {"target_count"}
+    unknown = set(request) - {"target_count", "family_first"}
     if unknown:
         raise ValueError(f"count_into_opaque_box reset request has unknown keys: {sorted(unknown)}")
+    if type(request.get("family_first", False)) is not bool:
+        raise ValueError("family_first must be boolean")
+    if request.get("family_first") and request.get("target_count") is not None:
+        raise ValueError("family_first and a fixed target_count are mutually exclusive")
     target_count = request.get("target_count")
     if target_count is None:
         return None
     if int(target_count) not in _COUNT_BOX_REQUESTED_COUNTS:
-        raise ValueError(f"count_into_opaque_box target_count must be in {_COUNT_BOX_REQUESTED_COUNTS}, got {target_count}")
+        raise ValueError(
+            f"count_into_opaque_box target_count must be in {_COUNT_BOX_REQUESTED_COUNTS}, got {target_count}"
+        )
     return int(target_count)
 
 
@@ -390,12 +411,27 @@ class CountIntoOpaqueBoxRandomizer(SceneRandomizer):
     ) -> RandomizationState:
         requested_count = _count_box_requested_count(request)
         rng = np.random.default_rng(seed)
-        selections = self._sample_selections(rng)
-        prompt_info = (
-            _count_box_sample_prompt(selections, rng)
-            if requested_count is None
-            else _count_box_exact_count_prompt(selections, requested_count)
-        )
+        if request is not None and request.get("family_first", False):
+            family = str(rng.choice(COUNT_BOX_FAMILIES))
+            for _ in range(64):
+                selections = self._sample_selections(rng)
+                candidates = [
+                    candidate
+                    for candidate in _count_box_prompt_candidates(selections, rng, include_exact_one=True)
+                    if candidate["prompt_type"] == family
+                ]
+                if candidates:
+                    prompt_info = candidates[int(rng.integers(len(candidates)))]
+                    break
+            else:
+                raise RuntimeError(f"Cannot sample feasible counting family {family!r}")
+        else:
+            selections = self._sample_selections(rng)
+            prompt_info = (
+                _count_box_sample_prompt(selections, rng)
+                if requested_count is None
+                else _count_box_exact_count_prompt(selections, requested_count)
+            )
         xml = _count_box_build_xml(selections)
         xml = _count_box_apply_scene_transforms(
             xml,
@@ -442,13 +478,58 @@ class CountIntoOpaqueBoxRandomizer(SceneRandomizer):
             "attributes": dict(prompt_info["attributes"]),
             "objects": metadata_objects,
         }
+        if request is not None and request.get("family_first", False):
+            metadata["family_first"] = True
+        if env is not None:
+            self._apply_states(env.model, env.data, object_states)
+            mujoco.mj_forward(env.model, env.data)
         return RandomizationState(
             seed=seed or 0,
             object_states=object_states,
             metadata=metadata,
         )
 
+    def _replay_selections(self, state):
+        selections = []
+        for item in state.metadata["objects"]:
+            if (
+                item["color"] not in _COUNT_BOX_OBJECT_COLORS
+                or item["shape"] not in _COUNT_BOX_OBJECT_SHAPES
+                or item["size"] not in _COUNT_BOX_OBJECT_SIZES
+            ):
+                raise ValueError("Recorded counting object has an unsupported appearance.")
+            pose = state.object_states[item["joint"]]
+            selections.append(
+                {
+                    **item,
+                    "x": pose["pos"][0],
+                    "y": pose["pos"][1],
+                    "z": pose["pos"][2],
+                    "qw": pose["quat"][0],
+                    "qz": pose["quat"][3],
+                }
+            )
+        if len(selections) != _COUNT_BOX_OBJECT_COUNT:
+            raise ValueError("Counting replay requires all twelve objects.")
+        return selections
 
+    def _validate_scene(self, model, state):
+        self._replay_selections(state)
+
+    def _restore_scene(self, model, data, state):
+        if self._env_ref is None:
+            raise ValueError("Counting replay needs a bound native environment.")
+        xml = _count_box_apply_scene_transforms(
+            _count_box_build_xml(self._replay_selections(state)),
+            self._scene_xml_transform_options,
+        )
+        env = self._env_ref
+        robot = env._get_reset_robot_qpos()
+        env.reload_from_xml(xml)
+        env._set_robot_qpos(robot)
+        self._apply_states(env.model, env.data, state.object_states)
+        mujoco.mj_forward(env.model, env.data)
+        return state
 
 
 __all__ = ["CountIntoOpaqueBoxRandomizer"]

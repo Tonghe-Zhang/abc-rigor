@@ -12,18 +12,75 @@ import numpy as np
 
 from abc_sim.block_appearance import (
     FAMILIES as FAMILIES,
+)
+from abc_sim.block_appearance import (
     FINISHES as FINISHES,
+)
+from abc_sim.block_appearance import (
     LETTERS as LETTERS,
+)
+from abc_sim.block_appearance import NATIVE_WOOD_REVISION
+from abc_sim.block_appearance import (
     REVISION as REVISION,
+)
+from abc_sim.block_appearance import (
     _ink as _ink,
+)
+from abc_sim.block_appearance import (
     contrast as contrast,
+)
+from abc_sim.block_appearance import (
     luminance as luminance,
+)
+from abc_sim.block_appearance import (
     sample_appearance as sample_appearance,
+)
+from abc_sim.block_appearance import (
     validate_appearance as validate_appearance,
 )
 
 TILE = 128
 BLOCK_ASSETS = Path(__file__).resolve().parents[2] / "models" / "assets" / "blocks"
+
+
+@lru_cache(maxsize=1)
+def original_atlas() -> np.ndarray:
+    spec = mujoco.MjSpec()
+    spec.add_texture(
+        name="native_wood_atlas",
+        type=mujoco.mjtTexture.mjTEXTURE_2D,
+        file=str(BLOCK_ASSETS / "texture.png"),
+        nchannel=3,
+        hflip=False,
+        vflip=False,
+    )
+    model = spec.compile()
+    return model.tex_data.reshape(
+        int(model.tex_height[0]), int(model.tex_width[0]), 3
+    ).copy()
+
+
+def native_wood_pixels(record: dict) -> np.ndarray:
+    """Preserve every original UV island, grain pixel, glyph edge and border."""
+    validate_appearance(record)
+    source = original_atlas()
+    if record["original"]:
+        return source.copy()
+    pixels = (
+        np.rint(source * np.asarray(record["wood_tint"])).clip(0, 255).astype(np.uint8)
+    )
+    height, width = source.shape[:2]
+    for letter, ink in record["inks"].items():
+        _, _, _, bounds = _mesh(letter)
+        x0, x1 = np.rint(bounds[:, 0] * (width - 1)).astype(int)
+        y0, y1 = np.rint((1 - bounds[::-1, 1]) * (height - 1)).astype(int)
+        face = source[y0 : y1 + 1, x0 : x1 + 1].astype(float)
+        paint = (face.max(axis=2) - face.min(axis=2) > 45) & (face.min(axis=2) < 110)
+        recolored = np.rint(
+            np.asarray(ink) * (0.75 + 0.25 * face.max(axis=2)[..., None] / 255)
+        ).astype(np.uint8)
+        pixels[y0 : y1 + 1, x0 : x1 + 1][paint] = recolored[paint]
+    return pixels
 
 
 @lru_cache(maxsize=26)
@@ -253,6 +310,17 @@ def appearance_xml(xml: str) -> str:
 def apply_appearance(model, record: dict) -> None:
     """Fill compiled texture/material buffers before the renderer is created."""
     validate_appearance(record)
+    if record["revision"] == NATIVE_WOOD_REVISION:
+        texture = model.texture("block_tex").id
+        start = int(model.tex_adr[texture])
+        pixels = native_wood_pixels(record)
+        if tuple(pixels.shape[:2]) != (
+            int(model.tex_height[texture]),
+            int(model.tex_width[texture]),
+        ):
+            raise ValueError("Native wood atlas dimensions changed.")
+        model.tex_data[start : start + pixels.size] = pixels.ravel()
+        return
     for letter, style in record["blocks"].items():
         name = f"block_appearance_{letter}"
         texture_id = model.texture(name).id

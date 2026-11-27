@@ -4,6 +4,7 @@ from typing import Any
 
 import mujoco
 
+from abc_sim.block_appearance import NATIVE_WOOD_REVISION, sample_native_wood_appearance
 from abc_sim.spelling_goal import SpellingGoal
 
 from ..assets.block_appearance import (
@@ -44,6 +45,7 @@ class BlocksRandomizer(SceneRandomizer):
         super().__init__()
         self._appearance_active = False
         self._appearance_model: mujoco.MjModel | None = None
+        self._native_wood_model: mujoco.MjModel | None = None
 
     def _get_size_perturbations(self) -> list[ScalePerturbRange]:
         return []
@@ -83,10 +85,20 @@ class BlocksRandomizer(SceneRandomizer):
                     self._base_scene_xml_string, self._base_scene_xml_dir
                 )
             )
+        elif appearance["revision"] == NATIVE_WOOD_REVISION:
+            if self._native_wood_model is None:
+                xml = env.background_xml(self._base_scene_xml_string)
+                self._native_wood_model = mujoco.MjModel.from_xml_string(
+                    _resolve_scene_xml_paths(xml, self._base_scene_xml_dir)
+                )
+            apply_appearance(self._native_wood_model, appearance)
+            env.reload_from_model(self._native_wood_model)
         else:
             if self._appearance_model is None:
                 xml = appearance_xml(self._base_scene_xml_string)
-                xml = env.background_xml(xml)  # unchanged unless backgrounds are enabled
+                xml = env.background_xml(
+                    xml
+                )  # unchanged unless backgrounds are enabled
                 self._appearance_model = mujoco.MjModel.from_xml_string(
                     _resolve_scene_xml_paths(xml, self._base_scene_xml_dir)
                 )
@@ -123,11 +135,21 @@ class BlocksRandomizer(SceneRandomizer):
                         raise ValueError(
                             "Appearance tasks require a seeded spelling goal."
                         )
-                    appearance = sample_appearance(seed)
+                    profile = request.get("appearance_profile", "varied")
+                    if profile not in ("varied", "native_wood"):
+                        raise ValueError(
+                            f"Unknown spelling appearance profile {profile!r}"
+                        )
+                    appearance = (
+                        sample_native_wood_appearance(seed)
+                        if profile == "native_wood"
+                        else sample_appearance(seed)
+                    )
             request = {
                 key: value
                 for key, value in request.items()
-                if key not in ("sequence_length", "randomize_appearance")
+                if key
+                not in ("sequence_length", "randomize_appearance", "appearance_profile")
             }
         state = super().randomize(
             model,

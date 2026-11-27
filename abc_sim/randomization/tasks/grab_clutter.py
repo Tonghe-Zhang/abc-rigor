@@ -255,7 +255,9 @@ def _grab_clutter_build_xml(
         lines_body.extend(
             [
                 f"    <!-- Grab clutter object: {category}/{variant_dir.name} -->",
-                f'    <body name="{name}" pos="{float(selection["x"]):.4f} {float(selection["y"]):.4f} {float(selection["z"]):.4f}" quat="{float(selection["qw"]):.6f} 0 0 {float(selection["qz"]):.6f}">',
+                f'    <body name="{name}" pos="{float(selection["x"]):.4f} '
+                f'{float(selection["y"]):.4f} {float(selection["z"]):.4f}" '
+                f'quat="{float(selection["qw"]):.6f} 0 0 {float(selection["qz"]):.6f}">',
                 f'      <joint name="{joint_name}" class="clutter_object"/>',
             ]
         )
@@ -539,7 +541,7 @@ class GrabClutterRandomizer(SceneRandomizer):
         for _ in range(max_tries):
             selections, target_selection = self._sample_selections(rng)
             target_box = self._sample_target_box(rng)
-            prompt = f'grab the {target_selection["label"]} and place it in the box'
+            prompt = f"grab the {target_selection['label']} and place it in the box"
             xml = _grab_clutter_build_xml(selections, target_box)
             xml = _count_box_apply_scene_transforms(
                 xml,
@@ -616,9 +618,74 @@ class GrabClutterRandomizer(SceneRandomizer):
             "target_box_perimeter_side": target_box["perimeter_side"],
             "objects": metadata_objects,
         }
+        if request is not None and request.get("interrupted", False):
+            metadata["interrupted"] = True
+            candidates = [obj for obj in metadata_objects if not obj["is_target"]]
+            second = candidates[int(rng.integers(len(candidates)))]
+            metadata["prompt"] = f"Pick up the {target_selection['label']}."
+            metadata["interruption"] = {
+                "kind": "clutter",
+                "delay_s": float(rng.uniform(1.0, 2.0)),
+                "first_body": target_selection["name"],
+                "second_body": second["name"],
+                "prompt": (
+                    f"Actually, put the {target_selection['label']} back where it was, "
+                    f"then pick up the {second['label']}."
+                ),
+            }
+            if env is not None:
+                env.prompt = metadata["prompt"]
         return RandomizationState(
             seed=seed or 0,
             object_states=object_states,
             scale_states={_GRAB_CLUTTER_TARGET_BOX_JOINT: float(target_box["scale_factor"])},
             metadata=metadata,
         )
+
+    def _replay_selections(self, state):
+        selections = []
+        for item in state.metadata["objects"]:
+            variants = {path.name: path for path in self._get_variants(item["category"])}
+            if item["variant"] not in variants:
+                raise ValueError("Recorded clutter asset is not in the category pool.")
+            pose = state.object_states[item["joint"]]
+            selections.append(
+                {
+                    **item,
+                    "variant_dir": str(variants[item["variant"]]),
+                    "x": pose["pos"][0],
+                    "y": pose["pos"][1],
+                    "z": pose["pos"][2],
+                    "qw": pose["quat"][0],
+                    "qz": pose["quat"][3],
+                }
+            )
+        pose = state.object_states[_GRAB_CLUTTER_TARGET_BOX_JOINT]
+        box = {
+            "x": pose["pos"][0],
+            "y": pose["pos"][1],
+            "z": pose["pos"][2],
+            "qw": pose["quat"][0],
+            "qz": pose["quat"][3],
+            "scale_factor": state.metadata["target_box_scale_factor"],
+            "visual_style": state.metadata["target_box_visual_style"],
+        }
+        return selections, box
+
+    def _validate_scene(self, model, state):
+        self._replay_selections(state)
+
+    def _restore_scene(self, model, data, state):
+        if self._env_ref is None:
+            raise ValueError("Clutter replay needs a bound native environment.")
+        selections, box = self._replay_selections(state)
+        xml = _count_box_apply_scene_transforms(
+            _grab_clutter_build_xml(selections, box), self._scene_xml_transform_options
+        )
+        env = self._env_ref
+        robot = env._get_reset_robot_qpos()
+        env.reload_from_xml(xml)
+        env._set_robot_qpos(robot)
+        self._apply_states(env.model, env.data, state.object_states)
+        mujoco.mj_forward(env.model, env.data)
+        return state

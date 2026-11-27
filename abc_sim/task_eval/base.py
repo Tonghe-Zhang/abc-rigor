@@ -75,7 +75,12 @@ class TaskEvalResult:
 
 
 class TaskEvaluator(Protocol):
-    """Task evaluator with an explicit qpos scoring entry point."""
+    """Task evaluator with an explicit qpos scoring entry point.
+
+    A source exposing ``evaluate_model_data`` normally requires refreshed
+    positions. It may declare ``requires_position_refresh = False`` when it
+    consumes only qpos and simulation time, without derived poses or contacts.
+    """
 
     spec: SimTaskSpec
 

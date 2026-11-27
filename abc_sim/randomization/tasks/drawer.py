@@ -4,6 +4,7 @@ import numpy as np
 
 from ..core import PerturbRange, SceneRandomizer
 
+
 class DrawerRandomizer(SceneRandomizer):
     """Randomize the drawer frame position/yaw and marker positions.
 
@@ -21,6 +22,20 @@ class DrawerRandomizer(SceneRandomizer):
             for i in range(1, 6)
         ],
     ]
+
+    def randomize(self, model, data, seed=None, request=None):
+        choices = dict(request or {})
+        sampled = choices.pop("random_target_drawer", False)
+        if not isinstance(sampled, bool):
+            raise ValueError("random_target_drawer must be a boolean")
+        state = super().randomize(model, data, seed=seed, request=choices or None)
+        if sampled:
+            state.metadata["random_target_drawer"] = True
+            rng = np.random.default_rng(np.random.SeedSequence([seed or 0, 0x44524157]))
+            target = str(rng.choice(("top", "middle", "bottom")))
+            state.metadata["marker_target_drawer"] = target
+            state.metadata["prompt"] = f"Put all the markers in the {target} drawer, then close that drawer."
+        return state
 
     def _sample_once(
         self,
@@ -42,8 +57,6 @@ class DrawerRandomizer(SceneRandomizer):
                     states[key]["pos"][1] += dy
 
         return states
-
-
 
 
 __all__ = ["DrawerRandomizer"]

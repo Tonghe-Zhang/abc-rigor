@@ -238,6 +238,15 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         aliases=("sim_count_into_opaque_box",),
     ),
     SimTaskSpec(
+        name="rl_count_into_opaque_box",
+        env_task="count_into_opaque_box",
+        prompt="Follow the counting instruction and put the requested objects in the box.",
+        evaluator_name="count_into_opaque_box",
+        evaluator_options=(("partial_overfill_penalty", True),),
+        reset_constraints=(("family_first", True),),
+        description="Six counting families sampled before their attributes, including exact one.",
+    ),
+    SimTaskSpec(
         name="count_one_into_opaque_box",
         env_task="count_into_opaque_box",
         evaluator_name="count_into_opaque_box",
@@ -306,6 +315,20 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
             "put object relative to object",
             "put one object relative to another",
         ),
+    ),
+    SimTaskSpec(
+        name="rl_put_relative",
+        env_task="put_relative",
+        prompt="Follow the placement instruction, including a change of plan.",
+        evaluator_name="rl_put_relative",
+        reset_constraints=(("interrupted", True),),
+    ),
+    SimTaskSpec(
+        name="rl_grab_specific_object_from_clutter",
+        env_task="grab_clutter",
+        prompt="Pick up the requested object.",
+        evaluator_name="rl_grab_clutter",
+        reset_constraints=(("interrupted", True),),
     ),
     SimTaskSpec(
         name="grab_specific_object_from_clutter",
@@ -381,8 +404,15 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         prompt="find two target objects in the drawers and place them in the bin one at a time",
         description="Training variant with two ordered targets and episode-unique drawer-opening "
         "credit; the caller controls the horizon.",
-        evaluator_name="multi_drawer_search_shaped_v1",
+        evaluator_name="multi_drawer_search_shaped_v2",
         reset_constraints=(("target_count", 2),),
+    ),
+    SimTaskSpec(
+        name="rl_put_markers_in_drawer",
+        env_task="drawer",
+        prompt="Put all the markers in the requested drawer, then close it.",
+        evaluator_name="marker_drawer",
+        reset_constraints=(("random_target_drawer", True),),
     ),
     SimTaskSpec(
         name="put_markers_in_top_drawer",
@@ -416,7 +446,12 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
         evaluator_name="mug_on_rack_v2",
         # These three handles cannot pass over a rack branch at the sampled
         # scales. The remaining sixteen variants have collision-free fits.
-        reset_request=(("mug_variant_pool", tuple(f"mug_{i}" for i in range(19) if i not in (1, 7, 10))),),
+        reset_request=(
+            (
+                "mug_variant_pool",
+                tuple(f"mug_{i}" for i in range(19) if i not in (1, 7, 10)),
+            ),
+        ),
         aliases=(
             "sim_hang_mug_on_mug_rack",
             "sim_hang_the_mug_on_the_mug_rack",
@@ -489,6 +524,20 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
             "load the plates into the dish rack",
             "dishrack",
         ),
+    ),
+    SimTaskSpec(
+        name="rl_load_plates_into_dish_rack",
+        env_task="dishrack",
+        prompt="Load all four plates upright into the tabletop dish rack.",
+        evaluator_name="dishrack_plates_in_rack",
+        evaluator_options=(
+            ("margin_m", 0.05),
+            ("height_min_m", -0.06),
+            ("height_max_m", 0.45),
+            ("upright_normal_z_max", 2**-0.5),
+            ("horizontal_normal_z_min", 0.75),
+        ),
+        reset_constraints=(("plate_count", 4),),
     ),
     SimTaskSpec(
         name="set_up_chess_pieces_on_board",
@@ -574,9 +623,16 @@ _TASK_SPECS: tuple[SimTaskSpec, ...] = (
             prompt=f"spell the sampled {length}-letter sequence with varied block appearances",
             evaluator_name="abc-spelling-placement-v2",
             evaluator_options=(("sequence_length", length),),
-            reset_request=(("sequence_length", length), ("randomize_appearance", True)),
+            reset_request=(
+                ("sequence_length", length),
+                ("randomize_appearance", True),
+                ("appearance_profile", "native_wood" if length == 3 else "varied"),
+            ),
             description=(
-                "Spell a seeded sequence of distinct letters with independently sampled "
+                "Spell three seeded distinct letters on the original wood blocks with modest wood tint and "
+                "legible glyph-color variation."
+                if length == 3
+                else "Spell a seeded sequence of distinct letters with independently sampled "
                 "cube colors, wood/plastic finishes, face panels and glyph decoration."
             ),
         )

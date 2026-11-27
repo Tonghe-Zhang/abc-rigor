@@ -51,7 +51,7 @@ class BowlSpec:
 
 
 def source_bowl_spec(color="blue"):
-    return BowlSpec(color, bottom_radius=0.050, rim_radius=0.080, height=0.060)
+    return BowlSpec(color, bottom_radius=0.060, rim_radius=0.070, height=0.060)
 
 
 def target_bowl_spec(color="white"):

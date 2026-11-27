@@ -37,6 +37,7 @@ from ..core import (
 )
 from ..requests import MugResetRequest
 
+
 class MugVariantRandomizer(SceneRandomizer):
     """Base randomizer for mug tasks that swap mug mesh variants on reset."""
 
@@ -479,6 +480,69 @@ class MugTreeRandomizer(MugVariantRandomizer):
         *_mug_perturbations,
     ]
 
+    _rack_finishes = (
+        ("original", (1.0, 1.0, 1.0)),
+        ("light_wood", (0.85, 0.66, 0.43)),
+        ("dark_wood", (0.31, 0.17, 0.08)),
+        ("red_paint", (0.65, 0.13, 0.10)),
+        ("blue_paint", (0.12, 0.30, 0.62)),
+        ("green_paint", (0.16, 0.43, 0.23)),
+        ("cream_paint", (0.86, 0.80, 0.63)),
+        ("purple_paint", (0.43, 0.22, 0.52)),
+        ("teal_paint", (0.12, 0.48, 0.46)),
+        ("orange_paint", (0.76, 0.37, 0.09)),
+    )
+
+    def _apply_rack_finish(self, model, finish: str) -> None:
+        """Update only texture/material buffers, retaining the compiled scene."""
+        finishes = dict(self._rack_finishes)
+        if finish not in finishes:
+            raise ValueError(f"Unknown mug-rack finish {finish!r}")
+        material = model.material("mug_tree_mat").id
+        texture = int(model.mat_texid[material, 1])
+        start = int(model.tex_adr[texture])
+        length = int(model.tex_width[texture] * model.tex_height[texture] * model.tex_nchannel[texture])
+        if not hasattr(self, "_rack_baseline"):
+            self._rack_baseline = (
+                model.tex_data[start : start + length].copy(),
+                float(model.mat_specular[material]),
+                float(model.mat_shininess[material]),
+            )
+        pixels, specular, shininess = self._rack_baseline
+        if pixels.size != length:
+            raise ValueError("Mug rack texture dimensions changed across scene variants.")
+        if finish == "original":
+            model.tex_data[start : start + length] = pixels
+            model.mat_specular[material] = specular
+            model.mat_shininess[material] = shininess
+            return
+        source = pixels.reshape(-1, int(model.tex_nchannel[texture])).astype(float)
+        grain = source[:, :3].mean(axis=1) / 255.0
+        modulation = 0.65 + 0.35 * grain if finish.endswith("wood") else 0.97 + 0.03 * grain
+        source[:, :3] = 255 * modulation[:, None] * np.asarray(finishes[finish])
+        model.tex_data[start : start + length] = np.rint(source).astype(np.uint8).ravel()
+        model.mat_specular[material] = 0.08
+        model.mat_shininess[material] = 0.05
+
+    def _record_rack_finish(self, model, state, seed):
+        rng = np.random.default_rng(np.random.SeedSequence([seed or 0, 0x5241434B]))
+        finish = self._rack_finishes[int(rng.integers(len(self._rack_finishes)))][0]
+        state.metadata["rack_finish"] = finish
+        self._apply_rack_finish(model, finish)
+        self._refresh_rack_texture(model)
+
+    def _refresh_rack_texture(self, model):
+        if self._env_ref is not None:
+            material = model.material("mug_tree_mat").id
+            self._env_ref._refresh_background_textures([int(model.mat_texid[material, 1])])
+
+    def _restore_scene(self, model, data, state):
+        result = super()._restore_scene(model, data, state)
+        model = self._env_ref.model if self._env_ref is not None else model
+        self._apply_rack_finish(model, state.metadata.get("rack_finish", "original"))
+        self._refresh_rack_texture(model)
+        return result
+
     def randomize(
         self,
         model: Any,
@@ -531,6 +595,7 @@ class MugTreeRandomizer(MugVariantRandomizer):
             if mug_colors:
                 state.metadata["mug_colors"] = mug_colors
                 self._apply_plain_mug_colors(model, mug_colors, mug_variants)
+            self._record_rack_finish(model, state, seed)
             return state
 
         mug_variants = requested_mug_variants[: self.min_mug_count]
@@ -563,6 +628,7 @@ class MugTreeRandomizer(MugVariantRandomizer):
         if mug_colors:
             state.metadata["mug_colors"] = mug_colors
             self._apply_plain_mug_colors(model, mug_colors, mug_variants)
+        self._record_rack_finish(model, state, seed)
         return state
 
     def _set_active_mug_count(self, mug_count: int) -> None:
@@ -1022,8 +1088,6 @@ class MugFlipRandomizer(MugVariantRandomizer):
             }
 
         return states
-
-
 
 
 __all__ = ["MugFlipRandomizer", "MugTreeRandomizer", "MugVariantRandomizer"]

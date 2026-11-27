@@ -11,9 +11,9 @@ from abc_sim.task_eval.contacts import subtree_geom_ids
 from abc_sim.task_eval.conveyor import ConveyorPickObjectsInBinEvaluator
 from abc_sim.task_eval.put_relative import PutRelativeEvaluator
 from abc_sim.task_runtime.conveyor_pick import (
-    REMOVED_OBJECT_MIN_X,
     _OFF_TRACK_GEOMS,
     _OPTIONAL_OFF_TRACK_GEOMS,
+    REMOVED_OBJECT_MIN_X,
 )
 
 
@@ -42,6 +42,7 @@ class RLConveyorEvaluator:
     grasp_seconds = 0.05
     lift_height_m = 0.05
     force_threshold_n = 15.0
+    resolved_grace_seconds = 3.0
 
     def __init__(self, *, model, spec):
         self.spec = spec
@@ -55,10 +56,10 @@ class RLConveyorEvaluator:
         )
         if (
             names != [f"conveyor_object_{i}" for i in range(1, len(names) + 1)]
-            or not 2 <= len(names) <= 4
+            or not 1 <= len(names) <= 4
         ):
             raise ValueError(
-                "RL conveyor requires two to four consecutively numbered objects."
+                "RL conveyor requires one to four consecutively numbered objects."
             )
         ConveyorPickObjectsInBinEvaluator._resolve_bin_interior(model, "conveyor_bin")
         for name in ("conveyor_belt_surface", "conveyor_bin_bottom", *_OFF_TRACK_GEOMS):
@@ -160,6 +161,8 @@ class RLConveyorEvaluator:
         self._force = np.zeros(self._count)
         self._previous_belt_y = np.zeros(self._count)
         self._ever_success = False
+        self._resolved_since = None
+        self._task_terminated = False
 
     def after_reset(self, model, data):
         if model is not self.model or self._episode is None:
@@ -289,6 +292,7 @@ class RLConveyorEvaluator:
         self._failed |= (
             active
             & ~natural_exit
+            & ~manipulated
             & (off_track | (data.xpos[self._bodies, 0] >= REMOVED_OBJECT_MIN_X))
         )
         active = ~(self._normal_exit | self._failed)
@@ -318,6 +322,17 @@ class RLConveyorEvaluator:
         self._inside = inside & active
         self._on_belt = belt & active
         self._previous_belt_y = signed_y
+        targets = np.array([obj["target"] for obj in self._episode["objects"]])
+        resolved = self._normal_exit | self._failed | (targets & self._placed)
+        if np.all(resolved):
+            if self._resolved_since is None:
+                self._resolved_since = now
+            self._task_terminated = (
+                now >= self._resolved_since + self.resolved_grace_seconds
+            )
+        else:
+            self._resolved_since = None
+            self._task_terminated = False
 
     def _result(self):
         targets = np.array(
@@ -364,13 +379,8 @@ class RLConveyorEvaluator:
                 "peak_contact_force_n": self._peak_force[None].copy(),
                 "contact_force_n": self._force[None].copy(),
                 "ever_success": np.array([self._ever_success]),
-                "ever_failed": np.array(
-                    [
-                        bool(
-                            np.all(self._normal_exit | self._failed | placed)
-                            and not success
-                        )
-                    ]
-                ),
+                "task_terminated": np.array([self._task_terminated]),
+                "resolved_since_s": self._resolved_since,
+                "ever_failed": np.array([bool(self._task_terminated and not success)]),
             },
         )

@@ -14,9 +14,7 @@ from abc_sim.task_eval.bottles import _quat_to_rotmat_batch
 from abc_sim.task_specs import SimTaskSpec
 
 
-def resolve_drawer_goal(
-    model: mujoco.MjModel, *, goal_bin_joint_name: str, goal_site_name: str
-) -> tuple[int, int]:
+def resolve_drawer_goal(model: mujoco.MjModel, *, goal_bin_joint_name: str, goal_site_name: str) -> tuple[int, int]:
     """Validate a bin freejoint and its directly attached goal-site frame."""
     joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, goal_bin_joint_name)
     if joint_id < 0 or model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
@@ -36,9 +34,7 @@ class DrawerProgressSource(EpisodeTaskEvaluator, Protocol):
     Joint validation declares the source's native or shaped travel requirements.
     """
 
-    def validate_drawer_joints(
-        self, model: mujoco.MjModel, names: Sequence[str]
-    ) -> list[int]:
+    def validate_drawer_joints(self, model: mujoco.MjModel, names: Sequence[str]) -> list[int]:
         """Validate every potentially sampled drawer without changing state."""
 
 
@@ -67,9 +63,7 @@ class MultiDrawerSearchProgress:
         self._goal_site_name = goal_site_name
         self._episode: DrawerEpisode | None = None
         self.validate_model(model)
-        self._target_qpos_addrs = [
-            self._resolve_free_joint_qpos_addr(model, target_joint_name)
-        ]
+        self._target_qpos_addrs = [self._resolve_free_joint_qpos_addr(model, target_joint_name)]
         self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
             model,
             goal_bin_joint_name,
@@ -92,15 +86,11 @@ class MultiDrawerSearchProgress:
         """Validate the effective sequence before changing episode or physics state."""
         self.validate_model(model)
         if randomization is None:
-            joint_id = mujoco.mj_name2id(
-                model, mujoco.mjtObj.mjOBJ_JOINT, self._initial_target_joint_name
-            )
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, self._initial_target_joint_name)
             self._resolve_free_joint_qpos_addr(model, self._initial_target_joint_name)
             metadata = {
                 "target_joint": self._initial_target_joint_name,
-                "target_body": mujoco.mj_id2name(
-                    model, mujoco.mjtObj.mjOBJ_BODY, model.jnt_bodyid[joint_id]
-                ),
+                "target_body": mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.jnt_bodyid[joint_id]),
             }
         else:
             metadata = randomization.metadata
@@ -123,9 +113,7 @@ class MultiDrawerSearchProgress:
             goal_site_name=self._goal_site_name,
         )
 
-    def validate_drawer_joints(
-        self, model: mujoco.MjModel, names: Sequence[str]
-    ) -> list[int]:
+    def validate_drawer_joints(self, model: mujoco.MjModel, names: Sequence[str]) -> list[int]:
         """Resolve drawer slides without changing the model or episode history."""
         joint_ids = []
         for name in names:
@@ -138,10 +126,7 @@ class MultiDrawerSearchProgress:
     def configure_episode(self, model: mujoco.MjModel, episode: DrawerEpisode) -> None:
         """Install the same validated episode definition used by the runtime."""
         self.validate_model(model)
-        target_qpos_addrs = [
-            self._resolve_free_joint_qpos_addr(model, target.joint)
-            for target in episode.targets
-        ]
+        target_qpos_addrs = [self._resolve_free_joint_qpos_addr(model, target.joint) for target in episode.targets]
         if model is not self.model:
             self.model = model
             self._bin_qpos_addr = self._resolve_free_joint_qpos_addr(
@@ -191,26 +176,19 @@ class MultiDrawerSearchProgress:
 
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
         if self._episode is None:
-            self.configure_episode(
-                self.model, self.prepare_randomization(self.model, None)
-            )
+            self.configure_episode(self.model, self.prepare_randomization(self.model, None))
         qpos_batch = np.asarray(qpos_batch, dtype=np.float32)
         if qpos_batch.ndim != 2 or qpos_batch.shape[1] != self.model.nq:
-            raise ValueError(
-                f"Expected qpos batch shape (B, {self.model.nq}), got {qpos_batch.shape}"
-            )
+            raise ValueError(f"Expected qpos batch shape (B, {self.model.nq}), got {qpos_batch.shape}")
         if qpos_batch.shape[0] != self._nworld:
             self.reset(nworld=qpos_batch.shape[0])
 
         target_positions = np.stack(
-            [
-                qpos_batch[:, qpos_addr: qpos_addr + 3]
-                for qpos_addr in self._target_qpos_addrs
-            ],
+            [qpos_batch[:, qpos_addr : qpos_addr + 3] for qpos_addr in self._target_qpos_addrs],
             axis=1,
         )
-        bin_pos = qpos_batch[:, self._bin_qpos_addr: self._bin_qpos_addr + 3]
-        bin_quat = qpos_batch[:, self._bin_qpos_addr + 3: self._bin_qpos_addr + 7]
+        bin_pos = qpos_batch[:, self._bin_qpos_addr : self._bin_qpos_addr + 3]
+        bin_quat = qpos_batch[:, self._bin_qpos_addr + 3 : self._bin_qpos_addr + 7]
         rot_world_from_bin = _quat_to_rotmat_batch(bin_quat)
         rel_world = target_positions - bin_pos[:, None, :]
         rel_bin = np.einsum(
@@ -244,9 +222,7 @@ class MultiDrawerSearchProgress:
         self._ever_success |= success
 
         position_indices = np.minimum(self._completed_target_count, target_count - 1)
-        active_target_in_bin = targets_in_bin[
-            np.arange(qpos_batch.shape[0]), position_indices
-        ]
+        active_target_in_bin = targets_in_bin[np.arange(qpos_batch.shape[0]), position_indices]
         target_pos = target_positions[
             np.arange(qpos_batch.shape[0]),
             position_indices,
@@ -263,10 +239,9 @@ class MultiDrawerSearchProgress:
             0.0,
             1.0,
         )
-        reward = (
-            self._completed_target_count.astype(np.float32)
-            + np.where(success, 0.0, target_progress)
-        ) / float(target_count)
+        reward = (self._completed_target_count.astype(np.float32) + np.where(success, 0.0, target_progress)) / float(
+            target_count
+        )
         reward = np.where(success, 1.0, reward).astype(np.float32)
         return TaskEvalResult(
             reward=reward,
@@ -321,18 +296,14 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
 
     def prepare_randomization(self, model: mujoco.MjModel, randomization: Any) -> DrawerEpisode:
         if randomization is None:
-            raise RuntimeError(
-                "Shaped drawer evaluation requires reset randomization metadata."
-            )
+            raise RuntimeError("Shaped drawer evaluation requires reset randomization metadata.")
         episode = super().prepare_randomization(model, randomization)
         if not episode.drawers or any(target.drawer not in episode.drawers for target in episode.targets):
             raise ValueError("Each target must identify an active source drawer.")
         self.validate_drawer_joints(model, episode.drawer_joints)
         return episode
 
-    def validate_drawer_joints(
-        self, model: mujoco.MjModel, names: Sequence[str]
-    ) -> list[int]:
+    def validate_drawer_joints(self, model: mujoco.MjModel, names: Sequence[str]) -> list[int]:
         """Require the travel limits used by chronological opening detection."""
         joint_ids = super().validate_drawer_joints(model, names)
         for name, joint_id in zip(names, joint_ids):
@@ -352,6 +323,36 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         super().reset(nworld=nworld)
         self._opened_drawers = np.zeros((nworld, len(self._drawer_qpos_addrs)), dtype=bool)
         self._credited_openings = np.zeros(nworld, dtype=np.int32)
+        self._previous_open = np.zeros_like(self._opened_drawers)
+        self._observed_targets = np.zeros((nworld, len(self._target_drawer_indices)), dtype=bool)
+        self._recall_eligible = np.zeros(nworld, dtype=bool)
+        self._wrong_recall_drawers = np.zeros_like(self._opened_drawers)
+        self._first_retrieval_credit = np.zeros(nworld)
+        self._recall_first_search_recorded = np.zeros(nworld, dtype=bool)
+        self._recall_correct_first = np.zeros(nworld, dtype=bool)
+        self._second_requested_at = np.full(nworld, np.nan)
+        self._second_retrieval_latency = np.full(nworld, np.nan)
+
+    def observation_target_bodies(self) -> tuple[str, ...]:
+        """Targets whose exposure can still affect the upcoming recall request."""
+        if self._completed_target_count[0] != 0:
+            return ()
+        return tuple(target.body for target in self._episode.targets)
+
+    def record_observed_targets(self, body_names: Sequence[str]) -> None:
+        """Record actual delivered-image exposure before the second request.
+
+        The caller supplies object body names identified in the policy's camera
+        images, after delivery. Joint opening history is not visibility evidence.
+        """
+        if self._nworld != 1:
+            raise ValueError("Policy observation delivery requires one native world.")
+        names = tuple(target.body for target in self._episode.targets)
+        unknown = set(body_names) - set(names)
+        if unknown:
+            raise ValueError(f"Unknown drawer observation targets: {sorted(unknown)}")
+        if self._completed_target_count[0] == 0:
+            self._observed_targets[0] |= np.array([name in body_names for name in names])
 
     def evaluate_qpos_batch(self, qpos_batch: np.ndarray) -> TaskEvalResult:
         if not self._target_drawer_indices:
@@ -367,14 +368,32 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
         target_drawers = np.asarray(self._target_drawer_indices)[indices]
         eligible = active & ~self._opened_drawers[np.arange(self._nworld), target_drawers]
         opened = qpos_batch[:, self._drawer_qpos_addrs] >= self._drawer_open_thresholds
+        newly_opened = opened & ~self._previous_open
+        recall_active = (self._completed_target_count == 1) & self._recall_eligible
+        wrong = np.arange(opened.shape[1])[None, :] != target_drawers[:, None]
+        first_search = recall_active & ~self._recall_first_search_recorded & newly_opened.any(axis=1)
+        self._recall_correct_first[first_search] = (
+            newly_opened[np.arange(self._nworld), target_drawers] & ~(newly_opened & wrong).any(axis=1)
+        )[first_search]
+        self._recall_first_search_recorded |= first_search
+        self._wrong_recall_drawers |= newly_opened & wrong & recall_active[:, None]
+        self._previous_open = opened.copy()
         first_openings = opened & ~self._opened_drawers
-        self._credited_openings = np.minimum(
-            4, self._credited_openings + eligible * first_openings.sum(axis=1)
-        )
+        self._credited_openings = np.minimum(4, self._credited_openings + eligible * first_openings.sum(axis=1))
         self._opened_drawers |= opened
         result = super().evaluate_qpos_batch(qpos_batch)
         bonus = 0.05 * self._credited_openings
         reward = np.where(result.success, 1.0, 0.75 * result.reward + bonus)
+        second_requested = (indices == 0) & (self._completed_target_count >= 1)
+        if target_count >= 2:
+            self._recall_eligible[second_requested] = self._observed_targets[second_requested, 1]
+            self._first_retrieval_credit[second_requested] = 0.75 / target_count + bonus[second_requested]
+        wrong_count = self._wrong_recall_drawers.sum(axis=1)
+        penalty = np.minimum(
+            np.minimum(0.10 * wrong_count, 0.30),
+            np.maximum(reward - self._first_retrieval_credit, 0.0),
+        )
+        reward = reward - penalty
         return TaskEvalResult(
             reward=reward,
             success=result.success,
@@ -385,5 +404,35 @@ class ShapedMultiDrawerSearchEvaluator(MultiDrawerSearchTargetInBinEvaluator):
                 "credited_drawer_openings": self._credited_openings.copy(),
                 "opened_drawer_count": self._opened_drawers.sum(axis=1),
                 "opened_drawers": self._opened_drawers.copy(),
+                "recall_prior_exposure": self._recall_eligible.copy(),
+                "recall_wrong_drawer_count": wrong_count,
+                "recall_penalty": penalty,
+                "recall_first_search_observed": self._recall_first_search_recorded.copy(),
+                "recall_correct_drawer_first": (
+                    self._recall_correct_first
+                    | (self._recall_eligible & (self._completed_target_count == target_count) & (wrong_count == 0))
+                ),
+                "second_prompt_at_s": np.where(np.isnan(self._second_requested_at), None, self._second_requested_at),
+                "second_retrieval_latency_s": np.where(
+                    np.isnan(self._second_retrieval_latency), None, self._second_retrieval_latency
+                ),
             },
         )
+
+    # Timing consumes qpos and the native clock; no derived positions or contacts.
+    requires_position_refresh = False
+
+    def evaluate_model_data(self, model: mujoco.MjModel, data: mujoco.MjData) -> TaskEvalResult:
+        previous = self._completed_target_count.copy()
+        result = self.evaluate_qpos_batch(data.qpos[None])
+        requested = (previous == 0) & (self._completed_target_count >= 1)
+        finished = (previous == 1) & (self._completed_target_count >= 2)
+        self._second_requested_at[requested] = float(data.time)
+        self._second_retrieval_latency[finished] = float(data.time) - self._second_requested_at[finished]
+        result.metrics["second_prompt_at_s"] = np.where(
+            np.isnan(self._second_requested_at), None, self._second_requested_at
+        )
+        result.metrics["second_retrieval_latency_s"] = np.where(
+            np.isnan(self._second_retrieval_latency), None, self._second_retrieval_latency
+        )
+        return result
