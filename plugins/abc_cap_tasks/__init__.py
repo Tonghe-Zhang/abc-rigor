@@ -131,8 +131,12 @@ def build(seed: int, opts: dict | None = None, variant=None) -> dict:
     tmp = tempfile.mkdtemp(prefix=f"cap_s{seed}_", dir=os.path.dirname(port))
     rebuild = JV.rebuild
 
+    specs = []
+
     def std_rebuild(m0, *a, **k):
-        return abc_hw.compose(rebuild(m0, *a, **k), variant)
+        sp = abc_hw.compose(rebuild(m0, *a, **k), variant)
+        specs.append(sp)            # the final scene's spec (jarvar adds objects to it, then compiles)
+        return sp
 
     _BUILD_LOCK.acquire()
     JV.rebuild = std_rebuild
@@ -151,11 +155,155 @@ def build(seed: int, opts: dict | None = None, variant=None) -> dict:
         JV.rebuild = rebuild
         _BUILD_LOCK.release()
         shutil.rmtree(tmp, ignore_errors=True)
-    out = dict(model=m, R=R, log=log, audit=audit, catalog=cat, swaps=swaps, adds=adds)
+    out = dict(model=m, R=R, log=log, audit=audit, catalog=cat, swaps=swaps, adds=adds, spec=specs[-1] if specs else None)
     _CACHE[key] = out
     while len(_CACHE) > max(1, CACHE_N):
         _CACHE.popitem(last=False)
     return out
+
+
+# ======================================================================================================== fixture
+FIXTURE = "obj_file_holder"     # the portable's file holder (bookshelf); its support group = holder + the books in it
+P_FIXTURE = 0.3                 # probability the fixture group is in a seed's scene
+
+
+def _fixture_group(m: mujoco.MjModel, d: mujoco.MjData, root: str):
+    """The fixture and what it holds: free root bodies (not the robot) whose centre of mass lies inside the xy
+    footprint (mesh-vertex hull) of ``root`` and above its base.  Objects merely touching / leaning on it are not
+    members (they stay scene objects).  No member names are assumed."""
+    from abc_sim import layout
+    rid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, root)
+    if rid < 0:
+        return None
+    pts = layout._body_points(m, d, layout._subtree(m, rid))
+    H = layout._hull(pts[:, :2])
+    z0 = float(pts[:, 2].min())
+    robot = layout._robot_bodies(m, layout.DEFAULT_ARMS)
+    roots = [rid] + [b for b in range(1, m.nbody) if b != rid and b not in robot and layout._is_free_root(m, b)
+                     and d.xipos[b][2] > z0 and layout._point_poly_dist(d.xipos[b][:2], H) < 0]
+    bodies = [b for r in roots for b in layout._subtree(m, r)]
+    pts = layout._body_points(m, d, bodies)
+    hull = layout._hull(pts[:, :2])
+    geoms = {g for b in bodies for g in range(m.body_geomadr[b], m.body_geomadr[b] + m.body_geomnum[b])}
+    return layout._Group(roots, bodies, geoms, pts, hull, hull.mean(0), [m.body(r).name for r in roots])
+
+
+def without_fixture(sc: dict, root: str = FIXTURE) -> dict:
+    """The scene with the fixture group deleted from the model (recompiled; qpos0 / keyframes without its joints).
+    Cached on the scene dict."""
+    ck = "_without_" + root
+    if ck in sc:
+        return sc[ck]
+    m, R = sc["model"], sc["R"]
+    d = mujoco.MjData(m)
+    d.qpos[:] = R["qpos0"]
+    mujoco.mj_forward(m, d)
+    g = _fixture_group(m, d, root)
+    if g is None:
+        raise KeyError(f"open_cap: fixture {root!r} not in the scene")
+    drop = np.zeros(m.nq, bool)
+    for r in g.roots:
+        a = m.jnt_qposadr[m.body_jntadr[r]]
+        drop[a:a + 7] = True
+    dropv = np.zeros(m.nv, bool)
+    for r in g.roots:
+        a = m.jnt_dofadr[m.body_jntadr[r]]
+        dropv[a:a + 6] = True
+    if sc.get("spec") is None:
+        raise RuntimeError("open_cap: scene spec not kept; cannot remove the fixture")
+    spec = sc["spec"].copy()
+    gone = set()
+    for b in g.bodies:
+        gone.add(m.body(b).name)
+    ggeo = {m.geom(i).name for i in g.geoms if m.geom(i).name}
+    for el in list(spec.pairs):
+        if el.geomname1 in ggeo or el.geomname2 in ggeo:
+            spec.delete(el)
+    for el in list(spec.excludes):
+        if el.bodyname1 in gone or el.bodyname2 in gone:
+            spec.delete(el)
+    for n in g.names:
+        spec.delete(spec.body(n))
+    for k in spec.keys:
+        if len(k.qpos) == m.nq:
+            k.qpos = np.asarray(k.qpos)[~drop]
+        if len(k.qvel) == m.nv:
+            k.qvel = np.asarray(k.qvel)[~dropv]
+    m2 = spec.compile()
+    if m2.nq != int((~drop).sum()) or m2.nu != m.nu:
+        raise RuntimeError(f"open_cap: fixture removal changed more than the group ({m.nq}->{m2.nq}, nu {m.nu}->{m2.nu})")
+    R2 = dict(R)
+    R2["qpos0"] = np.asarray(R["qpos0"])[~drop]
+    act = np.asarray(R["actuator_ids"], int)
+    if [m.actuator(int(i)).name for i in act] != [m2.actuator(int(i)).name for i in act]:
+        raise RuntimeError("open_cap: actuator order changed by the fixture removal")
+    out = dict(sc, model=m2, R=R2, fixture=None, removed=list(g.names))
+    sc[ck] = out
+    return out
+
+
+def place_fixture(m, d, rng, root: str = FIXTURE, edge: float = 0.03, gap: float = 0.03, tries: int = 200) -> dict | None:
+    """Fixture group at the BACK (+x) table edge, fully on the table, upright as built, at a uniformly random y
+    that keeps ``gap`` from every robot point (arms at their reset pose).  The other free objects are re-placed by
+    ``layout.scatter`` right after, so they are not obstacles here; but a group the new footprint would land on
+    (within ``gap``) is first moved into the footprint the fixture vacated, so scatter still sees it as its own
+    group instead of merging it into the fixture's kept support group.  None if no spot is clear of the arms or a
+    covered group has no room in the vacated footprint."""
+    from abc_sim import layout
+    g = _fixture_group(m, d, root)
+    if g is None:
+        return None
+    tc, ts, _ = layout.table_box(m, d)
+    tlo, thi = tc - ts + edge, tc + ts - edge
+    lo, hi = g.hull.min(0), g.hull.max(0)
+    ylo, yhi = tlo[1] - lo[1], thi[1] - hi[1]           # shifts that keep the footprint inside the table
+    if yhi < ylo:
+        raise RuntimeError(f"open_cap: fixture {g.names} wider than the table")
+    robot = layout._robot_bodies(m, layout.DEFAULT_ARMS)
+    rp = layout._body_points(m, d, sorted(robot))[:, :2]
+    others = layout._groups(m, d, robot, exclude=tuple(g.names))     # grouped before anything moves
+    dx = thi[0] - hi[0]
+    q0 = d.qpos.copy()
+
+    def vacate(H):
+        """Moves (group, centre) putting every group H lands on into the vacated footprint, or None."""
+        covered = [o for o in others if layout._poly_dist(H, o.hull) < gap]
+        placed, moves = [H] + [o.hull for o in others if o not in covered], []
+        for o in sorted(covered, key=lambda o: -float(np.ptp(o.hull, 0).prod())):
+            olo, ohi = g.hull.min(0) - o.hull.min(0) + o.centre, g.hull.max(0) - o.hull.max(0) + o.centre
+            if np.any(ohi < olo):
+                return None
+            for _ in range(50):
+                c = rng.uniform(olo, ohi)
+                oh = o.hull - o.centre + c
+                if all(layout._poly_dist(oh, p) >= gap for p in placed):
+                    break
+            else:
+                return None
+            placed.append(oh)
+            moves.append((o, c))
+        return moves
+
+    n_arm = n_vac = 0
+    for _ in range(int(tries)):                     # random y; a y whose covered groups do not fit is redrawn
+        sh = np.array([dx, rng.uniform(ylo, yhi)])
+        if min(layout._point_poly_dist(p, g.hull + sh) for p in rp) <= gap:
+            n_arm += 1
+            continue
+        moves = vacate(g.hull + sh)
+        if moves is not None:
+            break
+        n_vac += 1
+    else:
+        logger.warning("open_cap fixture: no y in %d tries (%d hit the arms, %d no room to vacate)", tries, n_arm, n_vac)
+        return None
+    for o, c in moves:
+        layout._move(m, d, o, q0, c, 0.0)
+    layout._move(m, d, g, q0, g.centre + sh, 0.0)
+    d.qvel[:] = 0
+    mujoco.mj_forward(m, d)
+    return dict(names=g.names, centre=[round(float(v), 4) for v in g.centre + sh],
+                vacated=[o.names for o, _ in moves])
 
 
 # ======================================================================================================== containers
@@ -361,6 +509,11 @@ class CapAbcEnv:
             logger.warning("open_cap: gripper %r requested by the hardware variant; the portable keeps its own "
                            "(real-calibrated) fingers -- cameras / station hardware follow the variant", grip)
         sc = build(seed, {k: v for k, v in self.opts.items() if k in ("p_swap", "max_adds", "stickers")}, self.variant)
+        fx = self.opts.get("fixture", FIXTURE)
+        p_fx = float(self.opts.get("p_fixture", P_FIXTURE))
+        self.fixture_present = bool(fx) and np.random.default_rng([seed, 5521]).random() < p_fx
+        if fx and not self.fixture_present:
+            sc = without_fixture(sc, fx)
         if self.scene is not sc:
             self.scene, self.model = sc, sc["model"]
             self.data = mujoco.MjData(self.model)
@@ -383,10 +536,15 @@ class CapAbcEnv:
         d.ctrl[:] = np.asarray(R["ctrl"][0], float)
         mujoco.mj_forward(m, d)
         self.layout_info = None
+        self.fixture_info = None
         if self.opts.get("layout", "scatter") not in (None, False, "package", "none"):
             from abc_sim import layout   # reach-gated absolute + relative layout randomization (shared rule)
+            if self.fixture_present:     # back edge, random y; then an obstacle the other groups scatter around
+                self.fixture_info = place_fixture(m, d, np.random.default_rng([seed, 5522]), fx)
+                if self.fixture_info is None:
+                    raise RuntimeError(f"open_cap seed {seed}: no back-edge spot for fixture {fx!r} clear of the arms")
             self.layout_info = layout.scatter(m, d, np.random.default_rng([seed, 7741]),
-                                              keep=tuple(self.opts.get("layout_keep", ("obj_file_holder",))))
+                                              keep=(fx,) if self.fixture_present else ())
         rng = np.random.default_rng([seed, 9311])
         target = int(self.opts["target"]) if "target" in self.opts else int(rng.integers(len(self.cs)))
         tz = float(np.min([d.xpos[c["bid"]][2] for c in self.cs]))
@@ -449,7 +607,8 @@ class CapAbcEnv:
         failed = bool(self.evaluator.failures)
         met.update(ever_failed=failed, fail_reason=";".join(f["why"] for f in self.evaluator.failures) or None,
                    reward=r, prompt=self.prompt,
-                   scene=dict(seed=self.seed, swaps=self.scene["swaps"], adds=[a for a, _ in self.scene["adds"]]))
+                   scene=dict(seed=self.seed, swaps=self.scene["swaps"], adds=[a for a, _ in self.scene["adds"]],
+                             fixture=self.fixture_info if self.fixture_present else None))
         return dict(task_reward=r, task_success=bool(res.success[0]), task_failed=failed, task_eval=met,
                     episode_step=self.cur_step, sim_time=t, time_limit_reached=t >= self.max_seconds,
                     robot_touch_failure=bool(met["robot_touch_failure"]))

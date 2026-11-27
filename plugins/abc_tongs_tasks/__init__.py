@@ -42,8 +42,20 @@ PACKS = {
 TASKS = {"bag": "tongs_bread_bag", "mix": "tongs_pick_place"}
 MIX = {"bag": 0.5, "place": 0.25, "pick": 0.25}
 MIX_STREAM = 5101
-_ENV_KEYS = ("preset", "mix", "randomize_background", "background_dir", "background_id", "layout")
+_ENV_KEYS = ("grasp_hold_s", "preset", "mix", "randomize_background", "background_dir", "background_id", "layout",
+             "tongs_pad_torsion", "grip_kp", "grip_kv", "grip_force", "replay_layout", "replay_tex_dir")
 LAYOUT_STREAM = 7741
+# Torsional friction (m) of the explicit gripper-pad <-> tongs pairs.  The packs hard-code 0.012 (not fitted).
+# 2026-11-27 fit on the calibrated cd198 open-loop replay (real in-hand tongs pose is rigid): torsion 0.003 lets the
+# tongs twist 10.9 deg p50 in hand and bags nothing; 0.012 twists 2.7 deg; >= 0.025 plateaus at 0.7-1.0 deg (rigid)
+# with both breads bagged.  0.05 = the value of the calibrated per-episode replays.
+TONGS_PAD_TORSION = 0.05
+# Gripper finger servo as identified on the real fleet (pack code/sim4/replay.py + tongs_ident.py, distributions/
+# physics_identified_v1.json grip_force_cap_n): position servo kp 5000 N/m, kv 50 N s/m, force cap 40 N.  Real
+# saturated grips on the tongs plateau at 46-54 N sim-equivalent.  The packs compile the gripper at kp 100 / kv 10
+# with no cap, i.e. ~1-2 N squeeze on a tongs handle (tongs weigh 0.19 kg): the tongs slipped out of every eval grasp.
+# Override with task_kwargs grip_kp / grip_kv / grip_force.
+GRIP_KP, GRIP_KV, GRIP_FORCE = 5000.0, 50.0, 40.0
 
 
 def mix_kind(seed: int, mix: dict | None = None, preset: str | None = None) -> str:
@@ -194,6 +206,51 @@ def _wrong_pick_cls():
     return WrongPickEvaluator
 
 
+def _strict_tongs_grasp(ev, hold_steps: int):
+    """Make the evaluator's tongs-grasp shaping (0.1 * w_grasp) require a STABLE PICKUP instead of the pack's
+    'both fingertips touched the handle once' (tongs_grasp_ever): the tongs held (both fingertips of an arm on the
+    handle, the pack's hold grace), touching no support / bread, hub >= tongs_lift_mm above its last rest height,
+    continuously for ``hold_steps`` physics steps -> latched ``tongs_grasp_stable``.  Instance-level wrap: the cached
+    pack code is not edited.  Failures / stages / the pack's own metrics are unchanged."""
+    import bread_reward as BR
+
+    if getattr(ev, "_strict_grasp", False):
+        return ev
+    ev._strict_grasp, ev.stable_run, ev.grasp_stable = True, 0, False
+    step0, reward0, metrics0, reset0 = ev.after_physics_step, ev._reward, ev._metrics, ev.after_reset
+
+    def after_reset(m, d):
+        reset0(m, d)
+        ev.stable_run, ev.grasp_stable = 0, False
+
+    def after_physics_step(m, d):
+        step0(m, d)
+        touch = getattr(ev, "touch", {}) or {}
+        tcont = set().union(*[touch.get(c, set()) for c in (BR.T_HUB, BR.T_ARM_L, BR.T_ARM_R, BR.T_HEAD_L, BR.T_HEAD_R)])
+        tsup = bool(tcont & set(BR.SUPPORT)) or any(BR._bread(c) for c in tcont)
+        up = float(d.xpos[ev.tongs_root][2]) > ev.tz_rest + ev.tlift
+        ev.stable_run = ev.stable_run + 1 if (ev.held and any(ev.grasp_now.values()) and not tsup and up) else 0
+        if ev.stable_run >= hold_steps:
+            ev.grasp_stable = True
+
+    def _reward():
+        ge = ev.grasp_ever
+        ev.grasp_ever = {k: bool(ev.grasp_stable) for k in ge}
+        try:
+            return reward0()
+        finally:
+            ev.grasp_ever = ge
+
+    def _metrics():
+        out = metrics0()
+        out.update(tongs_grasp_stable=bool(ev.grasp_stable), tongs_stable_run_steps=int(ev.stable_run),
+                   tongs_touched=any(dict(ev.grasp_ever).values()))
+        return out
+
+    ev.after_reset, ev.after_physics_step, ev._reward, ev._metrics = after_reset, after_physics_step, _reward, _metrics
+    return ev
+
+
 def _install_station_hook(variant) -> None:
     """Make the pack's robot_v4.attach_robot also graft the standard abc_sim station cameras and apply the one-model
     hardware variant (abc_hw.compose) on the scene spec, before the package compiles it."""
@@ -208,6 +265,139 @@ def _install_station_hook(variant) -> None:
 
     attach_robot._abc_orig = orig
     robot_v4.attach_robot = attach_robot
+
+
+def _set_gripper_servo(m, kp: float, kv: float, fmax: float) -> None:
+    """Identified finger servo on the compiled model (see GRIP_KP): every ``*_gripper`` position actuator."""
+    n = 0
+    for i in range(m.nu):
+        if m.actuator(i).name.endswith("gripper"):
+            m.actuator_gainprm[i, 0] = kp
+            m.actuator_biasprm[i, 1:3] = [-kp, -kv]
+            m.actuator_forcerange[i] = [-fmax, fmax]
+            m.actuator_forcelimited[i] = 1
+            n += 1
+    if n != 2:
+        raise RuntimeError(f"expected 2 gripper actuators, found {n}")
+
+
+def _install_torsion_hook(torsion: float) -> None:
+    """Make the pack's bread_env.add_gripper_tongs_pairs use the fitted pad <-> tongs torsion (``TONGS_PAD_TORSION``)."""
+    import bread_env
+
+    orig = getattr(bread_env.add_gripper_tongs_pairs, "_abc_orig", bread_env.add_gripper_tongs_pairs)
+
+    def add_gripper_tongs_pairs(*a, **k):
+        k.setdefault("torsion", float(torsion))
+        return orig(*a, **k)
+
+    add_gripper_tongs_pairs._abc_orig = orig
+    bread_env.add_gripper_tongs_pairs = add_gripper_tongs_pairs
+
+# calibrated-replay bread contact / look (the replay scene builder's values: MU_OBJ, foam solref, projective texture)
+_REPLAY_MU, _REPLAY_SOLREF, _REPLAY_SOLIMP, _REPLAY_EMIT = 0.8, [0.004, 1.0], [0.9, 0.95, 0.001, 0.5, 2.0], 0.8
+
+
+def _quat_yaw(yaw: float) -> list:
+    return [float(np.cos(yaw / 2)), 0.0, 0.0, float(np.sin(yaw / 2))]
+
+
+def _replay_tex_mesh(spec, body, name, V, F, uv, png, mass):
+    m = spec.add_mesh()
+    m.name = name
+    m.uservert = np.asarray(V, float).ravel().tolist()
+    m.userface = np.asarray(F, int).ravel().tolist()
+    m.usertexcoord = np.asarray(uv, float).ravel().tolist()
+    m.userfacetexcoord = np.asarray(F, int).ravel().tolist()
+    t = spec.add_texture()
+    t.name, t.type, t.file = name, mujoco.mjtTexture.mjTEXTURE_2D, os.path.abspath(png)
+    mat = spec.add_material()
+    mat.name = name
+    mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = t.name
+    mat.emission, mat.specular, mat.shininess, mat.rgba = _REPLAY_EMIT, 0.0, 0.0, [1, 1, 1, 1]
+    g = body.add_geom()
+    g.name, g.type, g.meshname, g.material = name, mujoco.mjtGeom.mjGEOM_MESH, name, name
+    g.friction, g.condim, g.solref, g.solimp = [_REPLAY_MU, 0.01, 0.001], 4, _REPLAY_SOLREF, _REPLAY_SOLIMP
+    g.mass = mass
+    return g
+
+
+def _replay_lay(path: str, tex_dir: str | None) -> dict:
+    """A calibrated real-episode layout json (code/replay_cal/layouts/lay_*.json: dome breads with projective episode
+    textures, tray, bag, tongs), its texture / uv paths remapped by basename into ``tex_dir`` when given."""
+    import json
+    L = json.load(open(path))
+    if tex_dir:
+        for o in L["objects"].values():
+            for k in ("tex", "uv"):
+                if o.get(k):
+                    o[k] = os.path.join(tex_dir, os.path.basename(o[k]))
+    for o in L["objects"].values():
+        for k in ("tex", "uv"):
+            if o.get(k) and not os.path.exists(o[k]):
+                raise FileNotFoundError(f"replay layout {path}: {k} {o[k]} missing (set task_kwargs replay_tex_dir)")
+    return L
+
+
+def _install_replay_hook(L: dict | None) -> None:
+    """tongs_bread_bag on a real episode's calibrated layout + assets (e.g. cd198, the layout of the successful
+    calibrated replays) instead of a sampled one.  The pack builds everything as usual (flex bag, tongs, robot), with:
+    its layout draw (bread_env_v4.sample_layout_robot) returning the episode's tray / bag / tongs x, y, yaw; its tray and
+    bag dims (+ bag texture) the episode's; its library breads replaced by the episode's fitted dome breads (settled
+    pose, projective texture, fleet bread mass, MU_OBJ 0.8 -- the replay values), keeping the names bread0..N-1.
+    L=None restores the pack behaviour.  Physics is the pack's; only the scene content changes."""
+    import bread_env as BE
+    import bread_env_v4 as BE4
+
+    lo = getattr(BE4.sample_layout_robot, "_abc_orig", BE4.sample_layout_robot)
+    bo = getattr(BE4.BreadEnvV4._build, "_abc_orig", BE4.BreadEnvV4._build)
+    if L is None:
+        BE4.sample_layout_robot, BE4.BreadEnvV4._build = lo, bo
+        return
+    objs = L["objects"]
+    bag = next(o for o in objs.values() if o.get("kind") == "bag")
+    breads = [objs[k] for k in sorted(objs, key=int) if objs[k].get("kind") == "bread"]
+    tr = L["tray"]["pose"]
+
+    def sample_layout_robot(*a, **k):
+        return {"tray": [tr[0], tr[1], tr[2]], "bag": list(bag["pose"][:3]),
+                "tongs": [L["tongs"]["pos"][0], L["tongs"]["pos"][1], L["tongs"]["yaw"]]}
+
+    def _build(self, w, h):
+        import json
+        import bread_mesh as bm
+        idf = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(BE.__file__)))),
+                           "ident", "dists.json")
+        mass = float(json.load(open(idf))["sim_params"]["bread_mass_kg"]) if os.path.exists(idf) else 0.0378
+        old = BE.TRAY, BE.BAG
+        BE.TRAY = dict(old[0], a=tr[3], b=tr[4], floor=L["tray"].get("floor", old[0]["floor"]),
+                       rim=L["tray"].get("rim", old[0]["rim"]), rgba=tuple(L["tray"].get("vis_rgba", old[0]["rgba"][:3])) + (1,))
+        BE.BAG = dict(old[1], a=bag["pose"][3], b=bag["pose"][4], c=bag["pose"][5],
+                      handle_top=bag.get("handle_top", old[1]["handle_top"]), png=bag["tex"], uv=bag["uv"])
+        self.bag_v = None                       # episode bag texture (BE.BAG png / uv), not a fleet bag look
+        try:
+            spec = bo(self, w, h)
+        finally:
+            BE.TRAY, BE.BAG = old
+        for b in [b for b in spec.bodies if re.fullmatch(r"bread\d+", b.name or "")]:
+            spec.delete(b)
+        new = []
+        for k, o in enumerate(breads):
+            x, y, yaw, a, b_, c = o["pose"]
+            body = spec.worldbody.add_body()
+            body.name, body.pos, body.quat = f"bread{k}", list(o["xyz"]), list(o.get("quat", _quat_yaw(yaw)))
+            body.add_freejoint().name = f"bread{k}_free"
+            V, F = bm.dome(a, b_, c, o["shape"]["n"], o["shape"]["p"])
+            _replay_tex_mesh(spec, body, f"rbread{k}_g", V, F, np.load(o["uv"]), o["tex"], mass)
+            new.append(dict(name=f"replay_{k}", cls="replay", label=o.get("label", "bread"), density_kg_m3=float("nan"),
+                            mass_scale=1.0, mass_kg=mass, extents=[2 * a, 2 * b_, c],
+                            pose=[x, y, float(body.pos[2]), yaw], layer=0, friction=_REPLAY_MU))
+        self.breads[:] = new
+        self.flex = 0
+        return spec
+
+    sample_layout_robot._abc_orig, _build._abc_orig = lo, bo
+    BE4.sample_layout_robot, BE4.BreadEnvV4._build = sample_layout_robot, _build
 
 
 def _check_cameras(m, cams: dict) -> None:
@@ -260,6 +450,11 @@ class TongsAbcEnv:
         if grip is not None:
             kw.setdefault("robot", grip)
         _install_station_hook(self.variant)
+        _install_torsion_hook(self.task_kwargs.get("tongs_pad_torsion", TONGS_PAD_TORSION))
+        rl = self.task_kwargs.get("replay_layout") if self.kind == "bag" else None
+        _install_replay_hook(_replay_lay(rl, self.task_kwargs.get("replay_tex_dir")) if rl else None)
+        if rl:
+            kw.setdefault("n_breads", 4)
         if self.kind == "bag":
             import bread_tasks as BT
             kw.setdefault("bag_model", "flex")   # MuJoCo 4 shell-flex paper bag (bag5b, CE sampled); "rigid" = box proxy
@@ -276,7 +471,12 @@ class TongsAbcEnv:
             t.evaluator, t.last = ev, ev.evaluate_model_data(t.model, t.data)
             self.task = t
         _check_cameras(self.task.model, self.POLICY_CAMERAS)
+        _set_gripper_servo(self.task.model, float(self.task_kwargs.get("grip_kp", GRIP_KP)),
+                           float(self.task_kwargs.get("grip_kv", GRIP_KV)), float(self.task_kwargs.get("grip_force", GRIP_FORCE)))
         self.layout_info = self._scatter(seed)
+        t = self.task
+        _strict_tongs_grasp(t.evaluator, int(round(float(self.task_kwargs.get("grasp_hold_s", 0.5)) / float(t.model.opt.timestep))))
+        t.last = t.evaluator.evaluate_model_data(t.model, t.data)
         self.seed, self.cur_step = seed, 0
         m = self.model
         self._grip = np.array([i for i, n in enumerate(self.task.action_names) if n.endswith("gripper")])
@@ -441,7 +641,7 @@ class TongsAbcEnv:
                    task=self.task_name, seed=self.seed)
         return dict(task_reward=r, task_success=ok, task_failed=failed, task_eval=met, episode_step=self.cur_step,
                     subtask=self.kind,
-                    sim_time=t, time_limit_reached=t >= self.max_seconds, tongs_grasped=any(dict(met.get("tongs_grasp_ever") or {}).values()),
+                    sim_time=t, time_limit_reached=t >= self.max_seconds, tongs_grasped=bool(met.get("tongs_grasp_stable")), tongs_touched=bool(met.get("tongs_touched")),
                     robot_touch_failure=bool(met.get("robot_touch_failure")))
 
     def _obs(self) -> dict:

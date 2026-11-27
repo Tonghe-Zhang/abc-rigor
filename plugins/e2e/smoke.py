@@ -1,5 +1,6 @@
-import time, sys, numpy as np
+import time, json, sys, numpy as np
 import abc_sim
+from abc_sim.task_specs import get_task_spec
 for name in sys.argv[1:]:
     t=time.time(); env=abc_sim.make_env(name, render_cameras=False, seed=1)
     print(name, type(env).__name__, "build %.1fs"%(time.time()-t), "dt", env.model.opt.timestep)
