@@ -103,10 +103,18 @@ def _is_free_root(m, b: int) -> bool:
 
 
 def _geom_corners(m, d, g: int) -> np.ndarray:
+    """World points bounding geom ``g``: a mesh's own vertices (its local aabb corners, rotated, overstate the
+    footprint of a slanted / rotated mesh by many cm), else the local aabb corners."""
+    R = d.geom_xmat[g].reshape(3, 3)
+    if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_dataid[g] >= 0:
+        k = m.geom_dataid[g]
+        a, n = m.mesh_vertadr[k], m.mesh_vertnum[k]
+        if n:
+            return d.geom_xpos[g] + m.mesh_vert[a:a + n] @ R.T
     c, h = m.geom_aabb[g, :3], m.geom_aabb[g, 3:]
     s = np.array([[i, j, k] for i in (-1, 1) for j in (-1, 1) for k in (-1, 1)], float)
     loc = c + s * h
-    return d.geom_xpos[g] + loc @ d.geom_xmat[g].reshape(3, 3).T
+    return d.geom_xpos[g] + loc @ R.T
 
 
 def _body_points(m, d, bodies: list[int]) -> np.ndarray:
@@ -406,6 +414,19 @@ def scatter(m, d, rng: np.random.Generator, *, arms=DEFAULT_ARMS, gap=0.025, edg
     lo, hi = rm.bbox()
     lo, hi = np.maximum(lo, tlo), np.minimum(hi, thi)
     bases = [d.xpos[_arm_chain(m, a)[3]][:2].copy() for a in arms]
+    # kept groups stay in place -- unless their footprint leaves the table (e.g. a layout recorded on a longer
+    # station table): then they are translated (no rotation) by the smallest shift that puts them back inside
+    shifted = []
+    for g in (g for g in groups if set(g.names) & set(keep)):
+        sh = np.maximum(tlo - g.hull.min(0), 0) + np.minimum(thi - g.hull.max(0), 0)
+        if np.abs(sh).max() > 1e-4:
+            _move(m, d, g, d.qpos.copy(), g.centre + sh, 0.0)
+            g.hull, g.centre, g.pts = g.hull + sh, g.centre + sh, g.pts + np.append(sh, 0)
+            shifted.append(dict(names=g.names, shift=[round(float(v), 4) for v in sh]))
+    if shifted:
+        d.qvel[:] = 0
+        mujoco.mj_forward(m, d)
+        logger.info("layout.scatter: kept groups pushed back onto the table: %s", shifted)
     state0 = np.zeros(mujoco.mj_stateSize(m, mujoco.mjtState.mjSTATE_INTEGRATION))
     mujoco.mj_getState(m, d, state0, mujoco.mjtState.mjSTATE_INTEGRATION)
     q0 = d.qpos.copy()
@@ -486,11 +507,11 @@ def scatter(m, d, rng: np.random.Generator, *, arms=DEFAULT_ARMS, gap=0.025, edg
         mujoco.mj_forward(m, d)
         info = [dict(names=g.names, xy=[round(float(v), 4) for v in poses[id(g)][0]],
                      yaw_deg=round(float(np.degrees(poses[id(g)][1])), 1)) for g in movers]
-        return dict(moved=True, attempts=attempt, drift=round(drift, 4), groups=info)
+        return dict(moved=True, attempts=attempt, drift=round(drift, 4), groups=info, kept_shifted=shifted)
     mujoco.mj_setState(m, d, state0, mujoco.mjtState.mjSTATE_INTEGRATION)
     mujoco.mj_forward(m, d)
     logger.warning("layout.scatter: kept the original layout after %d attempts (%s)", restarts, fail)
-    return dict(moved=False, attempts=restarts, reason=fail, groups=[])
+    return dict(moved=bool(shifted), attempts=restarts, reason=fail, groups=[], kept_shifted=shifted)
 
 
 __all__ = ["Arm", "DEFAULT_ARMS", "ReachMap", "reach_map", "scatter", "table_box", "table_geom"]
