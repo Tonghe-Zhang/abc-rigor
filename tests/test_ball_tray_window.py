@@ -486,6 +486,36 @@ class BallTrayWindowTest(unittest.TestCase):
                     np.stack([rest, rest]), time_s=time_s
                 )
 
+    def test_world_qualification_clocks_are_independent_and_clear_on_reset(self):
+        rest = self.data.qpos.copy()
+        self.sample(1, UP_Z)
+        up = self.data.qpos.copy()
+        self.sample(2, UP_Z, ball_inside=False)
+        lost = self.data.qpos.copy()
+        self.evaluator.reset(nworld=3)
+        self.evaluator.evaluate_qpos_batch(np.stack([rest] * 3), time_s=0)
+        for time_s in (1, 2):
+            self.evaluator.evaluate_qpos_batch(np.stack([up, rest, up]), time_s=time_s)
+        for time_s in (3, 11, 13):
+            self.evaluator.evaluate_qpos_batch(np.stack([up, up, lost]), time_s=time_s)
+        result = self.evaluator.evaluate_qpos_batch(np.stack([up, up, lost]), time_s=17)
+        np.testing.assert_allclose(result.metrics["overtime_s"], [1, 0, 0])
+        np.testing.assert_allclose(result.reward, [0.88, 0.9, 0.18])
+        self.evaluator.evaluate_qpos_batch(np.stack([up, lost, lost]), time_s=19)
+        for time_s in (20, 30):
+            result = self.evaluator.evaluate_qpos_batch(
+                np.stack([up, up, lost]), time_s=time_s
+            )
+        np.testing.assert_allclose(result.metrics["overtime_s"], [14, 12, 0])
+        self.evaluator.reset(nworld=3)
+        self.evaluator.evaluate_qpos_batch(np.stack([rest] * 3), time_s=0)
+        for time_s in (1, 2):
+            self.evaluator.evaluate_qpos_batch(np.stack([up] * 3), time_s=time_s)
+        self.evaluator.evaluate_qpos_batch(np.stack([lost] * 3), time_s=3)
+        result = self.evaluator.evaluate_qpos_batch(np.stack([lost] * 3), time_s=120)
+        np.testing.assert_array_equal(result.metrics["overtime_s"], [0, 0, 0])
+        np.testing.assert_allclose(result.reward, [0.18, 0.18, 0.18])
+
     def test_repeated_timestamp_state_changes_cannot_add_hold_time(self):
         self.sample(1, UP_Z)
         self.sample(5, UP_Z)
