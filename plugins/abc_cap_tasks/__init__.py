@@ -8,10 +8,18 @@
     obs, r, term, trunc, info = env.step(a14)     # ONE physics step (2 ms); a14 = 6 left joints, left grip, 6 right, right grip
 
 Actions / state are in dataset units (the recorded YAM episode, replay.npz): q + joint_offset, gripper 1 = open
-(x 0.0475 m finger travel).  Reward (native): 1 success (target lid unscrewed and off: no lid-jar contact for 0.1 s and
-lid >= 5 mm off its seat), -0.5 a DIFFERENT container opened (terminate), 0 target container knocked over / off the
-table, else shaping <= 0.9:  0.05 robot touched the target lid + 0.1 lid pinched by one gripper + 0.1 container held by
-the other gripper + 0.65 * clip(max unscrew twist / that variant's audited free angle, 0, 1).
+(x 0.0475 m finger travel).  Reward (native; grasping is <= 0.1, the rest is for actually opening the container):
+
+    0.05  target lid pinched (both pads of one gripper on it)                                   latched
+    0.05  target container held by the OTHER gripper                                            latched
+    0.60  * clip((max lid twist rel. container - 2 deg) / (variant's audited free angle - 2 deg), 0, 1)
+    0.20  lid unmounted: no lid-container contact for 0.1 s and lid >= 5 mm off its seat          latched
+    0.10  lid landed: after unmounting, the lid rests on the TABLE (table contact, no robot / container contact,
+          speed < 5 cm/s) for 0.2 s -> success, reward 1, terminate.  Tethered caps (strap-bound, cannot reach the
+          table): released (no robot contact) and still for 0.2 s.
+
+-0.5 a DIFFERENT container unmounted (terminate); 0 target container knocked over before unmounting, or the unmounted
+lid fell off the table (terminate).  Shaping before success is <= 0.9.
 """
 from __future__ import annotations
 
@@ -42,6 +50,9 @@ PACK = AssetPack(name="cap_open", archive="golden_restore/019cd8ca/portable")
 TASK = "open_cap"
 DT_FREE = 0.1            # s without lid-container contact
 LIFT_FREE = 0.005        # m lid off its seat (container frame)
+DT_LAND = 0.2            # s the unmounted lid must rest (table, released, still) for success
+V_LAND = 0.05            # m/s lid speed counted as "still"
+W_PINCH, W_HOLD, W_TWIST, W_UNMOUNT, W_LAND = 0.05, 0.05, 0.60, 0.20, 0.10
 DEFAULT_FREE_DEG = 228.0
 TWIST_DEADBAND_DEG = 2.0
 ORIG_JARS = ("magenta_paint_jar_a", "magenta_paint_jar_b", "orange_paint_jar", "red_paint_jar", "teal_paint_jar",
@@ -377,6 +388,15 @@ class CapEvaluator:
         self.robot = np.array([n.startswith(("left_", "right_", "pad_left", "pad_right")) for n in names])
         self.pads = {arm: {m.body(f"pad_{arm}_tip_left").id, m.body(f"pad_{arm}_tip_right").id}
                      for arm in ("left", "right")}
+        # colliding table surface: the play_table body's box (station scenes) plus static world geoms that collide and
+        # are not the floor plane (the photo mesh bg_table does not collide; world geoms share body id 0, so contacts
+        # are matched by geom id)
+        tb = {0} | ({m.body("play_table").id} if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "play_table") >= 0
+                    else set())
+        self.table_geoms = {g for g in range(m.ngeom) if int(m.geom_bodyid[g]) in tb and (m.geom_contype[g] or
+                            m.geom_conaffinity[g]) and int(m.geom_type[g]) != int(mujoco.mjtGeom.mjGEOM_PLANE)}
+        if not self.table_geoms:
+            raise RuntimeError("open_cap: no colliding table geom in the scene")
         self.reset_counters()
 
     def reset_counters(self):
@@ -389,6 +409,8 @@ class CapEvaluator:
         self.seat = [None] * n
         self.z0 = np.zeros(n)
         self.touch_lid = self.pinch_lid = self.hold_jar = False
+        self.nland = 0
+        self.landed = False
         self.failures: list[dict] = []
         self.ever_success = False
         self.dt = None
@@ -402,6 +424,8 @@ class CapEvaluator:
 
     def after_reset(self, m, d):
         self.reset_counters()
+        from abc_sim import layout
+        self.table_top = float(layout.table_box(m, d)[2])
         self.dt = float(m.opt.timestep)
         for i, c in enumerate(self.cs):
             th, p, _ = self._rel(d, c)
@@ -435,10 +459,24 @@ class CapEvaluator:
         hold = [arm for arm, pd in self.pads.items() if pd <= jar_hits]
         self.pinch_lid |= bool(pinch)
         self.hold_jar |= bool(hold) and (not pinch or bool(set(hold) - set(pinch)))
-        if self.free[self.target]:
-            self.ever_success = True
+        if self.free[self.target] and not self.landed:
+            lid = tgt["lid_bid"]
+            v = np.zeros(6)
+            mujoco.mj_objectVelocity(m, d, mujoco.mjtObj.mjOBJ_BODY, lid, v, 0)
+            still = float(np.linalg.norm(v[3:])) < V_LAND
+            released = not any(self.robot[b] for b in lid_hits)
+            off_jar = not any(g in lid_hits for g in tgt["group"])
+            g1, g2 = d.contact.geom1[:nc], d.contact.geom2[:nc]
+            on_table = tgt["family"] == "tethered" or any(
+                (b1[k] == lid and g2[k] in self.table_geoms) or (b2[k] == lid and g1[k] in self.table_geoms)
+                for k in range(nc))
+            self.nland = self.nland + 1 if (still and released and off_jar and on_table) else 0
+            if self.nland * self.dt >= DT_LAND:
+                self.landed = self.ever_success = True
+            elif tgt["family"] != "tethered" and self.table_top is not None and d.xipos[lid][2] < self.table_top - 0.05:
+                self._fail("lid_off_table")
         Rj = d.xmat[tgt["bid"]].reshape(3, 3)
-        if not self.ever_success and (Rj[2, 2] < 0.5 or d.xpos[tgt["bid"]][2] < self.table_z - 0.05):
+        if not self.free[self.target] and (Rj[2, 2] < 0.5 or d.xpos[tgt["bid"]][2] < self.table_z - 0.05):
             self._fail("target_knocked_over")
 
     def _fail(self, why: str, robot: bool = False):
@@ -466,12 +504,14 @@ class CapEvaluator:
         elif self.failures:
             r = 0.0
         else:
-            r = 0.05 * self.touch_lid + 0.1 * self.pinch_lid + 0.1 * self.hold_jar + 0.65 * self.progress()
+            r = (W_PINCH * self.pinch_lid + W_HOLD * self.hold_jar + W_TWIST * self.progress()
+                 + W_UNMOUNT * bool(self.free[self.target]))
         t = self.target
         met = dict(target=self.cs[t]["body"][4:], target_variant=self.cs[t]["variant"],
                    twist_deg=float(np.rad2deg(self.twist[t])), max_twist_deg=float(np.rad2deg(self.max_twist[t])),
                    free_angle_deg=self.cs[t]["free_deg"], progress=self.progress(), touched_lid=self.touch_lid,
                    pinched_lid=self.pinch_lid, held_container=self.hold_jar, lid_free=bool(self.free[t]),
+                   lid_unmounted=bool(self.free[t]), lid_landed=self.landed,
                    opened=[c["body"][4:] for c, f in zip(self.cs, self.free) if f],
                    failures=[f["why"] for f in self.failures], robot_touch_failure=self.robot_failed)
         return TaskEvalResult(reward=np.asarray([r], np.float32), success=np.asarray([self.ever_success]),
