@@ -67,14 +67,16 @@ class BallTrayBalancingEvaluator:
     meets its target, lowering takes at most ``max_lowering_s``, and the ball
     stays supported through gentle touchdown and ``settle_s`` of continuous
     table contact. An early safe placement keeps the banked credit and permits
-    another hold; its parked interval remains on the original overtime clock
-    if the tray is lifted again.
+    another hold without starting an overtime clock before qualification.
 
     Window mode deducts 0.02 per second beyond the upper bound, capped at 0.2
-    and the earned credit. This clock starts at the first valid lift and never
-    restarts after a dip, loss or relift. Tentative safe touchdown pauses it;
-    interrupted settling resumes from the original anchor, including the failed
-    settling interval. Finalized placement excludes its proven settling time.
+    and the earned credit. The placement clock starts when the first continuous
+    hold reaches its target. The remaining window (upper minus lower bound) is
+    free of deductions; an unqualified partial hold never starts this clock.
+    Qualification never restarts after a dip, loss or relift. Tentative safe
+    touchdown pauses the clock; interrupted settling resumes from the same
+    anchor, including the failed settling interval. Finalized placement excludes
+    its proven settling time.
     ``hold_window_s=None`` uses the sampled target with the same credit and
     placement rules, without overtime because its prompt has no upper bound.
     """
@@ -188,6 +190,7 @@ class BallTrayBalancingEvaluator:
         self._hold_started_at = np.full(self._nworld, np.nan)
         self._last_time_s = np.full(self._nworld, np.nan)
         self._first_lift_at = np.full(self._nworld, np.nan)
+        self._qualified_hold_at = np.full(self._nworld, np.nan)
         self._current_hold_s = np.zeros(self._nworld, dtype=np.float64)
         self._best_hold_s = np.zeros(self._nworld, dtype=np.float64)
         self._was_valid_hold = np.zeros(self._nworld, dtype=bool)
@@ -444,6 +447,10 @@ class BallTrayBalancingEvaluator:
         self._best_hold_s = np.maximum(self._best_hold_s, self._current_hold_s)
         self._was_valid_hold = valid_hold
         current_complete = valid_hold & (self._current_hold_s >= self._hold_duration_s)
+        first_complete = current_complete & np.isnan(self._qualified_hold_at)
+        self._qualified_hold_at[first_complete] = (
+            self._hold_started_at + self._hold_duration_s
+        )[first_complete]
         lowering_qualified = (
             lowering
             & (self._lowering_hold_s >= self._hold_duration_s)
@@ -497,11 +504,17 @@ class BallTrayBalancingEvaluator:
             self._final_touchdown_at,
             np.where(settling, self._settle_started_at, now),
         )
-        elapsed = np.where(
-            np.isnan(self._first_lift_at), 0.0, clock_end - self._first_lift_at
+        elapsed_after_qualification = np.where(
+            np.isnan(self._qualified_hold_at),
+            0.0,
+            clock_end - self._qualified_hold_at,
         )
         overtime = (
-            np.maximum(elapsed - self.hold_window_s[1], 0.0)
+            np.maximum(
+                elapsed_after_qualification
+                - (self.hold_window_s[1] - self.hold_window_s[0]),
+                0.0,
+            )
             if self.hold_window_s is not None
             else np.zeros(self._nworld)
         )

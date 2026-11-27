@@ -7,13 +7,19 @@ from types import SimpleNamespace
 
 import mujoco
 import numpy as np
+
 from abc_sim.batched_env import BatchedWarpYAMEnv
-from abc_sim.rendering.replay.renderer import PER_EPISODE_MODEL_FIELDS
+from abc_sim.rendering.replay.renderer import (
+    PER_EPISODE_MODEL_FIELD_DTYPES,
+    PER_EPISODE_MODEL_FIELDS,
+)
 
 _SCENE = """
 <mujoco>
   <asset>
-    <material name="object_color" rgba="1 0 0 1"/>
+    <texture name="first" type="2d" builtin="flat" width="2" height="2" rgb1="1 0 0"/>
+    <texture name="second" type="2d" builtin="flat" width="2" height="2" rgb1="0 0 1"/>
+    <material name="object_color" rgba="1 0 0 1" texture="first"/>
   </asset>
   <worldbody>
     <body name="region" pos="0.2 0.1 0.01">
@@ -51,6 +57,8 @@ class SnapshotTest(unittest.TestCase):
         expected = {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in first.items()}
 
         self.model.mat_rgba[0] = [0, 0, 1, 1]
+        rgb = mujoco.mjtTextureRole.mjTEXROLE_RGB
+        self.model.mat_texid[0, rgb] = self.model.texture("second").id
         self.model.body_pos[self.model.body("region").id] = [0.4, -0.2, 0.01]
         self.model.body_quat[self.model.body("region").id] = [0, 0, 0, 1]
         for name in _DATA_ARRAY_FIELDS:
@@ -58,11 +66,16 @@ class SnapshotTest(unittest.TestCase):
         self.data.time = 1.0
         second = self.env._snapshot()
 
-        for name in expected:
+        for name, value in expected.items():
             with self.subTest(field=name):
-                np.testing.assert_array_equal(first[name], expected[name])
+                np.testing.assert_array_equal(first[name], value)
         colors = np.stack([first["mat_rgba"], second["mat_rgba"]])
         np.testing.assert_array_equal(colors[:, 0], [[1, 0, 0, 1], [0, 0, 1, 1]])
+        textures = np.stack([first["mat_texid"], second["mat_texid"]])
+        np.testing.assert_array_equal(
+            textures[:, 0, rgb], [self.model.texture("first").id, self.model.texture("second").id]
+        )
+        self.assertEqual(textures.dtype, np.int32)
         self.assertEqual(float(first["time"]), 0.0)
         self.assertEqual(float(second["time"]), 1.0)
 
@@ -74,7 +87,7 @@ class SnapshotTest(unittest.TestCase):
                 self.assertFalse(np.shares_memory(snapshot[name], getattr(self.data, name)))
         for name in PER_EPISODE_MODEL_FIELDS:
             with self.subTest(field=name):
-                self.assertEqual(snapshot[name].dtype, np.float32)
+                self.assertEqual(snapshot[name].dtype, PER_EPISODE_MODEL_FIELD_DTYPES[name])
                 self.assertFalse(np.shares_memory(snapshot[name], getattr(self.model, name)))
 
     def test_parking_float32_state_does_not_mutate_cpu_buffers(self) -> None:

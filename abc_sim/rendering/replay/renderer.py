@@ -11,7 +11,13 @@ import numpy as np
 # Model fields the task randomizers edit in place per episode. MJWarp indexes
 # them per world, so a runtime keeps one copy per world and refreshes them from
 # the MuJoCo model on reset.
-PER_EPISODE_MODEL_FIELDS = ("body_pos", "body_quat", "mat_rgba")
+PER_EPISODE_MODEL_FIELD_DTYPES = {
+    "body_pos": np.float32,
+    "body_quat": np.float32,
+    "mat_rgba": np.float32,
+    "mat_texid": np.int32,
+}
+PER_EPISODE_MODEL_FIELDS = tuple(PER_EPISODE_MODEL_FIELD_DTYPES)
 
 
 def _sanitize_missing_int_fields(device_struct, cls) -> None:
@@ -169,7 +175,14 @@ class WarpReplayRuntime:
             values = None if per_world is None else per_world.get(name)
             if values is None:
                 values = np.repeat(np.asarray(getattr(self.mjm, name))[None], self.nworld, axis=0)
-            self._copy_field(target, np.ascontiguousarray(values, dtype=np.float32), dtype=target.dtype)
+            if name == "mat_texid":
+                self.set_mat_texid(values)
+            else:
+                self._copy_field(
+                    target,
+                    np.ascontiguousarray(values, dtype=PER_EPISODE_MODEL_FIELD_DTYPES[name]),
+                    dtype=target.dtype,
+                )
 
     def sync_from_mujoco(self) -> None:
         """Copy the current MuJoCo state into the persistent Warp data."""

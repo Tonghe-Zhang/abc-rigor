@@ -40,7 +40,7 @@ class BottlesUprightRandomizer(SceneRandomizer):
     table_bounds = (0.34, 0.84, -0.53, 0.53)
     perturbations = [PerturbRange(name, delta_x=(0, 0), delta_y=(0, 0)) for name in _BOTTLE_JOINTS]
 
-    def prepare_reset(self, *, request=None, randomize=True):
+    def prepare_reset(self, *, request=None, randomize=True, seed=None, keep_arm_state=False):
         if not randomize:
             raise ValueError(
                 "Upright bottles requires a randomized reset or saved-state replay; reuse a seed for a fixed scene."

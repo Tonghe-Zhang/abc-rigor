@@ -49,7 +49,12 @@ class BlocksRandomizer(SceneRandomizer):
         return []
 
     def prepare_reset(
-        self, *, request: Any | None = None, randomize: bool = True
+        self,
+        *,
+        request: Any | None = None,
+        randomize: bool = True,
+        seed: int | None = None,
+        keep_arm_state: bool = False,
     ) -> None:
         """Restore native visuals when the requested task has no appearance."""
         appearance_requested = (

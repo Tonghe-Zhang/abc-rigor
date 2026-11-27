@@ -721,7 +721,12 @@ class MultiDrawerSearchRandomizer(SceneRandomizer):
             self._ensure_full_scene_loaded()
 
     def prepare_reset(
-        self, *, request: Any | None = None, randomize: bool = True
+        self,
+        *,
+        request: Any | None = None,
+        randomize: bool = True,
+        seed: int | None = None,
+        keep_arm_state: bool = False,
     ) -> None:
         """Validate the request and prepare the bound scene before reset."""
         MultiDrawerSearchResetRequest.from_value(request)

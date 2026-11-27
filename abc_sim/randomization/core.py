@@ -386,9 +386,14 @@ class SceneRandomizer:
             self._base_scene_xml_transformed = False
 
     def prepare_reset(
-        self, *, request: Any | None = None, randomize: bool = True
+        self,
+        *,
+        request: Any | None = None,
+        randomize: bool = True,
+        seed: int | None = None,
+        keep_arm_state: bool = False,
     ) -> None:
-        """Optional hook for task-owned model state before placement sampling."""
+        """Prepare task state using the actual reset seed and arm-retention choice."""
         return None
 
     def randomize(
