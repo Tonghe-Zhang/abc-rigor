@@ -165,6 +165,24 @@ class Video:
         self.p.wait()
 
 
+def _tongs_contacts(env):
+    """(tongs geom, other geom/body) pairs in contact, for geoms on bodies named tongs*."""
+    import mujoco
+    m, d = env.model, env.data
+    out = set()
+    for i in range(d.ncon):
+        c = d.contact[i]
+        for a, b in ((c.geom1, c.geom2), (c.geom2, c.geom1)):
+            ba = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, int(m.geom_bodyid[a])) or ""
+            if ba.startswith("tongs"):
+                bb = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, int(m.geom_bodyid[b])) or ""
+                if not bb.startswith("tongs"):
+                    ga = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, int(a)) or ba
+                    gb = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, int(b)) or bb
+                    out.add(f"{ga}|{gb}")
+    return sorted(out)
+
+
 async def run_episode(args, seed: int, out: Path) -> dict:
     import mujoco
     import websockets
@@ -202,6 +220,9 @@ async def run_episode(args, seed: int, out: Path) -> dict:
                chunks=0, text_turns=0, rows=0, sim_time=0.0, end="time_limit", error=None)
     vid = Video(out / f"seed_{seed}.mp4", 450, 600, max(1, 30 // max(1, args.video_every))) if args.video else None
     q_prev = [env.data.qpos[c[2]].copy() for c in rig.chains]
+    trace = [] if args.trace else None
+    hq = [int(env.model.jnt_qposadr[j]) for j in range(env.model.njnt)
+          if "tongs_hinge" in (mujoco.mj_id2name(env.model, mujoco.mjtObj.mjOBJ_JOINT, j) or "")]
     dt = float(env.model.opt.timestep)
     spr = 1.0 / (30.0 * dt)          # physics steps per action row
     acc = 0.0
@@ -316,6 +337,13 @@ async def run_episode(args, seed: int, out: Path) -> dict:
                         _, r, term, trunc, info = env.step(ai)
                     a_prev = a
                     rec["rows"] += 1
+                    if trace is not None:
+                        st = env.get_state()
+                        trace.append(dict(row=rec["rows"], t=float(env.data.time),
+                                          cmd=[float(a[g]) for g in rig.GRIP_IDX], state=[float(st[g]) for g in rig.GRIP_IDX],
+                                          hinge=[float(env.data.qpos[q]) for q in hq],
+                                          tg=bool(info.get("tongs_grasped")),
+                                          contacts=_tongs_contacts(env), qpos=[float(x) for x in env.data.qpos]))
                     if vid is not None and rec["rows"] % max(1, args.video_every) == 0:
                         vid.add(env.render(cams[0][1], 600, 450, rends[(450, 600)]))
                     rec["reward"] = float(r)
@@ -347,6 +375,10 @@ async def run_episode(args, seed: int, out: Path) -> dict:
                 pass
         if vid is not None:
             vid.close()
+        if trace is not None:
+            with open(out / f"seed_{seed}_trace.jsonl", "w") as fh:
+                for t_ in trace:
+                    fh.write(json.dumps(t_) + "\n")
         for r_ in rends.values():
             r_.close()
     rec["success"] = bool(info.get("task_success", False)) or rec["ever_success"]
@@ -480,6 +512,7 @@ def main():
     ap.add_argument("--video", type=int, default=1)
     ap.add_argument("--video-every", type=int, default=3)
     ap.add_argument("--mock-server", type=int, default=0)
+    ap.add_argument("--trace", type=int, default=0, help="write seed_N_trace.jsonl: gripper cmd/state + tongs hinge per row")
     args = ap.parse_args()
     if args.mock_server:
         asyncio.run(_mock_main(args.mock_server))

@@ -6,8 +6,8 @@ arrive through ``abc_sim.make_env(**kwargs)`` and were swallowed).  Here:
 
 1. ``standardize(spec)`` grafts the standard abc_sim station camera bodies -- ``top_bar_center`` (with
    ``top_camera_d405`` / camera ``top``) under ``gate_collision`` and ``{side}_camera_d405`` (camera ``left`` /
-   ``right``) under ``{side}_link_6`` -- copied at runtime from abc_sim's own empty station scene
-   (task ``empty``).  Nothing about the hardware is re-typed here.
+   ``right``) under ``{side}_link_6`` -- copied at runtime from a standard abc_sim task scene (``camera_reference_xml``,
+   task ``drawer``; the ``empty`` station hides the housings).  Nothing about the hardware is re-typed here.
 2. ``compose(spec, variant)`` then applies ``one_model.sim.abc.hardware.YamVariant(variant).compose(spec)`` -- the
    same call one-model's ``LinearGripperEnv`` makes -- so all 5 one-model variants (abc_crank, yam_cell_d405,
    yam_cell_zed, abc_box_d405, molmoact2) apply to plugin scenes exactly as to built-in abc_sim tasks.
@@ -42,6 +42,22 @@ def reference_xml() -> str:
     p = get_task_scene_xml("empty")
     if p is None:
         raise FileNotFoundError("abc_sim task 'empty' has no scene xml")
+    return str(p)
+
+
+CAMERA_REFERENCE_TASK = "drawer"
+
+
+def camera_reference_xml() -> str:
+    """Source of the grafted camera bodies.  abc_sim's ``empty`` scene hides the D405 housings (rgba 0, group 3) while
+    the standard task scenes (``drawer``, ``blocks``, ``jenga``, ...) render them (group 2, rgba 0.22 0.22 0.24): the
+    bodies are otherwise identical (same pose, camera, ``{side}_cam_col`` collision sphere).  Task scenes are the
+    reference here so the wrist / top housings are visible to the cameras as in every abc_sim task."""
+    from abc_sim.task_registry import get_task_scene_xml
+
+    p = get_task_scene_xml(CAMERA_REFERENCE_TASK)
+    if p is None:
+        raise FileNotFoundError(f"abc_sim task {CAMERA_REFERENCE_TASK!r} has no scene xml")
     return str(p)
 
 
@@ -296,9 +312,10 @@ def standardize(spec: mujoco.MjSpec, ref_path: str | None = None) -> mujoco.MjSp
         raise KeyError(f"standardize: scene has no {missing} (needs the abc_sim robot / station naming)")
     _match_table(spec, ref_path)
     _match_arms(spec, ref_path)
-    _graft(spec, bodies["gate_collision"], ref_path, "top_bar_center")
+    cam_ref = camera_reference_xml()
+    _graft(spec, bodies["gate_collision"], cam_ref, "top_bar_center")
     for s in SIDES:
-        _graft(spec, bodies[f"{s}_link_6"], ref_path, f"{s}_camera_d405")
+        _graft(spec, bodies[f"{s}_link_6"], cam_ref, f"{s}_camera_d405")
     return spec
 
 
@@ -376,5 +393,6 @@ def camera_sizes(variant, default: tuple[int, int]) -> dict[str, tuple[int, int]
     return out
 
 
-__all__ = ["POLICY_CAMERAS", "camera_sizes", "compose", "gripper_kind", "reference_xml", "resolve_variant",
+__all__ = ["POLICY_CAMERAS", "camera_reference_xml", "camera_sizes", "compose", "gripper_kind", "reference_xml",
+           "resolve_variant",
            "standardize"]
