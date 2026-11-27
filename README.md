@@ -34,6 +34,8 @@ This README covers setup, a short evaluation smoke test, and training. The packa
 
 `train.py`, `eval_policy.py`, `viz_episode.py`, `viz_policy.py`, and `prepare.py` at the root are the entrypoints; `scripts/` holds the data conversion utilities.
 
+New sim tasks can be added from your own package (no `abc_sim` edits, assets fetched from a configured location, not git): see [docs/external-tasks.md](docs/external-tasks.md).
+
 ## Setup
 
 The training and default GPU evaluation commands below target Linux with an

@@ -262,6 +262,13 @@ class PrepareConfig:
             "Skips the dataset."
         ),
     ] = ()
+    sim_asset_source: Annotated[
+        str | None,
+        tyro.conf.arg(
+            help="Where external (plugin) tasks fetch their asset packs: a directory, "
+            "http(s):// or s3:// prefix. Defaults to $ABC_SIM_ASSET_SOURCE."
+        ),
+    ] = None
     sim_bundle: Annotated[
         tuple[str, ...],
         tyro.conf.arg(
@@ -970,10 +977,26 @@ def resolve_sim_task(name):
         raise SystemExit(f"error: unknown --sim-task {name!r}") from None
 
 
-def sim_task_packages(tasks):
+def prefetch_external_task_assets(scene, source=None):
+    """Fetch the asset packs of an external (plugin) task; False if ``scene`` is not one."""
+    try:
+        from abc_sim.plugins import maybe_get_external_task
+    except ImportError:
+        return False
+    task = maybe_get_external_task(scene)
+    if task is None:
+        return False
+    for pack in task.assets:
+        print(f"[sim] {scene}: asset pack {pack.name} -> {pack.path(source)}")
+    return True
+
+
+def sim_task_packages(tasks, asset_source=None):
     wanted = set(SIM_BASE_PACKAGES)
     for task in tasks:
         scene = resolve_sim_task(task)
+        if scene not in SIM_TASK_PACKAGES and prefetch_external_task_assets(scene, asset_source):
+            continue
         extra = SIM_TASK_PACKAGES.get(scene)
         if extra is None:
             mapped = ", ".join(sorted(SIM_TASK_PACKAGES))
@@ -1332,9 +1355,9 @@ def prepare_sim(config: PrepareConfig):
         # Everything except the RoboCasa packs, which pull from a third-party host.
         wanted |= set(packages) - {ROBOCASA_PACKAGE}
     if config.sim_task:
-        wanted |= sim_task_packages(config.sim_task)
+        wanted |= sim_task_packages(config.sim_task, config.sim_asset_source)
     if config.sim_bundle:
-        wanted |= sim_task_packages(config.sim_bundle)
+        wanted |= sim_task_packages(config.sim_bundle, config.sim_asset_source)
     if config.sim_data:
         # Episode data is only useful next to the meshes it was recorded against, so
         # --sim-data installs its tasks' assets too.

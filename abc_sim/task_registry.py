@@ -102,9 +102,11 @@ def list_scene_tasks() -> tuple[SceneTaskSpec, ...]:
 
 
 def list_scene_task_names() -> tuple[str, ...]:
-    """Return all valid low-level scene task names."""
+    """Return all valid low-level scene task names (built-in, then external plugin tasks)."""
 
-    return tuple(spec.name for spec in _SCENE_TASKS)
+    from abc_sim.plugins import list_external_tasks
+
+    return tuple(spec.name for spec in _SCENE_TASKS) + tuple(t.env_task for t in list_external_tasks())
 
 
 def resolve_env_task_name(task: str | SimTaskSpec | None) -> str | None:
@@ -127,7 +129,32 @@ def maybe_get_scene_task_spec(task: str | SimTaskSpec | None) -> SceneTaskSpec |
     env_task = resolve_env_task_name(task)
     if env_task is None:
         return None
-    return _SCENE_TASK_LOOKUP.get(env_task)
+    spec = _SCENE_TASK_LOOKUP.get(env_task)
+    if spec is None:
+        spec = _external_scene_task_spec(env_task)
+    return spec
+
+
+_EXTERNAL_SCENE_SPECS: dict[str, SceneTaskSpec] = {}
+
+
+def _external_scene_task_spec(env_task: str) -> SceneTaskSpec | None:
+    """A SceneTaskSpec for an external static-XML task (assets fetched on first use); None otherwise."""
+
+    from abc_sim.plugins import maybe_get_external_task
+
+    ext = maybe_get_external_task(env_task)
+    if ext is None or ext.env_task != env_task or ext.mode != "xml":
+        return None
+    cached = _EXTERNAL_SCENE_SPECS.get(env_task)
+    if cached is None:
+        cached = SceneTaskSpec(
+            name=env_task,
+            scene_xml=ext.resolve_scene_xml(),
+            physics_defaults=tuple(sorted(dict(ext.physics_defaults).items())),
+        )
+        _EXTERNAL_SCENE_SPECS[env_task] = cached
+    return cached
 
 
 def get_scene_task_spec(task: str | SimTaskSpec) -> SceneTaskSpec:
@@ -172,6 +199,11 @@ def get_task_scene_xml(task: str | SimTaskSpec | None) -> Path | None:
 def get_task_physics_defaults(task: str | SimTaskSpec | None) -> dict[str, Any]:
     """Return task-specific physics overrides for a scene task."""
 
+    from abc_sim.plugins import maybe_get_external_task
+
+    ext = maybe_get_external_task(resolve_env_task_name(task))
+    if ext is not None:
+        return dict(ext.physics_defaults)
     scene_task = maybe_get_scene_task_spec(task)
     if scene_task is None:
         return {}
@@ -186,7 +218,16 @@ def get_task_randomizer(task: str | SimTaskSpec | None) -> Any:
     env_task = resolve_env_task_name(task)
     if env_task is None:
         return None
-    return TASK_RANDOMIZERS.get(env_task)
+    randomizer = TASK_RANDOMIZERS.get(env_task)
+    if randomizer is None:
+        from abc_sim.plugins import builder_randomizer, maybe_get_external_task
+
+        ext = maybe_get_external_task(env_task)
+        if ext is not None and ext.mode == "builder":
+            randomizer = builder_randomizer(ext)
+        elif ext is not None and ext.randomizer is not None:
+            randomizer = ext.randomizer()
+    return randomizer
 
 
 __all__ = [
