@@ -6,6 +6,7 @@ import copy
 from typing import Any
 
 import mujoco
+
 from abc_sim.multi_drawer_episode import DrawerEpisode
 from abc_sim.task_eval.base import TaskEvalResult, TaskEvaluator
 from abc_sim.task_eval.multi_drawer import (
@@ -36,12 +37,30 @@ class MultiDrawerSearchRuntime:
     ) -> DrawerProgressSource:
         """Share compatible scoring or bind native progress for an unscored task."""
         if evaluator is None:
-            return MultiDrawerSearchProgress(model=model, spec=spec)
+            self._progress_source = MultiDrawerSearchProgress(model=model, spec=spec)
+            return self._progress_source
         if not isinstance(evaluator, DrawerProgressSource):
             raise ValueError(
                 "Multi-drawer runtime requires an evaluator with ordered drawer progress."
             )
+        self._progress_source = evaluator
         return evaluator
+
+    def observation_target_bodies(self) -> tuple[str, ...]:
+        """Expose only targets accepted by the shaped evaluator's evidence hook."""
+        from abc_sim.task_eval.multi_drawer import ShapedMultiDrawerSearchEvaluator
+
+        if isinstance(self._progress_source, ShapedMultiDrawerSearchEvaluator):
+            return self._progress_source.observation_target_bodies()
+        return ()
+
+    def record_observed_targets(self, body_names) -> None:
+        """Forward delivered-image exposure to the shared chronological source."""
+        from abc_sim.task_eval.multi_drawer import ShapedMultiDrawerSearchEvaluator
+
+        if not isinstance(self._progress_source, ShapedMultiDrawerSearchEvaluator):
+            raise ValueError("Observation exposure applies to shaped drawer scoring.")
+        self._progress_source.record_observed_targets(body_names)
 
     def retained_randomization(self) -> Any:
         """Return the physical initial scene to restore on nonrandomized reset."""

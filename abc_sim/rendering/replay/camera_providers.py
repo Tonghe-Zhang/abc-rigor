@@ -181,6 +181,22 @@ class MujocoCameraProvider(CameraProvider):
             frames[cam_name] = self._renderer.render().copy()
         return frames
 
+    def segmentation_for_step(self) -> dict[str, np.ndarray]:
+        """Render native object IDs from the current state and the same cameras.
+
+        Each H/W/2 pixel contains MuJoCo's object ID and object type. Restoring
+        RGB mode is required even when a render raises.
+        """
+        self._renderer.enable_segmentation_rendering()
+        try:
+            result = {}
+            for cam_name in self.camera_names:
+                self._renderer.update_scene(self._data, camera=cam_name)
+                result[cam_name] = self._renderer.render().copy()
+            return result
+        finally:
+            self._renderer.disable_segmentation_rendering()
+
     def close(self) -> None:
         self._renderer.close()
 

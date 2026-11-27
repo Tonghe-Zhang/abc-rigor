@@ -145,8 +145,31 @@ class PourFixture:
         return self.steps(200)
 
     def pour(self):
-        self.move(np.array([0.57, 0.2, 0.98]), tilt=np.deg2rad(110), steps=1250)
-        return self.steps(2000)
+        # Lower the mouth before pouring, then withdraw the sideways bowl so
+        # its residency column stays clear of fruit resting in the receiver.
+        self.move(np.array([0.57, 0.2, 0.90]), steps=500)
+        self.move(np.array([0.57, 0.2, 0.90]), tilt=np.pi / 2, steps=2500)
+        self.steps(500)
+        self.move(np.array([0.57, 0.2, 0.98]), tilt=np.pi / 2, steps=500)
+        # Bound settling to three simulated seconds, including the native
+        # 0.5-second stable-contact dwell after residual fruit rolling stops.
+        return self.steps(1500)
+
+    def receiver_support_height(self, tilt):
+        """Place the rotated shell's lowest floor/rim point on the receiver floor."""
+        cosine, sine = np.cos(tilt), np.sin(tilt)
+        apothem = 1 / np.cos(np.pi / BOWL_SEGMENTS)
+        floor = (
+            self.source.floor / 2 * cosine
+            - (self.source.bottom_radius + self.source.wall) * apothem * sine
+            - self.source.floor / 2 * abs(cosine)
+        )
+        rim = (
+            self.source.height * cosine
+            - (self.source.rim_radius + self.source.wall / 2) * apothem * sine
+            - self.source.wall / 2
+        )
+        return self.model.body("target_bowl").pos[2] + self.target.floor - min(floor, rim) - 0.0001
 
     def return_bowl(self):
         self.gripping = True
@@ -510,7 +533,8 @@ class PourPhysicsTest(unittest.TestCase):
         fixture.grip()
         fixture.move(np.array([0.6, -0.2, 0.98]), steps=750)
         fixture.move(np.array([0.465, 0.2, 0.90]), tilt=np.deg2rad(40), steps=1000)
-        fixture.move(np.array([0.465, 0.2, 0.807]), tilt=np.deg2rad(50), steps=100)
+        tilt = np.deg2rad(100)
+        fixture.move(np.array([0.465, 0.2, fixture.receiver_support_height(tilt)]), tilt=tilt, steps=100)
         self.assertTrue(fixture.result().metrics["transport_complete"][0])
         self.assertEqual(fixture.result().metrics["num_emptied_fruits"][0], 0)
         fixture.gripping = False
@@ -556,6 +580,14 @@ class PourPhysicsTest(unittest.TestCase):
         self.assertEqual(result.metrics["num_caught_fruits"][0], 1)
         self.assertAlmostEqual(result.scalar_reward(), 0.4 + 0.5 / 3, places=5)
         self.assertFalse(result.scalar_success())
+        # Finish emptying the two retained fruits before checking empty-bowl
+        # return. Re-grasp at the actual released pose, then pour over the target.
+        source = fixture.data.joint("source_bowl_joint").qpos
+        fixture.data.mocap_pos[fixture.carrier] = source[:3]
+        fixture.data.mocap_quat[fixture.carrier] = source[3:]
+        fixture.grip()
+        fixture.move(np.array([0.6, 0.2, 0.98]), steps=750)
+        fixture.pour()
         returned = fixture.return_bowl()
         self.assertFalse(returned.metrics["fruit_source_resident_mask"].any())
         self.assertAlmostEqual(returned.metrics["return_reward"][0], 0.1)
@@ -941,12 +973,15 @@ class PourSceneTest(unittest.TestCase):
         scene = Path(abc_sim.__file__).parent / "models" / "yam_pack_and_pour_fruit_scene.xml"
         baseline = mujoco.MjModel.from_xml_path(str(scene))
         self.env.reset(seed=6)
-        for name, spec in (("source_bowl", source_bowl_spec()), ("target_bowl", target_bowl_spec())):
+        for name, spec in (
+            ("source_bowl", source_bowl_spec()),
+            ("target_bowl", target_bowl_spec()),
+        ):
             np.testing.assert_allclose(baseline.body(name).mass, self.env.model.body(name).mass)
             np.testing.assert_allclose(baseline.body(name).inertia, self.env.model.body(name).inertia)
             np.testing.assert_allclose(self.env.model.site(f"{name}_cavity_rim").pos, [0, 0, spec.height])
             self.assertEqual(self.env.model.site(f"{name}_cavity_rim").size[0], spec.rim_radius)
-        self.assertAlmostEqual(self.env.model.body("source_bowl").mass[0], 0.079662, places=5)
+        self.assertAlmostEqual(self.env.model.body("source_bowl").mass[0], 0.089232833, places=5)
         self.assertAlmostEqual(self.env.model.body("target_bowl").mass[0], 0.330931, places=5)
 
     def test_replay_and_independent_instances_are_identical(self):

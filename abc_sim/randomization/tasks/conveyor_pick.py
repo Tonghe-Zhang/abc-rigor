@@ -60,12 +60,24 @@ _CONVEYOR_BELT_SPEED_RANGE_M_S = (0.10, 0.20)
 _CONVEYOR_BELT_SPEED_LIMITS_M_S = (0.01, 0.50)
 
 
-def _conveyor_belt_speed_range(request: Any | None) -> tuple[float, float]:
+def _conveyor_belt_speed_range(
+    request: Any | None,
+    *,
+    defaults: tuple[float, float] = _CONVEYOR_BELT_SPEED_RANGE_M_S,
+) -> tuple[float, float]:
     """Belt speed bounds for this reset: the defaults unless the request overrides either one."""
     reset_request = ConveyorPickResetRequest.from_value(request)
-    default_low, default_high = _CONVEYOR_BELT_SPEED_RANGE_M_S
-    low = default_low if reset_request.belt_speed_min_m_s is None else reset_request.belt_speed_min_m_s
-    high = default_high if reset_request.belt_speed_max_m_s is None else reset_request.belt_speed_max_m_s
+    default_low, default_high = defaults
+    low = (
+        default_low
+        if reset_request.belt_speed_min_m_s is None
+        else reset_request.belt_speed_min_m_s
+    )
+    high = (
+        default_high
+        if reset_request.belt_speed_max_m_s is None
+        else reset_request.belt_speed_max_m_s
+    )
     lowest, highest = _CONVEYOR_BELT_SPEED_LIMITS_M_S
     if not lowest <= low <= high <= highest:
         raise ValueError(
@@ -369,8 +381,6 @@ class ConveyorPickObjectRandomizer(SceneRandomizer):
                 "belt_speed_range_m_s": list(belt_speed_range_m_s),
             },
         )
-
-
 
 
 __all__ = ["ConveyorPickObjectRandomizer"]

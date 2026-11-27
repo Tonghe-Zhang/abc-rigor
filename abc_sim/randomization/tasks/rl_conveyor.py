@@ -10,11 +10,11 @@ import numpy as np
 
 from abc_sim.randomization.core import RandomizationState
 from abc_sim.randomization.tasks.conveyor_pick import (
-    ConveyorPickObjectRandomizer,
     _CONVEYOR_OBJECT_CATEGORIES,
     _CONVEYOR_OBJECT_SLOTS,
     _CONVEYOR_X_JITTER_M,
     _CONVEYOR_Y_JITTER_M,
+    ConveyorPickObjectRandomizer,
     _conveyor_belt_speed_range,
     _conveyor_pick_apply_scene_transforms,
     _conveyor_pick_build_xml,
@@ -43,10 +43,11 @@ TARGET_CATEGORIES = {
 }
 
 
-def episode_prompt(variant: str, category: str) -> str:
+def episode_prompt(variant: str, category: str, count: int = 3) -> str:
     if variant == "all":
         return (
-            "Pick all three objects from the conveyor and gently place them in the bin."
+            f"Pick all {count} {'object' if count == 1 else 'objects'} from the conveyor "
+            "and gently place them in the bin."
         )
     return (
         f"Pick only the {category} objects from the conveyor and gently place them in the bin. "
@@ -64,8 +65,10 @@ def validate_episode(metadata: dict) -> dict:
     if metadata["task_category"] != "rl" or variant not in ("all", "category"):
         raise ValueError("Unknown RL conveyor episode variant.")
     if variant == "all":
-        if category != "all" or len(objects) != 3:
-            raise ValueError("The all-object conveyor variant requires three targets.")
+        if category != "all" or not 1 <= len(objects) <= 3:
+            raise ValueError(
+                "The all-object conveyor variant requires one to three targets."
+            )
         pool = _CONVEYOR_OBJECT_CATEGORIES
     else:
         if category not in TARGET_CATEGORIES or not 2 <= len(objects) <= 4:
@@ -90,7 +93,12 @@ def validate_episode(metadata: dict) -> dict:
         raise ValueError(
             "Category episodes require one or two targets and at least one distractor."
         )
-    if metadata["prompt"] != episode_prompt(variant, category):
+    valid_prompts = {episode_prompt(variant, category, len(objects))}
+    if variant == "all" and len(objects) == 3:
+        valid_prompts.add(
+            "Pick all three objects from the conveyor and gently place them in the bin."
+        )
+    if metadata["prompt"] not in valid_prompts:
         raise ValueError("Conveyor prompt must describe its scored target category.")
     speed = float(metadata["belt_speed_y"])
     if not np.isfinite(speed) or not 0.01 <= abs(speed) <= 0.50:
@@ -129,7 +137,8 @@ class RLConveyorRandomizer(ConveyorPickObjectRandomizer):
         variant = "all" if self._rng.integers(2) == 0 else "category"
         category = "all"
         if variant == "all":
-            categories = list(self._rng.choice(_CONVEYOR_OBJECT_CATEGORIES, 3))
+            count = int(self._rng.integers(1, 4))
+            categories = list(self._rng.choice(_CONVEYOR_OBJECT_CATEGORIES, count))
         else:
             category = str(self._rng.choice(tuple(TARGET_CATEGORIES)))
             count = int(self._rng.integers(2, 5))
@@ -175,7 +184,7 @@ class RLConveyorRandomizer(ConveyorPickObjectRandomizer):
             self._rng = np.random.default_rng(seed)
         direction = 1.0 if self._rng.random() < 0.5 else -1.0
         variant, category, selections = self._sample_episode(spawn_side_y=-direction)
-        speed_range = _conveyor_belt_speed_range(request)
+        speed_range = _conveyor_belt_speed_range(request, defaults=(0.05, 0.10))
         speed = direction * float(self._rng.uniform(*speed_range))
         objects, states = [], {}
         for index, item in enumerate(selections, 1):
@@ -204,7 +213,7 @@ class RLConveyorRandomizer(ConveyorPickObjectRandomizer):
             "variant": variant,
             "target_category": category,
             "objects": objects,
-            "prompt": episode_prompt(variant, category),
+            "prompt": episode_prompt(variant, category, len(objects)),
             "belt_speed_y": speed,
             "belt_speed_m_s": abs(speed),
             "belt_direction_y": direction,

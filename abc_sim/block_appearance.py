@@ -9,6 +9,7 @@ import numpy as np
 
 LETTERS = string.ascii_uppercase
 REVISION = "block-appearance-v1"
+NATIVE_WOOD_REVISION = "block-native-wood-v1"
 FAMILIES = ("wood_paint", "color_plastic", "white_plastic")
 FINISHES = {"matte": (0.05, 0.05), "satin": (0.25, 0.25), "gloss": (0.55, 0.65)}
 
@@ -82,8 +83,52 @@ def sample_appearance(seed: int) -> dict:
     return {"revision": REVISION, "seed": seed, "blocks": blocks}
 
 
+def sample_native_wood_appearance(seed: int) -> dict:
+    """Tint the bundled wood atlas and recolor its original paint masks."""
+    if type(seed) is not int or seed < 0:
+        raise ValueError("Native wood appearance requires a nonnegative integer seed.")
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 0x574F4F44]))
+    original = bool(rng.integers(10) == 0)
+    tint = rng.uniform(0.92, 1.08, size=3).tolist()
+    inks = {}
+    for letter in LETTERS:
+        ink = _ink(rng)
+        background = (np.array([170, 140, 95]) * tint).astype(int).tolist()
+        while contrast(ink, background) < 4.5:
+            ink = (np.asarray(ink) * 0.8).astype(int).tolist()
+        inks[letter] = ink
+    return {
+        "revision": NATIVE_WOOD_REVISION,
+        "seed": seed,
+        "original": original,
+        "wood_tint": tint,
+        "inks": inks,
+    }
+
+
 def validate_appearance(record: dict) -> None:
     """Reject incomplete or unsupported replay material records."""
+    if record["revision"] == NATIVE_WOOD_REVISION:
+        if type(record["original"]) is not bool or set(record["inks"]) != set(LETTERS):
+            raise ValueError("Incomplete native wood appearance record.")
+        tint = np.asarray(record["wood_tint"], dtype=float)
+        if (
+            tint.shape != (3,)
+            or not np.isfinite(tint).all()
+            or np.any((tint < 0.92) | (tint > 1.08))
+        ):
+            raise ValueError("Invalid native wood tint.")
+        for ink in record["inks"].values():
+            if len(ink) != 3 or any(
+                type(c) is not int or not 0 <= c <= 255 for c in ink
+            ):
+                raise ValueError("Native paint colors must be three byte values.")
+            if (
+                contrast(ink, (np.array([170, 140, 95]) * tint).astype(int).tolist())
+                < 4.5
+            ):
+                raise ValueError("Native paint must remain readable on the wood.")
+        return
     if record["revision"] != REVISION or set(record["blocks"]) != set(LETTERS):
         raise ValueError("Unsupported or incomplete block appearance record.")
     for style in record["blocks"].values():
@@ -91,7 +136,12 @@ def validate_appearance(record: dict) -> None:
             raise ValueError("Unknown block material style.")
         if style["panel"] not in ("none", "square", "rounded", "disc") or style[
             "border"
-        ] not in ("none", "ring", "square", "double"):
+        ] not in (
+            "none",
+            "ring",
+            "square",
+            "double",
+        ):
             raise ValueError("Unknown block face decoration.")
         if type(style["stroke"]) is not int or style["stroke"] not in (0, 1):
             raise ValueError("Unsupported glyph stroke.")

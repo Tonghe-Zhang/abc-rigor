@@ -49,10 +49,8 @@ def _touching(data: mujoco.MjData, first: set[int], second: set[int]) -> bool:
 
 def format_window_prompt(window_s: tuple[float, float]) -> str:
     low, high = window_s
-    return (
-        f"keep the ball balanced on the tray for {low:g} to {high:g} seconds, "
-        "then gently place the tray on the table"
-    )
+    hold = f"keep the ball balanced on the tray for {low:g} to {high:g} seconds"
+    return f"{hold}, then gently place the tray on the table"
 
 
 class BallTrayBalancingEvaluator:
@@ -198,6 +196,8 @@ class BallTrayBalancingEvaluator:
         self._lowering_hold_s = np.zeros(self._nworld, dtype=np.float64)
         self._completed = np.zeros(self._nworld, dtype=bool)
         self._ball_lost = np.zeros(self._nworld, dtype=bool)
+        self._loss_started_at = np.full(self._nworld, np.nan)
+        self._drop_terminated = np.zeros(self._nworld, dtype=bool)
         self._rest_tray_z: np.ndarray | None = None
         self._handles_seen_at = np.full(self._nworld, np.nan)
         self._settle_started_at = np.full(self._nworld, np.nan)
@@ -417,7 +417,26 @@ class BallTrayBalancingEvaluator:
         now: np.ndarray,
     ) -> TaskEvalResult:
         """Keep earned credit separate from the current placement qualification."""
-        active = ~self._finalized
+        active = ~self._finalized & ~self._drop_terminated
+        # A support contact can briefly disappear during a bounce. Count loss
+        # only once the ball leaves the tray footprint or falls below its floor.
+        recovered = current_balanced & ~np.asarray(
+            metrics["ball_robot_contact"], dtype=bool
+        )
+        actual_loss = (
+            active
+            & (
+                ~np.asarray(metrics["inside_tray"], dtype=bool)
+                | np.asarray(metrics["ball_dropped"], dtype=bool)
+                | np.asarray(metrics["ball_table_contact"], dtype=bool)
+            )
+            & ~np.asarray(metrics["ball_tray_contact"], dtype=bool)
+        )
+        self._loss_started_at[recovered] = np.nan
+        begin_loss = actual_loss & np.isnan(self._loss_started_at)
+        self._loss_started_at[begin_loss] = now[begin_loss]
+        self._drop_terminated |= now >= self._loss_started_at + 1.0
+        active &= ~self._drop_terminated
         ball_ok = current_balanced.copy()
         if self.forbid_gripper_ball_contact:
             ball_ok &= ~np.asarray(metrics["ball_robot_contact"], dtype=bool)
@@ -558,6 +577,11 @@ class BallTrayBalancingEvaluator:
                 "hold_complete": hold_complete,
                 "perturbations_allowed": valid_hold & ~current_complete,
                 "ball_lost_after_hold": self._ball_lost.copy(),
+                "ball_loss_started_at_s": np.where(
+                    np.isnan(self._loss_started_at), None, self._loss_started_at
+                ),
+                "task_terminated": self._drop_terminated.copy(),
+                "ever_failed": self._drop_terminated.copy(),
                 "handles_held": handles_held,
                 "settling": settling & ~self._finalized,
                 "placement_finalized": self._finalized.copy(),

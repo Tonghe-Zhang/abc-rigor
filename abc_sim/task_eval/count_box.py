@@ -34,11 +34,13 @@ class CountIntoOpaqueBoxEvaluator:
         box_body_name: str = "opaque_count_box",
         object_joint_suffix: str = "_joint",
         floor_tolerance_m: float = 0.01,
+        partial_overfill_penalty: bool = False,
     ) -> None:
         self.spec = spec
         self._box_body_name = box_body_name
         self._object_joint_suffix = object_joint_suffix
         self.floor_tolerance_m = float(floor_tolerance_m)
+        self.partial_overfill_penalty = bool(partial_overfill_penalty)
         self._directive: dict[str, Any] | None = None
         self._bind_model(model)
         self.reset(nworld=1)
@@ -264,9 +266,13 @@ class CountIntoOpaqueBoxEvaluator:
         self._ever_correct |= success
 
         violated = (num_eligible_in > target) | (num_ineligible_in > 0)
-        reward = np.where(
-            violated, 0.0, num_eligible_in.astype(np.float32) / float(max(target, 1))
-        ).astype(np.float32)
+        errors = np.maximum(num_eligible_in - target, 0) + num_ineligible_in
+        progress = np.minimum(num_eligible_in.astype(np.float32) / float(target), 1.0)
+        if self.partial_overfill_penalty:
+            multiplier = np.array([1.0, 0.4, 0.2, 0.1, 0.0])[np.minimum(errors, 4)]
+            reward = (progress * multiplier).astype(np.float32)
+        else:
+            reward = np.where(violated, 0.0, progress).astype(np.float32)
 
         in_box = [
             [name for name, is_in in zip(directive["names"], world) if bool(is_in)]
@@ -282,6 +288,7 @@ class CountIntoOpaqueBoxEvaluator:
                 "num_eligible_in_box": num_eligible_in,
                 "num_ineligible_in_box": num_ineligible_in,
                 "directive_violated": violated,
+                "extra_or_wrong_count": errors,
                 "objects_in_box": in_box,
                 # Final-state semantics: never stop a rollout early on a count
                 # that may still change, and let the last frame decide.

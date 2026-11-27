@@ -408,8 +408,9 @@ class MuJoCoYAMEnv(gym.Env):
         self._step_updates = progress_runtime or bool(
             getattr(source, "requires_step_updates", False)
         )
-        self._step_requires_position_refresh = self._step_updates and hasattr(
-            source, "evaluate_model_data"
+        self._step_requires_position_refresh = self._step_updates and (
+            hasattr(source, "evaluate_model_data")
+            and getattr(source, "requires_position_refresh", True)
         )
         self._step_update_interval = (
             self._control_decimation
@@ -843,6 +844,7 @@ class MuJoCoYAMEnv(gym.Env):
         terminated = bool(
             (self.terminate_on_success and task_success)
             or (self.terminate_on_failure and task_failed)
+            or info.get("task_eval", {}).get("task_terminated", False)
         )
         info["task_failed"] = task_failed
         info["terminate_on_failure"] = self.terminate_on_failure
@@ -1074,7 +1076,7 @@ class MuJoCoYAMEnv(gym.Env):
             return self._physics_evaluator.evaluate_model_data(self.model, self.data)
         evaluate_model_data = getattr(source, "evaluate_model_data", None)
         if evaluate_model_data is not None:
-            if not self._step_updates:
+            if not self._step_updates and getattr(source, "requires_position_refresh", True):
                 # Contact-based tasks still need current state when explicitly
                 # scored, without refreshing after every physics integration.
                 mujoco.mj_fwdPosition(self.model, self.data)

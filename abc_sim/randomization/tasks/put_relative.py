@@ -303,7 +303,9 @@ def _put_relative_build_xml(selections: list[dict[str, Any]]) -> str:
         lines_body.extend(
             [
                 f"    <!-- Put-relative object {index}: {category}/{variant_dir.name} -->",
-                f'    <body name="{name}" pos="{float(selection["x"]):.4f} {float(selection["y"]):.4f} {float(selection["z"]):.4f}" quat="{float(selection["qw"]):.6f} 0 0 {float(selection["qz"]):.6f}">',
+                f'    <body name="{name}" pos="{float(selection["x"]):.4f} '
+                f'{float(selection["y"]):.4f} {float(selection["z"]):.4f}" '
+                f'quat="{float(selection["qw"]):.6f} 0 0 {float(selection["qz"]):.6f}">',
                 f'      <joint name="{name}_joint" class="relative_object"/>',
             ]
         )
@@ -350,6 +352,8 @@ def _put_relative_build_xml(selections: list[dict[str, Any]]) -> str:
 def _put_relative_sample_prompt(
     objects: list[dict[str, Any]],
     rng: np.random.Generator,
+    *,
+    initial: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
     for mover in objects:
@@ -368,18 +372,14 @@ def _put_relative_sample_prompt(
                     objects=objects,
                 ):
                     continue
-                if float(np.linalg.norm(mover_xy - goal_xy)) < (
-                    _PUT_RELATIVE_GOAL_RADIUS_M + mover_radius
-                ):
+                if float(np.linalg.norm(mover_xy - goal_xy)) < (_PUT_RELATIVE_GOAL_RADIUS_M + mover_radius):
                     continue
                 phrase = _PUT_RELATIVE_DIRECTION_PHRASES[direction]
                 mover_label = str(mover["label"])
                 reference_label = str(reference["label"])
                 candidates.append(
                     {
-                        "prompt": (
-                            f"put the {mover_label} {phrase} the {reference_label}"
-                        ),
+                        "prompt": (f"put the {mover_label} {phrase} the {reference_label}"),
                         "prompt_type": "relative_category_object",
                         "mover_object": mover["name"],
                         "reference_object": reference["name"],
@@ -407,6 +407,32 @@ def _put_relative_sample_prompt(
                 )
     if not candidates:
         raise RuntimeError("put_relative generated no valid prompt candidates")
+    if initial is not None:
+        objects_by_name = {obj["name"]: obj for obj in objects}
+
+        def region(directive):
+            reference = objects_by_name[directive["reference_object"]]
+            center = np.array([reference["x"], reference["y"]])
+            axis = np.asarray(directive["direction_offset_xy"], dtype=float)
+            axis /= np.linalg.norm(axis)
+            perpendicular = np.array([-axis[1], axis[0]])
+            return np.array(
+                [center + along * axis + side * perpendicular for along in (0.0, 0.30) for side in (-0.08, 0.08)]
+            )
+
+        original_region = region(initial)
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate["mover_object"] == initial["mover_object"]
+            and candidate["reference_object"] != initial["reference_object"]
+            and (
+                np.any(region(candidate).max(axis=0) < original_region.min(axis=0))
+                or np.any(original_region.max(axis=0) < region(candidate).min(axis=0))
+            )
+        ]
+        if not candidates:
+            raise RuntimeError("No disjoint revised relative-placement directive.")
     return candidates[int(rng.integers(0, len(candidates)))]
 
 
@@ -489,10 +515,14 @@ class PutRelativeRandomizer(SceneRandomizer):
         request: Any | None = None,
     ) -> RandomizationState:
         rng = np.random.default_rng(seed)
+        interrupted = request is not None and request.get("interrupted", False)
+        revised = None
         for _ in range(_PUT_RELATIVE_MAX_PROMPT_TRIES):
             selections = self._sample_selections(rng)
             try:
                 prompt_info = _put_relative_sample_prompt(selections, rng)
+                if interrupted:
+                    revised = _put_relative_sample_prompt(selections, rng, initial=prompt_info)
                 break
             except RuntimeError:
                 continue
@@ -554,13 +584,58 @@ class PutRelativeRandomizer(SceneRandomizer):
             "axis_convention": prompt_info["axis_convention"],
             "objects": metadata_objects,
         }
+        if interrupted:
+            metadata["interrupted"] = True
+            metadata["interruption"] = {
+                "kind": "relative",
+                "delay_s": float(rng.uniform(1.0, 2.0)),
+                "first_body": prompt_info["mover_object"],
+                "prompt": f"Actually, {revised['prompt']} instead.",
+                "directive": revised,
+            }
         return RandomizationState(
             seed=seed or 0,
             object_states=object_states,
             metadata=metadata,
         )
 
+    def _replay_selections(self, state):
+        selections = []
+        for item in state.metadata["objects"]:
+            variants = {path.name: path for path in self._get_variants(item["category"])}
+            if item["variant"] not in variants:
+                raise ValueError("Recorded relative-placement asset is not in the category pool.")
+            pose = state.object_states[item["joint"]]
+            selections.append(
+                {
+                    **item,
+                    "variant_dir": str(variants[item["variant"]]),
+                    "x": pose["pos"][0],
+                    "y": pose["pos"][1],
+                    "z": pose["pos"][2],
+                    "qw": pose["quat"][0],
+                    "qz": pose["quat"][3],
+                }
+            )
+        return selections
 
+    def _validate_scene(self, model, state):
+        self._replay_selections(state)
+
+    def _restore_scene(self, model, data, state):
+        if self._env_ref is None:
+            raise ValueError("Relative-placement replay needs a bound native environment.")
+        xml = _put_relative_apply_scene_transforms(
+            _put_relative_build_xml(self._replay_selections(state)),
+            self._scene_xml_transform_options,
+        )
+        env = self._env_ref
+        robot = env._get_reset_robot_qpos()
+        env.reload_from_xml(xml)
+        env._set_robot_qpos(robot)
+        self._apply_states(env.model, env.data, state.object_states)
+        mujoco.mj_forward(env.model, env.data)
+        return state
 
 
 __all__ = ["PutRelativeRandomizer"]

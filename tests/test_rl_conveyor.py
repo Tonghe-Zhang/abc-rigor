@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
 import pytest
-
 from abc_sim.randomization.core import RandomizationState
 from abc_sim.randomization.tasks.rl_conveyor import (
     CATEGORY_POOL,
@@ -46,7 +45,7 @@ def metadata(count=3, targets=None, direction=-1):
             for i, target in enumerate(target_mask)
         ],
         "belt_speed_y": direction * 0.1,
-        "prompt": episode_prompt(variant, category),
+        "prompt": episode_prompt(variant, category, count),
     }
 
 
@@ -200,9 +199,9 @@ class Fixture:
 
 
 def test_original_task_registry_is_unchanged_and_new_task_is_distinct():
+    from abc_sim.randomization.registry import TASK_RANDOMIZERS
     from abc_sim.task_eval.registry import _TASK_EVALUATORS
     from abc_sim.task_runtime.registry import _TASK_RUNTIMES
-    from abc_sim.randomization.registry import TASK_RANDOMIZERS
 
     assert (
         get_task_spec("conveyor_pick").evaluator_name == "conveyor_pick_objects_in_bin"
@@ -463,6 +462,8 @@ def test_unassisted_dynamic_belt_exits_refund_only_distractors(direction):
     assert result.metrics["normal_exit_mask"].all()
     assert result.scalar_reward() == 0
     assert not result.scalar_success()
+    assert not result.metrics["ever_failed"][0]
+    result = f.sample(3.01)
     assert result.metrics["ever_failed"][0]
     assert len(runtime._removed_objects) == 4
     assert all(

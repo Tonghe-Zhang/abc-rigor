@@ -6,30 +6,35 @@ from typing import TypeAlias
 
 import mujoco
 
-from abc_sim.task_eval.base import TaskEvaluator
 from abc_sim.task_eval.ball_tray import BallTrayBalancingEvaluator
+from abc_sim.task_eval.base import TaskEvaluator
 from abc_sim.task_eval.bottles import BottlesInBinEvaluator, PutBottlesInBinEvaluator
 from abc_sim.task_eval.bottles_upright import BottlesUprightEvaluator
 from abc_sim.task_eval.chess import ChessBoardSetupEvaluator
 from abc_sim.task_eval.conveyor import ConveyorPickObjectsInBinEvaluator
-from abc_sim.task_eval.rl_conveyor import RLConveyorEvaluator
 from abc_sim.task_eval.count_box import CountIntoOpaqueBoxEvaluator
 from abc_sim.task_eval.dishrack import DishrackEvaluator
 from abc_sim.task_eval.grab_clutter import GrabClutterTargetInBoxEvaluator
 from abc_sim.task_eval.inhand_transfer import InhandTransferOtherSideEvaluator
+from abc_sim.task_eval.interrupted import (
+    InterruptedClutterEvaluator,
+    InterruptedRelativeEvaluator,
+)
 from abc_sim.task_eval.lego_blocks import LegoBlocksSortingEvaluator
+from abc_sim.task_eval.marker_drawer import MarkerDrawerEvaluator
 from abc_sim.task_eval.mug_tree import MugOnRackEvaluator
 from abc_sim.task_eval.mug_tree_v2 import MugOnRackV2Evaluator
+from abc_sim.task_eval.mugs import MugFlipUprightEvaluator
 from abc_sim.task_eval.multi_drawer import (
     MultiDrawerSearchTargetInBinEvaluator,
     ShapedMultiDrawerSearchEvaluator,
 )
-from abc_sim.task_eval.mugs import MugFlipUprightEvaluator
 from abc_sim.task_eval.nuts_bolts import NutsBoltsSortingEvaluator
 from abc_sim.task_eval.pack_and_pour_fruit import PackAndPourFruitEvaluator
 from abc_sim.task_eval.pack_suitcase import PackSuitcaseEvaluator
 from abc_sim.task_eval.pour import PourBeadsInContainerEvaluator
 from abc_sim.task_eval.put_relative import PutRelativeEvaluator
+from abc_sim.task_eval.rl_conveyor import RLConveyorEvaluator
 from abc_sim.task_eval.shape_matching import ShapeMatchingEvaluator
 from abc_sim.task_eval.spell import SpellWordEvaluator
 from abc_sim.task_eval.spelling_placement import FreePlacementSpellingEvaluator
@@ -41,6 +46,9 @@ TaskEvaluatorFactory: TypeAlias = type[TaskEvaluator]
 
 
 _TASK_EVALUATORS: dict[str, TaskEvaluatorFactory] = {
+    "marker_drawer": MarkerDrawerEvaluator,
+    "rl_grab_clutter": InterruptedClutterEvaluator,
+    "rl_put_relative": InterruptedRelativeEvaluator,
     "shape_matching": ShapeMatchingEvaluator,
     "pack_and_pour_fruit": PackAndPourFruitEvaluator,
     "pack_suitcase": PackSuitcaseEvaluator,
