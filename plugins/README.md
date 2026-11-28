@@ -18,8 +18,12 @@ all 5 one-model hardware variants (abc_crank, yam_cell_d405, yam_cell_zed, abc_b
 plugin tasks the same way as built-in tasks. A policy camera that is missing raises an error; there is no fallback.
 
 Known differences from the standard station: the plugin grippers keep their own calibrated fingers (tongs:
-linear kp 100, ctrl 0-0.0475; open_cap: ctrl 0-0.0475, vs the standard crank kp 400, 0-0.0495), and a warning is
-logged when a variant asks for another gripper. open_cap keeps its portable's solver options (Euler / elliptic /
+linear fingers, ctrl 0-0.0475; open_cap: ctrl 0-0.0475, vs the standard crank kp 400 / kv 14, 0-0.0495), and a warning
+is logged when a variant asks for another gripper. All plugin grippers use the fleet-identified servo (`abc_hw.GRIP_*`):
+kp 5000 N/m, kv 50 N s/m, a 40 N cap, and a 2-frame (66.7 ms) command delay. On 60 fleet tasks the free-air width RMSE
+p50 is 0.50 mm (stock abc 400/14: 0.76 mm; 5000/50/40 without the delay: 1.88 mm). Overrides go in task_kwargs:
+grip_kp / grip_kv / grip_force / grip_delay_s; open_cap also takes grip_servo="portable". `e2e/grip_delay.py` checks
+the delay. open_cap keeps its portable's solver options (Euler / elliptic /
 impratio 10).
 
 `e2e/policy_eval.py` runs a policy server against a task and writes `episodes.jsonl` and H.264 videos.

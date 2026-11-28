@@ -319,6 +319,58 @@ def standardize(spec: mujoco.MjSpec, ref_path: str | None = None) -> mujoco.MjSp
     return spec
 
 
+# ---------------------------------------------------------------------------------------------------- gripper
+# Real YAM linear gripper, identified 2026-11-28 on 240 fleet episodes / 60 tasks / 464 gripper tracks (recorded
+# leader command vs follower width, free-air frames): the follower jaw trails the command by a pure transport delay
+# of 1-2 frames at 30 Hz (best-shift histogram 0:0, 1:117, 2:347) and otherwise tracks it stiffly.  A kp 5000 / kv 50 /
+# 40 N position servo + 2-frame (66.7 ms) delay fits it to 0.50 mm (per-task median; p90 0.97 mm) and beats the stock
+# abc servo (kp 400 / kv 14, no delay: 0.76 mm, p90 2.13) on 60/60 tasks; without the delay the stiff servo leads the
+# real jaw (1.88 mm).  Squeeze force is not identifiable from free-air proprio (the stiff servo holds the tongs; the
+# stock one drops them, cd198 A/B).
+GRIP_KP, GRIP_KV, GRIP_FORCE = 5000.0, 50.0, 40.0
+GRIP_DELAY_S = 2.0 / 30.0
+
+
+def set_gripper_servo(m: mujoco.MjModel, kp: float, kv: float, fmax: float, act_ids=None) -> list[int]:
+    """Position servo ``kp`` / ``kv`` with force cap ``fmax`` (<= 0: none) on every ``*_gripper`` actuator (or
+    ``act_ids``) of the compiled model; returns the actuator ids."""
+    ids = [i for i in range(m.nu) if m.actuator(i).name.endswith("gripper")] if act_ids is None else list(act_ids)
+    if len(ids) != 2:
+        raise RuntimeError(f"expected 2 gripper actuators, found {len(ids)}")
+    for i in ids:
+        m.actuator_gainprm[i, 0] = kp
+        m.actuator_biasprm[i, :3] = [0.0, -kp, -kv]
+        m.actuator_forcelimited[i] = fmax > 0
+        m.actuator_forcerange[i] = [-fmax, fmax] if fmax > 0 else [0.0, 0.0]
+    return ids
+
+
+class GripperDelay:
+    """Pure transport delay of the gripper command: ``d.ctrl[ids]`` lags the commanded value by
+    ``round(delay_s / timestep)`` physics steps.  Call ``reset()`` when the scene is (re)built and ``step(d, ctrl)``
+    before every ``mj_step`` with the undelayed command; before the first command the buffer holds the reset ctrl."""
+
+    def __init__(self, ids, delay_s: float, timestep: float):
+        self.ids = np.asarray(ids, int)
+        self.n = max(0, int(round(float(delay_s) / float(timestep))))
+        self.buf = None
+
+    def reset(self) -> None:
+        self.buf = None
+
+    def step(self, d: mujoco.MjData, cmd) -> None:
+        cmd = np.asarray(cmd, float)
+        if self.n == 0:
+            d.ctrl[self.ids] = cmd
+            return
+        if self.buf is None:
+            self.buf = np.repeat(np.asarray(d.ctrl[self.ids], float)[None], self.n, 0)
+            self.k = 0
+        d.ctrl[self.ids] = self.buf[self.k]
+        self.buf[self.k] = cmd
+        self.k = (self.k + 1) % self.n
+
+
 # ---------------------------------------------------------------------------------------------------- variants
 def _hardware():
     try:
@@ -393,6 +445,6 @@ def camera_sizes(variant, default: tuple[int, int]) -> dict[str, tuple[int, int]
     return out
 
 
-__all__ = ["POLICY_CAMERAS", "camera_reference_xml", "camera_sizes", "compose", "gripper_kind", "reference_xml",
+__all__ = ["GRIP_DELAY_S", "GRIP_FORCE", "GRIP_KP", "GRIP_KV", "GripperDelay", "POLICY_CAMERAS", "set_gripper_servo", "camera_reference_xml", "camera_sizes", "compose", "gripper_kind", "reference_xml",
            "resolve_variant",
            "standardize"]

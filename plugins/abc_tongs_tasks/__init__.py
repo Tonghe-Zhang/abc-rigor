@@ -43,7 +43,7 @@ TASKS = {"bag": "tongs_bread_bag", "mix": "tongs_pick_place"}
 MIX = {"bag": 0.5, "place": 0.25, "pick": 0.25}
 MIX_STREAM = 5101
 _ENV_KEYS = ("grasp_hold_s", "preset", "mix", "randomize_background", "background_dir", "background_id", "layout",
-             "tongs_pad_torsion", "grip_kp", "grip_kv", "grip_force", "replay_layout", "replay_tex_dir")
+             "tongs_pad_torsion", "grip_kp", "grip_kv", "grip_force", "grip_delay_s", "replay_layout", "replay_tex_dir")
 LAYOUT_STREAM = 7741
 # Torsional friction (m) of the explicit gripper-pad <-> tongs pairs.  The packs hard-code 0.012 (not fitted).
 # 2026-11-27 fit on the calibrated cd198 open-loop replay (real in-hand tongs pose is rigid): torsion 0.003 lets the
@@ -54,8 +54,10 @@ TONGS_PAD_TORSION = 0.05
 # physics_identified_v1.json grip_force_cap_n): position servo kp 5000 N/m, kv 50 N s/m, force cap 40 N.  Real
 # saturated grips on the tongs plateau at 46-54 N sim-equivalent.  The packs compile the gripper at kp 100 / kv 10
 # with no cap, i.e. ~1-2 N squeeze on a tongs handle (tongs weigh 0.19 kg): the tongs slipped out of every eval grasp.
-# Override with task_kwargs grip_kp / grip_kv / grip_force.
-GRIP_KP, GRIP_KV, GRIP_FORCE = 5000.0, 50.0, 40.0
+# Fleet free-air check 2026-11-28 (abc_hw.GRIP_DELAY_S): the real jaw also trails the command by 2 frames (66.7 ms),
+# applied here as a pure command delay.  Override with task_kwargs grip_kp / grip_kv / grip_force / grip_delay_s
+# (0 = no delay).
+GRIP_KP, GRIP_KV, GRIP_FORCE, GRIP_DELAY_S = abc_hw.GRIP_KP, abc_hw.GRIP_KV, abc_hw.GRIP_FORCE, abc_hw.GRIP_DELAY_S
 
 
 def mix_kind(seed: int, mix: dict | None = None, preset: str | None = None) -> str:
@@ -267,18 +269,9 @@ def _install_station_hook(variant) -> None:
     robot_v4.attach_robot = attach_robot
 
 
-def _set_gripper_servo(m, kp: float, kv: float, fmax: float) -> None:
+def _set_gripper_servo(m, kp: float, kv: float, fmax: float) -> list[int]:
     """Identified finger servo on the compiled model (see GRIP_KP): every ``*_gripper`` position actuator."""
-    n = 0
-    for i in range(m.nu):
-        if m.actuator(i).name.endswith("gripper"):
-            m.actuator_gainprm[i, 0] = kp
-            m.actuator_biasprm[i, 1:3] = [-kp, -kv]
-            m.actuator_forcerange[i] = [-fmax, fmax]
-            m.actuator_forcelimited[i] = 1
-            n += 1
-    if n != 2:
-        raise RuntimeError(f"expected 2 gripper actuators, found {n}")
+    return abc_hw.set_gripper_servo(m, kp, kv, fmax)
 
 
 def _install_torsion_hook(torsion: float) -> None:
@@ -471,8 +464,10 @@ class TongsAbcEnv:
             t.evaluator, t.last = ev, ev.evaluate_model_data(t.model, t.data)
             self.task = t
         _check_cameras(self.task.model, self.POLICY_CAMERAS)
-        _set_gripper_servo(self.task.model, float(self.task_kwargs.get("grip_kp", GRIP_KP)),
-                           float(self.task_kwargs.get("grip_kv", GRIP_KV)), float(self.task_kwargs.get("grip_force", GRIP_FORCE)))
+        gids = _set_gripper_servo(self.task.model, float(self.task_kwargs.get("grip_kp", GRIP_KP)),
+                                  float(self.task_kwargs.get("grip_kv", GRIP_KV)), float(self.task_kwargs.get("grip_force", GRIP_FORCE)))
+        self._gdelay = abc_hw.GripperDelay(gids, float(self.task_kwargs.get("grip_delay_s", GRIP_DELAY_S)),
+                                           float(self.task.model.opt.timestep))
         self.layout_info = self._scatter(seed)
         t = self.task
         _strict_tongs_grasp(t.evaluator, int(round(float(self.task_kwargs.get("grasp_hold_s", 0.5)) / float(t.model.opt.timestep))))
@@ -604,8 +599,13 @@ class TongsAbcEnv:
 
     def apply_action(self, action, physics_steps: int = 1) -> None:
         m, d, ev = self.model, self.data, self.evaluator
-        d.ctrl[:] = self._ctrl(action)
+        c = self._ctrl(action)
+        g = self._gdelay.ids
+        keep = np.ones(len(c), bool)
+        keep[g] = False
+        d.ctrl[keep] = c[keep]
         for _ in range(int(physics_steps)):
+            self._gdelay.step(d, c[g])          # gripper command reaches the servo GRIP_DELAY_S late (real transport delay)
             mujoco.mj_step(m, d)
             ev.after_physics_step(m, d)
             self.cur_step += 1

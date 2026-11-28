@@ -570,6 +570,22 @@ class CapAbcEnv:
             if missing:
                 raise RuntimeError(f"policy cameras {missing} missing from the compiled scene")
         m, d, R = self.model, self.data, sc["R"]
+        # gripper: the fleet-identified servo + transport delay (abc_hw.GRIP_*), shared with the tongs tasks.  The
+        # portable's own per-episode servo (kp 14841 / kv 74 / 30 N) is kept with task_kwargs grip_servo="portable".
+        gids = self.act_ids[self.grip_idx]
+        if not hasattr(self, "_grip0") or self._grip0[0] is not m:
+            self._grip0 = (m, m.actuator_gainprm[gids].copy(), m.actuator_biasprm[gids].copy(),
+                           m.actuator_forcelimited[gids].copy(), m.actuator_forcerange[gids].copy())
+        if self.opts.get("grip_servo", "fleet") == "portable":
+            _, g0, b0, fl0, fr0 = self._grip0
+            m.actuator_gainprm[gids], m.actuator_biasprm[gids] = g0, b0
+            m.actuator_forcelimited[gids], m.actuator_forcerange[gids] = fl0, fr0
+        else:
+            abc_hw.set_gripper_servo(m, float(self.opts.get("grip_kp", abc_hw.GRIP_KP)),
+                                     float(self.opts.get("grip_kv", abc_hw.GRIP_KV)),
+                                     float(self.opts.get("grip_force", abc_hw.GRIP_FORCE)), act_ids=gids)
+        self._gdelay = abc_hw.GripperDelay(gids, float(self.opts.get("grip_delay_s", abc_hw.GRIP_DELAY_S)),
+                                           float(m.opt.timestep))
         mujoco.mj_resetData(m, d)
         d.qpos[:] = R["qpos0"]
         d.qvel[:] = 0
@@ -615,8 +631,13 @@ class CapAbcEnv:
 
     def apply_action(self, action, physics_steps: int = 1) -> None:
         m, d, ev = self.model, self.data, self.evaluator
-        d.ctrl[self.act_ids] = self._ctrl(action)
+        c = self._ctrl(action)
+        gi = self.grip_idx
+        arm = np.ones(len(c), bool)
+        arm[gi] = False
+        d.ctrl[self.act_ids[arm]] = c[arm]
         for _ in range(int(physics_steps)):
+            self._gdelay.step(d, c[gi])          # gripper command reaches the servo GRIP_DELAY_S late (real transport delay)
             mujoco.mj_step(m, d)
             ev.after_physics_step(m, d)
             self.cur_step += 1
