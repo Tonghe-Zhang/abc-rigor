@@ -561,12 +561,6 @@ class MuJoCoYAMEnv(gym.Env):
                 info["background"] = self._background.info()
             return self.get_obs(), info
         self._validate_physics_observation_cadence()
-        if self._background is not None:
-            pinned = (options or {}).get("background_id")
-            if (
-                pinned is not None or (randomize and self._background.config.resample == "episode")
-            ) and self._background.next_episode(pinned):
-                self._background_pending = True  # shown once the scene is final (a reload binds it itself)
         randomizer = getattr(self, "_task_randomizer", None)
         if randomizer is None and self._task:
             randomizer = get_task_randomizer(self._task)
@@ -578,7 +572,18 @@ class MuJoCoYAMEnv(gym.Env):
         if randomizer is not None:
             prepare_reset = getattr(randomizer, "prepare_reset", None)
             if prepare_reset is not None:
-                prepare_reset(request=randomization_request, randomize=randomize)
+                prepare_reset(
+                    request=randomization_request,
+                    randomize=randomize,
+                    seed=seed,
+                    keep_arm_state=(options or {}).get("keep_arm_state", False),
+                )
+        if self._background is not None:
+            pinned = (options or {}).get("background_id")
+            if (
+                pinned is not None or (randomize and self._background.config.resample == "episode")
+            ) and self._background.next_episode(pinned):
+                self._background_pending = True  # shown once the scene is final (a reload binds it itself)
         if randomize and randomizer is not None:
             self._task_randomizer = randomizer
         self._physics_observer = None
