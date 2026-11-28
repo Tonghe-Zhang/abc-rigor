@@ -592,20 +592,21 @@ for _spec in _TASK_SPECS:
 
 
 def list_task_specs() -> tuple[SimTaskSpec, ...]:
-    """Return all known sim task specs."""
+    """Return all known sim task specs (built-in, then external plugin tasks)."""
 
-    return _TASK_SPECS
+    from abc_sim.plugins import list_external_specs
+
+    return _TASK_SPECS + list_external_specs()
 
 
 def get_task_spec(name: str) -> SimTaskSpec:
     """Resolve a task spec from a canonical name, alias, or prompt text."""
 
-    key = _normalize_key(name)
-    try:
-        return _LOOKUP[key]
-    except KeyError as exc:
-        available = ", ".join(spec.name for spec in _TASK_SPECS)
-        raise KeyError(f"Unknown sim task '{name}'. Available: {available}") from exc
+    spec = maybe_get_task_spec(name)
+    if spec is None:
+        available = ", ".join(spec.name for spec in list_task_specs())
+        raise KeyError(f"Unknown sim task '{name}'. Available: {available}")
+    return spec
 
 
 def maybe_get_task_spec(name: str | None) -> SimTaskSpec | None:
@@ -613,4 +614,9 @@ def maybe_get_task_spec(name: str | None) -> SimTaskSpec | None:
 
     if not name:
         return None
-    return _LOOKUP.get(_normalize_key(name))
+    spec = _LOOKUP.get(_normalize_key(name))
+    if spec is None:
+        from abc_sim.plugins import maybe_get_external_spec
+
+        spec = maybe_get_external_spec(name)
+    return spec

@@ -86,11 +86,12 @@ def make_task_evaluator(
     if spec is None or spec.evaluator_name is None:
         return None
 
-    try:
-        evaluator_cls = _TASK_EVALUATORS[spec.evaluator_name]
-    except KeyError as exc:
-        raise KeyError(
-            f"Unknown task evaluator {spec.evaluator_name!r} for task {spec.name!r}"
-        ) from exc
+    evaluator_cls = _TASK_EVALUATORS.get(spec.evaluator_name)
+    if evaluator_cls is None:
+        from abc_sim.plugins import get_external_evaluator
+
+        evaluator_cls = get_external_evaluator(spec.evaluator_name)
+    if evaluator_cls is None:
+        raise KeyError(f"Unknown task evaluator {spec.evaluator_name!r} for task {spec.name!r}")
 
     return evaluator_cls(model=model, spec=spec, **{**spec.evaluator_kwargs(), **(options or {})})

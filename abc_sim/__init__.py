@@ -268,6 +268,59 @@ def make_env(
     resolved_task = resolve_task(task)
     env_task = resolved_task.env_task or task
 
+    from abc_sim.plugins import builder_randomizer, maybe_get_external_task
+
+    external = maybe_get_external_task(env_task) if isinstance(env_task, str) else None
+    if external is not None and external.mode != "xml":
+        if scene_xml is not None or scene_xml_string is not None:
+            raise ValueError(f"scene_xml overrides are not supported for external task {env_task!r}")
+        builder_options = kwargs.pop("builder_options", None)
+        if external.mode == "factory":   # every factory task gets the same per-seed background swap
+            from abc_sim.background import attach
+
+            background = kwargs.pop("background", None)
+            return attach(external.env_factory(
+                task=resolved_task.task_spec or task,
+                render_cameras=render_cameras,
+                camera_backend=camera_backend,
+                camera_gpu_id=camera_gpu_id,
+                prompt=prompt,
+                chunk_dim=chunk_dim,
+                wrist_fov=wrist_fov,
+                enable_task_randomizer=enable_task_randomizer,
+                max_episode_steps=max_episode_steps,
+                terminate_on_success=terminate_on_success,
+                terminate_on_failure=terminate_on_failure,
+                evaluator_options=evaluator_options,
+                builder_options=builder_options,
+                **kwargs,
+            ), background)
+        seed = kwargs.pop("seed", None)
+        physics_kwargs = {
+            **get_task_physics_defaults(env_task),
+            **kwargs,
+            "max_episode_steps": max_episode_steps,
+            "terminate_on_success": terminate_on_success,
+            "terminate_on_failure": terminate_on_failure,
+        }
+        env = (environment_factory or MuJoCoYAMEnv)(
+            config=get_i2rt_sim_config(),
+            render_cameras=render_cameras,
+            camera_backend=camera_backend,
+            camera_gpu_id=camera_gpu_id,
+            prompt=prompt,
+            chunk_dim=chunk_dim,
+            wrist_fov=wrist_fov,
+            scene_xml=None,
+            **physics_kwargs,
+        )
+        randomizer = builder_randomizer(external, builder_options)
+        randomizer.bind_env(env)
+        randomizer.build(0 if seed is None else int(seed))
+        env.set_task(task, evaluator_options=evaluator_options)
+        env._task_randomizer = randomizer
+        return env
+
     if env_task == "inhand_transfer":
         import numpy as _np
 

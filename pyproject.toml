@@ -12,9 +12,9 @@ dependencies = [
     "numpy",
     "torch==2.11.0+cu128 ; sys_platform == 'linux'",
     "torchcodec==0.11.0+cpu ; sys_platform == 'linux'",
-    "mujoco~=3.8.0",
-    "mujoco-warp==3.8.0.3",
-    "warp-lang==1.13.0",
+    "mujoco~=4.0.1",
+    "mujoco-warp==4.0.1",
+    "warp-lang==1.19.0",
     "mjviser",
     "viser",
     "imageio[ffmpeg]",
@@ -51,7 +51,7 @@ dev = ["ruff"]
 
 [tool.uv]
 override-dependencies = [
-    "mujoco~=3.8.0",
+    "mujoco~=4.0.1",
     "tyro>=1.0.5",
 ]
 
